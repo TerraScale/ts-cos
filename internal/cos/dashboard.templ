@@ -44,7 +44,7 @@ templ dashboard(v Dashboard) {
 				<article>
 					<header>{ a.Host } · { a.Title }</header>
 					if a.Stale {
-						<small>Host unavailable · question from the last successful refresh</small>
+						<small>Question from the last successful refresh</small>
 					}
 					if a.Error != "" {
 						<p role="alert">{ a.Error }</p>

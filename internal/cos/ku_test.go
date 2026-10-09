@@ -307,7 +307,11 @@ func TestKuIssuesFailOnBadOrFailedPage(t *testing.T) {
 						kuTestResult(w, request, map[string]any{"isError": true, "content": []any{map[string]any{"type": "text", "text": "failed"}}})
 						return
 					}
-					response := map[string]any{"issues": []any{}, "page": page, "per_page": 100, "has_more": page == 1}
+					issues := []any{}
+					if page == 1 {
+						issues = append(issues, map[string]any{"identifier": "TS-769", "status": "todo", "assignee_ids": []string{kuOwnerID}})
+					}
+					response := map[string]any{"issues": issues, "page": page, "per_page": 100, "has_more": page == 1}
 					if page == 2 && mode == "wrong page" {
 						response["page"] = 1
 					}
@@ -322,6 +326,96 @@ func TestKuIssuesFailOnBadOrFailedPage(t *testing.T) {
 				t.Fatalf("accepted incomplete issue list: issues=%v err=%v", issues, err)
 			}
 		})
+	}
+}
+
+func TestKuIssuesRejectsEmptyOrRepeatedPages(t *testing.T) {
+	for _, mode := range []string{"empty has_more", "empty total", "repeated issue", "missing identifier"} {
+		t.Run(mode, func(t *testing.T) {
+			pages := []int{}
+			k := kuTestClient(t, func(w http.ResponseWriter, r *http.Request, request kuTestRequest) {
+				switch request.Method {
+				case "initialize":
+					kuTestResult(w, request, map[string]any{"protocolVersion": kuProtocol})
+				case "notifications/initialized":
+					w.WriteHeader(http.StatusAccepted)
+				case "tools/call":
+					var params struct {
+						Arguments struct {
+							Page int `json:"page"`
+						} `json:"arguments"`
+					}
+					_ = json.Unmarshal(request.Params, &params)
+					page := params.Arguments.Page
+					pages = append(pages, page)
+					issues := []any{}
+					response := map[string]any{"issues": issues, "page": page, "per_page": 1, "total": 0}
+					switch mode {
+					case "empty has_more":
+						response["has_more"] = true
+					case "empty total":
+						response["total"] = 2
+					case "repeated issue":
+						issues = append(issues, map[string]any{"identifier": "TS-769", "status": "todo", "assignee_ids": []string{kuOwnerID}})
+						response["issues"] = issues
+						response["total"] = 3
+					case "missing identifier":
+						issues = append(issues, map[string]any{"status": "todo", "assignee_ids": []string{kuOwnerID}})
+						response["issues"] = issues
+					}
+					kuTestResult(w, request, map[string]any{"structuredContent": response})
+				}
+			})
+			issues, err := k.Issues(context.Background())
+			if err == nil || issues != nil {
+				t.Fatalf("accepted incomplete issue list: issues=%v err=%v", issues, err)
+			}
+			wantPages := []int{1}
+			if mode == "repeated issue" {
+				wantPages = []int{1, 2}
+			}
+			if !reflect.DeepEqual(pages, wantPages) {
+				t.Errorf("requested pages after detecting stalled pagination: %v", pages)
+			}
+		})
+	}
+}
+
+func TestKuIssuesPropagatesContextCancellationDuringPagination(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pages := []int{}
+	k := kuTestClient(t, func(w http.ResponseWriter, r *http.Request, request kuTestRequest) {
+		switch request.Method {
+		case "initialize":
+			kuTestResult(w, request, map[string]any{"protocolVersion": kuProtocol})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			var params struct {
+				Arguments struct {
+					Page int `json:"page"`
+				} `json:"arguments"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
+			page := params.Arguments.Page
+			pages = append(pages, page)
+			if page == 2 {
+				cancel()
+				return
+			}
+			kuTestResult(w, request, map[string]any{"structuredContent": map[string]any{
+				"issues": []any{map[string]any{"identifier": "TS-769", "status": "todo", "assignee_ids": []string{kuOwnerID}}},
+				"page":   page, "per_page": 1, "total": 2,
+			}})
+		}
+	})
+	issues, err := k.Issues(ctx)
+	if err == nil || issues != nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("cancellation did not fail the complete issue refresh: issues=%v err=%v", issues, err)
+	}
+	if !reflect.DeepEqual(pages, []int{1, 2}) {
+		t.Errorf("unexpected pages before cancellation: %v", pages)
 	}
 }
 

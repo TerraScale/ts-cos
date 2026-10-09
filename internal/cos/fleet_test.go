@@ -1,10 +1,78 @@
 package cos
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestAsksKeepsHealthyThreadsAroundProjectionFailure(t *testing.T) {
+	snapshot := `{"threads":[{"id":"before","title":"TS-1","status":"idle"},{"id":"deleted","title":"TS-2","status":"idle"},{"id":"after","title":"TS-3","status":"idle"}]}`
+	visited := make(chan string, 3)
+	server := newT3TestServer(t, snapshot, func(_ string, payload map[string]any) any {
+		id := payload["threadId"].(string)
+		visited <- id
+		switch id {
+		case "before":
+			return map[string]any{"messages": []any{map[string]any{"role": "assistant", "text": "NEEDS-USER: Choose a window?"}}}
+		case "deleted":
+			return rpcTestFailure("PRIVATE-PROVIDER-TOKEN INTERNAL-DETAILS")
+		default:
+			return map[string]any{"runtimeRequests": []any{map[string]any{"id": "request-after", "status": "pending", "kind": "approval", "payload": map[string]any{"question": "Proceed?"}}}}
+		}
+	})
+	defer server.Close()
+	client := &T3{Config: Config{HTTP: server.Client()}, Host: "delta", BaseURL: server.URL}
+	asks, err := client.Asks(t.Context())
+	if err != nil || len(asks) != 3 {
+		t.Fatalf("lost healthy questions: asks=%+v err=%v", asks, err)
+	}
+	if asks[0].ThreadID != "before" || asks[0].Question != "Choose a window?" || asks[1].ThreadID != "deleted" || asks[1].Error != "thread projection failed" || asks[2].ThreadID != "after" || asks[2].RequestID != "request-after" {
+		t.Fatal(asks)
+	}
+	data, _ := json.Marshal(asks)
+	if strings.Contains(string(data), "PRIVATE-PROVIDER-TOKEN") || strings.Contains(string(data), "INTERNAL-DETAILS") {
+		t.Fatal("projection cause escaped in asks", string(data))
+	}
+	for _, want := range []string{"before", "deleted", "after"} {
+		if got := <-visited; got != want {
+			t.Fatalf("visited %s, want %s", got, want)
+		}
+	}
+}
+
+func TestAsksAbortsCollectionOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	snapshot := `{"threads":[{"id":"before","status":"idle"},{"id":"cancel","status":"idle"},{"id":"after","status":"idle"}]}`
+	server := newT3TestServer(t, snapshot, func(_ string, payload map[string]any) any {
+		if payload["threadId"] != "before" {
+			t.Error("projection continued after cancellation", payload)
+		}
+		return map[string]any{"messages": []any{map[string]any{"role": "assistant", "text": "NEEDS-USER: Answer?"}}}
+	})
+	defer server.Close()
+	tickets := 0
+	transport := server.Client().Transport
+	client := &T3{Host: "delta", BaseURL: server.URL, Config: Config{HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/api/auth/websocket-ticket" {
+			tickets++
+			if tickets == 2 {
+				cancel()
+				return nil, context.Canceled
+			}
+		}
+		return transport.RoundTrip(req)
+	})}}}
+	asks, err := client.Asks(ctx)
+	if asks != nil || !errors.Is(err, context.Canceled) || tickets != 2 {
+		t.Fatalf("asks=%+v err=%v ticket calls=%d", asks, err, tickets)
+	}
+}
 
 func TestParseAsks(t *testing.T) {
 	tests := []struct {

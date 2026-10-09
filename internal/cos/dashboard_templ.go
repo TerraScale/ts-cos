@@ -250,7 +250,7 @@ func dashboard(v Dashboard) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if a.Stale {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<small>Host unavailable · question from the last successful refresh</small> ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<small>Question from the last successful refresh</small> ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

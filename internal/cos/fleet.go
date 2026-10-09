@@ -163,7 +163,11 @@ func (c *T3) Asks(ctx context.Context) ([]Ask, error) {
 		}
 		p, err := c.Projection(ctx, t.ID)
 		if err != nil {
-			return nil, err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			asks = append(asks, Ask{Host: c.Host, ThreadID: t.ID, Title: t.Title, Error: "thread projection failed"})
+			continue
 		}
 		for _, r := range p.RuntimeRequests {
 			if r.Status == "pending" {

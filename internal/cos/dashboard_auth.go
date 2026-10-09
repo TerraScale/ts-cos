@@ -32,19 +32,31 @@ func loadDashboardToken(home string) (string, error) {
 			return "", errors.New("generate dashboard credentials")
 		}
 		token := hex.EncodeToString(random[:])
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if errors.Is(err, os.ErrExist) {
-			return loadDashboardToken(home)
-		}
+		f, err := os.CreateTemp(filepath.Dir(path), ".dashboard-token-*")
 		if err != nil {
-			return "", fmt.Errorf("create dashboard credentials: %w", err)
+			return "", fmt.Errorf("prepare dashboard credentials: %w", err)
+		}
+		tempPath := f.Name()
+		defer os.Remove(tempPath)
+		if err := f.Chmod(0600); err != nil {
+			_ = f.Close()
+			return "", fmt.Errorf("secure dashboard credentials: %w", err)
 		}
 		if _, err := f.WriteString(token + "\n"); err != nil {
 			_ = f.Close()
 			return "", errors.New("write dashboard credentials")
 		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return "", errors.New("sync dashboard credentials")
+		}
 		if err := f.Close(); err != nil {
 			return "", errors.New("write dashboard credentials")
+		}
+		if err := os.Link(tempPath, path); errors.Is(err, os.ErrExist) {
+			return loadDashboardToken(home)
+		} else if err != nil {
+			return "", fmt.Errorf("publish dashboard credentials: %w", err)
 		}
 		return token, nil
 	}

@@ -322,22 +322,38 @@ func (c *T3) Tidy(ctx context.Context) (TreeResult, error) {
 		byID[t.ID] = t
 	}
 	out := TreeResult{Closed: []string{}, Skipped: []map[string]string{}}
-	for _, t := range s.Threads {
-		if t.SettledAt != nil || t.ArchivedAt != nil || t.DeletedAt != nil || t.Lineage.Parent == "" {
-			continue
-		}
-		p, ok := byID[t.Lineage.Parent]
-		if ok && p.SettledAt == nil && p.ArchivedAt == nil && p.DeletedAt == nil {
-			continue
-		}
-		if active(t.Status) {
-			out.Skipped = append(out.Skipped, map[string]string{"id": t.ID, "reason": "active run"})
-			continue
-		}
-		if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.settle", "threadId": t.ID}); err != nil {
-			out.Skipped = append(out.Skipped, map[string]string{"id": t.ID, "reason": "settle failed"})
-		} else {
+	attempted := map[string]bool{}
+	for pass := 0; pass < len(s.Threads); pass++ {
+		progress := false
+		for _, original := range s.Threads {
+			t := byID[original.ID]
+			if attempted[t.ID] || t.SettledAt != nil || t.ArchivedAt != nil || t.DeletedAt != nil || t.Lineage.Parent == "" {
+				continue
+			}
+			p, ok := byID[t.Lineage.Parent]
+			if ok && p.SettledAt == nil && p.ArchivedAt == nil && p.DeletedAt == nil {
+				continue
+			}
+			attempted[t.ID] = true
+			if active(t.Status) {
+				out.Skipped = append(out.Skipped, map[string]string{"id": t.ID, "reason": "active run"})
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
+			if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.settle", "threadId": t.ID}); err != nil {
+				out.Skipped = append(out.Skipped, map[string]string{"id": t.ID, "reason": "settle failed"})
+				continue
+			}
+			settledAt := "local"
+			t.SettledAt = &settledAt
+			byID[t.ID] = t
 			out.Closed = append(out.Closed, t.Title)
+			progress = true
+		}
+		if !progress {
+			break
 		}
 	}
 	return out, nil

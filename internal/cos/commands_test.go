@@ -150,6 +150,81 @@ func TestCloseTreeAndTidySkipActive(t *testing.T) {
 	}
 }
 
+func TestTidySettlesOrphanSubtreesSafely(t *testing.T) {
+	tests := []struct {
+		name, snapshot string
+		failID         string
+		wantClosed     []string
+		wantSkipped    []map[string]string
+		wantCalls      []string
+	}{
+		{
+			name:       "reversed multi-level chain",
+			snapshot:   `{"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"child"}},{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"parent"}},{"id":"parent","title":"parent","status":"idle","lineage":{"parentThreadId":"absent"}}]}`,
+			wantClosed: []string{"parent", "child", "grandchild"},
+			wantCalls:  []string{"parent", "child", "grandchild"},
+		},
+		{
+			name:        "active middle blocks descendants",
+			snapshot:    `{"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"middle"}},{"id":"middle","title":"middle","status":"running","lineage":{"parentThreadId":"absent"}}]}`,
+			wantSkipped: []map[string]string{{"id": "middle", "reason": "active run"}},
+		},
+		{
+			name:        "failed parent blocks descendants",
+			snapshot:    `{"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"parent"}},{"id":"parent","title":"parent","status":"idle","lineage":{"parentThreadId":"absent"}}]}`,
+			failID:      "parent",
+			wantSkipped: []map[string]string{{"id": "parent", "reason": "settle failed"}},
+			wantCalls:   []string{"parent"},
+		},
+		{
+			name:     "orphan cycle is bounded",
+			snapshot: `{"threads":[{"id":"a","title":"a","status":"idle","lineage":{"parentThreadId":"b"}},{"id":"b","title":"b","status":"idle","lineage":{"parentThreadId":"a"}}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls []string
+			server := newT3TestServer(t, tt.snapshot, func(_ string, payload map[string]any) any {
+				id := payload["threadId"].(string)
+				calls = append(calls, id)
+				if id == tt.failID {
+					return rpcTestFailure("settle failed")
+				}
+				return map[string]any{"ok": true}
+			})
+			defer server.Close()
+			client := &T3{Config: Config{HTTP: server.Client()}, Host: "test", BaseURL: server.URL, token: "fake"}
+			result, err := client.Tidy(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantClosed, wantSkipped, wantCalls := tt.wantClosed, tt.wantSkipped, tt.wantCalls
+			if wantClosed == nil {
+				wantClosed = []string{}
+			}
+			if wantSkipped == nil {
+				wantSkipped = []map[string]string{}
+			}
+			if wantCalls == nil {
+				wantCalls = []string{}
+			}
+			if calls == nil {
+				calls = []string{}
+			}
+			if !reflect.DeepEqual(result.Closed, wantClosed) || !reflect.DeepEqual(result.Skipped, wantSkipped) || !reflect.DeepEqual(calls, wantCalls) {
+				t.Fatalf("closed=%v skipped=%v calls=%v", result.Closed, result.Skipped, calls)
+			}
+			data, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), `"deleted"`) {
+				t.Fatalf("tidy result includes deleted: %s", data)
+			}
+		})
+	}
+}
+
 func newT3TestServer(t *testing.T, snapshot string, respond func(string, map[string]any) any) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

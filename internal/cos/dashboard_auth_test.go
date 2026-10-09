@@ -2,6 +2,7 @@ package cos
 
 import (
 	"context"
+	"encoding/hex"
 	"io"
 	"net"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -128,6 +130,81 @@ func TestDashboardTokenIsPrivatePersistentAndErrorsAreSecretFree(t *testing.T) {
 	_, err = loadDashboardToken(symlinkHome)
 	if err == nil || strings.Contains(err.Error(), token) {
 		t.Fatalf("symlink error=%v", err)
+	}
+}
+
+func TestConcurrentDashboardTokenLoadersPublishOneCompleteToken(t *testing.T) {
+	home := t.TempDir()
+	const loaders = 32
+	start := make(chan struct{})
+	tokens := make(chan string, loaders)
+	errs := make(chan error, loaders)
+	var wg sync.WaitGroup
+	for range loaders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			token, err := loadDashboardToken(home)
+			if err != nil {
+				errs <- err
+				return
+			}
+			tokens <- token
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(tokens)
+	close(errs)
+	for err := range errs {
+		t.Fatal("concurrent token load failed:", err)
+	}
+
+	var winner string
+	for token := range tokens {
+		if winner == "" {
+			winner = token
+		}
+		if token != winner || len(token) != 64 {
+			t.Fatalf("loaders returned inconsistent or incomplete tokens")
+		}
+		if _, err := hex.DecodeString(token); err != nil {
+			t.Fatalf("loader returned a non-hex token: %v", err)
+		}
+	}
+	path := dashboardTokenPath(home)
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != winner+"\n" {
+		t.Fatalf("published token is incomplete: err=%v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("published token mode=%v err=%v", info, err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+		t.Fatalf("temporary credentials were left behind: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestDashboardTokenLoaderDoesNotReplaceWinner(t *testing.T) {
+	home := t.TempDir()
+	path := dashboardTokenPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	winner := strings.Repeat("a", 64)
+	if err := os.WriteFile(path, []byte(winner+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	token, err := loadDashboardToken(home)
+	if err != nil || token != winner {
+		t.Fatalf("existing token changed: token=%q err=%v", token, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != winner+"\n" {
+		t.Fatalf("existing token file changed: err=%v", err)
 	}
 }
 

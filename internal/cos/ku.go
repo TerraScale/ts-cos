@@ -18,6 +18,7 @@ import (
 const kuProtocol = "2025-06-18"
 const kuOwnerEmail = "mariogk@terrascale.tech"
 const kuOwnerID = "61acaf3f-3758-451d-880f-48e7d489db55"
+const kuMaxIssuePages = 1000
 
 type Ku struct{ Config Config }
 
@@ -280,7 +281,11 @@ func kuStatusType(status string) string {
 
 func (k Ku) Issues(ctx context.Context) ([]Issue, error) {
 	out := []Issue{}
+	seen := map[string]struct{}{}
 	for page := 1; ; page++ {
+		if page > kuMaxIssuePages {
+			return nil, fmt.Errorf("Ku list_issues exceeded %d pages", kuMaxIssuePages)
+		}
 		result, err := k.Call(ctx, "list_issues", map[string]any{
 			"workspace": "terrascale", "assignee": kuOwnerEmail, "page": page, "per_page": 100,
 		})
@@ -306,7 +311,23 @@ func (k Ku) Issues(ctx context.Context) ([]Issue, error) {
 		if json.Unmarshal(data, &response) != nil || response.Issues == nil || response.Page != page || response.PerPage <= 0 {
 			return nil, fmt.Errorf("invalid Ku list_issues page %d", page)
 		}
+		more := response.Total > 0 && page <= (response.Total-1)/response.PerPage
+		if response.HasMore != nil {
+			more = more || *response.HasMore
+		}
+		if more && len(response.Issues) == 0 {
+			return nil, fmt.Errorf("Ku list_issues page %d is empty but reports more issues", page)
+		}
+		newRecords := 0
 		for _, raw := range response.Issues {
+			identifier := strings.TrimSpace(raw.Identifier)
+			if identifier == "" {
+				return nil, fmt.Errorf("Ku list_issues page %d has an issue with no identifier", page)
+			}
+			if _, exists := seen[identifier]; !exists {
+				seen[identifier] = struct{}{}
+				newRecords++
+			}
 			if len(raw.AssigneeIDs) == 0 && len(raw.Assignees) == 0 {
 				return nil, fmt.Errorf("Ku list_issues page %d is missing assignment metadata", page)
 			}
@@ -336,9 +357,8 @@ func (k Ku) Issues(ctx context.Context) ([]Issue, error) {
 			out = append(out, Issue{Identifier: raw.Identifier, Title: raw.Title, Description: raw.Description,
 				Status: status, StatusType: category, Priority: raw.Priority, URL: issueURL})
 		}
-		more := page*response.PerPage < response.Total
-		if response.HasMore != nil {
-			more = more || *response.HasMore
+		if more && newRecords == 0 {
+			return nil, fmt.Errorf("Ku list_issues page %d has no new issue records", page)
 		}
 		if !more {
 			return out, nil

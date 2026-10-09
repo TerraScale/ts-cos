@@ -217,7 +217,11 @@ func Brief(v Dashboard) string {
 	}
 	for _, a := range v.Live.Asks {
 		if a.Error != "" {
-			add("ERROR asks %s: %s", a.Host, a.Error)
+			source := a.Host
+			if a.ThreadID != "" {
+				source += " " + a.ThreadID
+			}
+			add("ERROR asks %s: %s", source, a.Error)
 			continue
 		}
 		question := a.Question
@@ -285,14 +289,15 @@ func mergeFleet(old, next []HostFleet) []HostFleet {
 	return next
 }
 func mergeAsks(old, next []Ask) []Ask {
-	failed := map[string]bool{}
+	type source struct{ host, thread string }
+	failed := map[source]bool{}
 	for _, a := range next {
 		if a.Error != "" {
-			failed[a.Host] = true
+			failed[source{a.Host, a.ThreadID}] = true
 		}
 	}
 	for _, a := range old {
-		if failed[a.Host] && a.Error == "" {
+		if a.Error == "" && (failed[source{a.Host, ""}] || failed[source{a.Host, a.ThreadID}]) {
 			a.Stale = true
 			next = append(next, a)
 		}
