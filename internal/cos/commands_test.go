@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,6 +47,62 @@ func TestLocalArgumentParsing(t *testing.T) {
 	}
 	if _, err := objectJSON("[]"); err == nil {
 		t.Fatal("accepted non-object")
+	}
+}
+
+func TestLocalCommandPublishesOnlySafeLocalErrors(t *testing.T) {
+	cfg := Config{Home: t.TempDir(), LocalHost: "test", HTTP: http.DefaultClient}
+	_, err := LocalCommand(context.Background(), cfg, "projects", []string{"extra"})
+	var public interface{ PublicMessage() string }
+	if !errors.As(err, &public) || public.PublicMessage() != "usage: cos projects <host>" {
+		t.Fatalf("validation error = %v, want safe public usage", err)
+	}
+
+	_, err = LocalCommand(context.Background(), cfg, "projects", nil)
+	if err == nil || errors.As(err, &public) {
+		t.Fatalf("missing-config error = %v, want opaque error", err)
+	}
+
+	token := "LOCAL-T3-TOKEN"
+	path := filepath.Join(cfg.Home, ".config/cos/tokens", cfg.LocalHost)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(token), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("OTHER-PROVIDER-SECRET PRIVATE-BRIEF")), Header: make(http.Header)}, nil
+	})}
+	_, err = LocalCommand(context.Background(), cfg, "projects", nil)
+	if err == nil || errors.As(err, &public) || strings.Contains(err.Error(), "OTHER-PROVIDER-SECRET") || strings.Contains(err.Error(), "PRIVATE-BRIEF") {
+		t.Fatalf("upstream error = %v, want opaque error without response body", err)
+	}
+	cfg.HTTP = http.DefaultClient
+	_, err = LocalCommand(context.Background(), cfg, "launch", []string{`{"brief":"PRIVATE-BRIEF","broken":`})
+	if !errors.As(err, &public) || public.PublicMessage() != "invalid JSON object" || strings.Contains(err.Error(), "PRIVATE-BRIEF") {
+		t.Fatalf("JSON validation error = %v, want safe public parser message", err)
+	}
+	_, err = LocalCommand(context.Background(), cfg, "watch", []string{"thread", "not-a-url PRIVATE-BRIEF"})
+	if !errors.As(err, &public) || public.PublicMessage() != "not a PR URL" || strings.Contains(err.Error(), "PRIVATE-BRIEF") {
+		t.Fatalf("PR URL error = %v, want safe public validation message", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestLaunchMissingProjectIsSafePublicError(t *testing.T) {
+	server := newT3TestServer(t, `{"projects":[]}`, func(string, map[string]any) any { t.Error("unexpected RPC"); return nil })
+	defer server.Close()
+	client := &T3{Config: Config{HTTP: server.Client()}, Host: "test", BaseURL: server.URL}
+	_, err := client.Launch(context.Background(), map[string]any{"projectTitle": "PRIVATE-PROJECT-NAME"})
+	var public interface{ PublicMessage() string }
+	if !errors.As(err, &public) || public.PublicMessage() != "requested project was not found on test" || strings.Contains(err.Error(), "PRIVATE-PROJECT-NAME") {
+		t.Fatalf("missing-project error = %v, want safe public domain message", err)
 	}
 }
 
@@ -98,6 +156,8 @@ func newT3TestServer(t *testing.T, snapshot string, respond func(string, map[str
 		switch r.URL.Path {
 		case "/api/orchestration/shell":
 			_, _ = io.WriteString(w, snapshot)
+		case "/api/projects":
+			_, _ = io.WriteString(w, `{"projects":[]}`)
 		case "/api/auth/websocket-ticket":
 			_, _ = io.WriteString(w, `{"ticket":"test"}`)
 		case "/ws":
@@ -146,26 +206,47 @@ func serveT3TestRPC(t *testing.T, w http.ResponseWriter, r *http.Request, respon
 
 type rpcTestFailure string
 
-func TestPartialThreadFailuresNeverExposeToken(t *testing.T) {
-	for _, command := range []string{"close", "tidy"} {
-		t.Run(command, func(t *testing.T) {
-			snapshot := `{"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"missing"}}]}`
-			server := newT3TestServer(t, snapshot, func(string, map[string]any) any { return rpcTestFailure("failed with credential PRIVATE-T3-TOKEN") })
+func TestThreadCleanupFailuresUseFixedSkipReasons(t *testing.T) {
+	const cause = "failed LOCAL-T3-TOKEN OTHER-PROVIDER-SECRET PRIVATE-BRIEF INTERNAL-FAILURE-CODE"
+	tests := []struct {
+		name, command, snapshot, wantReason string
+		failType                            string
+	}{
+		{"close settle", "close", `{"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"missing"}}]}`, "settle failed", "thread.settle"},
+		{"delete", "delete", `{"threads":[{"id":"child","title":"child","status":"idle","settledAt":"now","lineage":{"parentThreadId":"missing"}}]}`, "delete failed", "thread.delete"},
+		{"tidy settle", "tidy", `{"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"missing"}}]}`, "settle failed", "thread.settle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newT3TestServer(t, tt.snapshot, func(_ string, payload map[string]any) any {
+				if payload["type"] == tt.failType {
+					return rpcTestFailure(cause)
+				}
+				return map[string]any{"ok": true}
+			})
 			defer server.Close()
-			client := &T3{Config: Config{HTTP: server.Client()}, Host: "test", BaseURL: server.URL, token: "PRIVATE-T3-TOKEN"}
+			client := &T3{Config: Config{HTTP: server.Client()}, Host: "test", BaseURL: server.URL, token: "LOCAL-T3-TOKEN"}
 			var result TreeResult
 			var err error
-			if command == "tidy" {
+			if tt.command == "tidy" {
 				result, err = client.Tidy(context.Background())
 			} else {
-				result, err = client.CloseTree(context.Background(), "child", false)
+				result, err = client.CloseTree(context.Background(), "child", tt.command == "delete")
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			data, _ := json.Marshal(result)
-			if len(result.Skipped) != 1 || strings.Contains(string(data), "PRIVATE-T3-TOKEN") || !strings.Contains(string(data), "[redacted]") {
-				t.Fatal(string(data))
+			if len(result.Skipped) != 1 || result.Skipped[0]["reason"] != tt.wantReason {
+				t.Fatalf("result = %s", data)
+			}
+			for _, secret := range []string{"LOCAL-T3-TOKEN", "OTHER-PROVIDER-SECRET", "PRIVATE-BRIEF", "INTERNAL-FAILURE-CODE"} {
+				if strings.Contains(string(data), secret) {
+					t.Fatalf("result leaked %q: %s", secret, data)
+				}
+			}
+			if strings.Contains(string(data), "[redacted]") || (tt.command == "delete" && !reflect.DeepEqual(*result.Deleted, []string{})) {
+				t.Fatalf("result = %s", data)
 			}
 		})
 	}

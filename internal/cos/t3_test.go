@@ -3,6 +3,7 @@ package cos
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -50,9 +51,9 @@ func TestT3RPCWireProtocol(t *testing.T) {
 			nilOutput: true,
 		},
 		{
-			name:        "failure exit returns cause",
-			frames:      []frame{{text: `{"_tag":"Exit","requestId":"1","exit":{"_tag":"Failure","cause":{"_tag":"Fail","error":"denied"}}}`}},
-			errContains: "denied",
+			name:        "failure exit hides cause",
+			frames:      []frame{{text: `{"_tag":"Exit","requestId":"1","exit":{"_tag":"Failure","cause":{"_tag":"Fail","error":"LOCAL-T3-TOKEN OTHER-PROVIDER-SECRET PRIVATE-BRIEF INTERNAL-FAILURE-CODE"}}}`}},
+			errContains: "T3 test RPC failed",
 		},
 		{
 			name:        "malformed batch",
@@ -169,6 +170,21 @@ func TestT3RPCWireProtocol(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), tt.errContains) {
 				t.Errorf("RPC() error = %v, want containing %q", err, tt.errContains)
+			}
+			if tt.name == "failure exit hides cause" {
+				if err == nil {
+					t.Error("RPC() error = nil, want safe failure error")
+				} else {
+					for _, secret := range []string{"LOCAL-T3-TOKEN", "OTHER-PROVIDER-SECRET", "PRIVATE-BRIEF", "INTERNAL-FAILURE-CODE"} {
+						if strings.Contains(err.Error(), secret) {
+							t.Errorf("RPC() error leaked %q: %v", secret, err)
+						}
+					}
+					var public interface{ PublicMessage() string }
+					if errors.As(err, &public) {
+						t.Errorf("RPC() failure unexpectedly has public message %q", public.PublicMessage())
+					}
+				}
 			}
 			if tt.errContains != "" && out.Answer != "" {
 				t.Errorf("failed RPC accepted unrelated success output: %#v", out)

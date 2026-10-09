@@ -387,7 +387,7 @@ func (f Forgejo) Merge(ctx context.Context, repo string, number int) (any, error
 	}
 	// Forgejo forbids self-approval; strict ownership means no approval POST is needed.
 	_, err = f.request(ctx, http.MethodPost, path+"/merge", map[string]any{
-		"Do": "squash", "delete_branch_after_merge": true, "force_merge": true, "head_commit_id": pr.Head.SHA,
+		"Do": "squash", "delete_branch_after_merge": true, "force_merge": false, "head_commit_id": pr.Head.SHA,
 	}, nil)
 	if err != nil {
 		return nil, err

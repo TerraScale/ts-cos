@@ -15,13 +15,16 @@ import (
 
 type Web struct {
 	Store       *Store
+	token       string
 	mu          sync.Mutex
 	clients     map[chan struct{}]struct{}
 	watchCancel context.CancelFunc
 	watchDone   chan struct{}
 }
 
-func NewWeb(s *Store) *Web { return &Web{Store: s, clients: map[chan struct{}]struct{}{}} }
+func NewWeb(s *Store, token string) *Web {
+	return &Web{Store: s, token: token, clients: map[chan struct{}]struct{}{}}
+}
 func (w *Web) Broadcast() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -57,7 +60,7 @@ func (w *Web) Handler() http.Handler {
 		rw.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(rw).Encode(v)
 	})
-	return mux
+	return dashboardAuth(w.token, mux)
 }
 func (w *Web) Events(rw http.ResponseWriter, r *http.Request) {
 	if _, ok := rw.(http.Flusher); !ok {
@@ -70,7 +73,7 @@ func (w *Web) Events(rw http.ResponseWriter, r *http.Request) {
 	w.mu.Unlock()
 	defer func() { w.mu.Lock(); delete(w.clients, notify); w.mu.Unlock() }()
 	rw.Header().Set("Content-Type", "text/event-stream")
-	rw.Header().Set("Cache-Control", "no-cache")
+	rw.Header().Set("Cache-Control", "no-store")
 	rw.Header().Set("X-Accel-Buffering", "no")
 	controller := http.NewResponseController(rw)
 	patch := func() error {

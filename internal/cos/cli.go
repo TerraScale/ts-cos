@@ -269,6 +269,10 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	defer s.Close()
+	token, err := loadDashboardToken(cfg.Home)
+	if err != nil {
+		return err
+	}
 	bus, err := StartBus(ctx, cfg, func(ctx context.Context, cmd string, args []string) (any, error) {
 		return LocalCommand(ctx, cfg, cmd, args)
 	})
@@ -276,7 +280,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	defer bus.Close()
-	w := NewWeb(s)
+	w := NewWeb(s, token)
 	if err := w.Watch(ctx); err != nil {
 		return err
 	}
@@ -285,23 +289,31 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: w.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Handler: w.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	pollDone := make(chan struct{})
 	go func() { defer close(pollDone); w.Poll(ctx, cfg, bus) }()
 	defer func() { cancel(); <-pollDone }()
+	slog.Info("COS dashboard listening", "address", l.Addr().String())
+	err = serveDashboard(ctx, server, l, cancel)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func serveDashboard(ctx context.Context, server *http.Server, listener net.Listener, cancel context.CancelFunc) error {
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
-		shutdown, c := context.WithTimeout(context.Background(), 5*time.Second)
-		defer c()
+		shutdown, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
 		if err := server.Shutdown(shutdown); err != nil {
 			_ = server.Close()
 		}
 	}()
-	slog.Info("COS dashboard listening", "address", l.Addr().String())
-	err = server.Serve(l)
+	err := server.Serve(listener)
 	cancel()
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
+	<-shutdownDone
 	return err
 }

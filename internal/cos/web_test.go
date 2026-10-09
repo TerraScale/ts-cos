@@ -21,7 +21,7 @@ func TestSSEStoryFromOtherProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	web := NewWeb(store)
+	web := NewWeb(store, "test-secret")
 	if err := web.Watch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -29,6 +29,7 @@ func TestSSEStoryFromOtherProcess(t *testing.T) {
 	server := httptest.NewServer(web.Handler())
 	defer server.Close()
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/events", nil)
+	req.SetBasicAuth(dashboardUser, "test-secret")
 	response, err := server.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -76,16 +77,22 @@ func TestDashboardReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	h := NewWeb(store).Handler()
+	h := NewWeb(store, "test-secret").Handler()
 	for _, path := range []string{"/", "/status", "/events"} {
 		r := httptest.NewRecorder()
-		h.ServeHTTP(r, httptest.NewRequest("POST", path, strings.NewReader("{}")))
+		req := httptest.NewRequest("POST", path, strings.NewReader("{}"))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.SetBasicAuth(dashboardUser, "test-secret")
+		h.ServeHTTP(r, req)
 		if r.Code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s = %d", path, r.Code)
 		}
 	}
 	r := httptest.NewRecorder()
-	h.ServeHTTP(r, httptest.NewRequest("GET", "/", nil))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.SetBasicAuth(dashboardUser, "test-secret")
+	h.ServeHTTP(r, req)
 	body := r.Body.String()
 	if r.Code != 200 || !strings.Contains(body, "pico.classless") || !strings.Contains(body, "data-init=\"@get('/events')\"") {
 		t.Fatal(r.Code, body)

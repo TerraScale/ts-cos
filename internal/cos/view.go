@@ -71,14 +71,20 @@ func View(ctx context.Context, store *Store) (Dashboard, error) {
 		for _, h := range live.Fleet {
 			for _, thread := range h.Threads {
 				if ticketIn(thread.Title+" "+thread.Branch, t.Ticket) {
-					if t.Host != "" && !active(thread.Status) {
-						continue
+					if t.Host != "" {
+						if h.Stale && !t.Stale {
+							continue
+						}
+						if h.Stale == t.Stale && !active(thread.Status) {
+							continue
+						}
 					}
 					t.Host = h.Host
 					t.Stale = h.Stale
 					t.Repo = thread.Project
 					t.Model = thread.Model
 					t.Status = thread.Status
+					t.Priority = priority
 					if fullSendTitle(thread.Title) {
 						t.Priority = "FULL SEND"
 					}

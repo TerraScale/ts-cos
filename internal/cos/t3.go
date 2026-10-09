@@ -69,12 +69,7 @@ func (c *T3) HTTP(ctx context.Context, method, path string, input, output any) e
 	return json.Unmarshal(body, output)
 }
 
-func (c *T3) RPC(ctx context.Context, tag string, payload, output any) (rpcErr error) {
-	defer func() {
-		if rpcErr != nil && c.token != "" {
-			rpcErr = fmt.Errorf("%s", strings.ReplaceAll(rpcErr.Error(), c.token, "[redacted]"))
-		}
-	}()
+func (c *T3) RPC(ctx context.Context, tag string, payload, output any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -134,7 +129,6 @@ func (c *T3) RPC(ctx context.Context, tag string, payload, output any) (rpcErr e
 					Exit      struct {
 						Tag   string          `json:"_tag"`
 						Value json.RawMessage `json:"value"`
-						Cause json.RawMessage `json:"cause"`
 					} `json:"exit"`
 				}
 				if err := json.Unmarshal(raw, &m); err != nil {
@@ -149,7 +143,7 @@ func (c *T3) RPC(ctx context.Context, tag string, payload, output any) (rpcErr e
 					continue
 				}
 				if m.Exit.Tag != "Success" {
-					return fmt.Errorf("T3 %s: %s", tag, m.Exit.Cause)
+					return fmt.Errorf("T3 %s RPC failed", c.Host)
 				}
 				if output == nil {
 					return nil

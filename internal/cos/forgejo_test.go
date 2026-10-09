@@ -130,7 +130,7 @@ func TestForgejoMergeGates(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Error(err)
 					}
-					if body["head_commit_id"] != pr.Head.SHA || body["Do"] != "squash" || body["delete_branch_after_merge"] != true || body["force_merge"] != true {
+					if body["head_commit_id"] != pr.Head.SHA || body["Do"] != "squash" || body["delete_branch_after_merge"] != true || body["force_merge"] != false {
 						t.Errorf("incorrect merge payload: %#v", body)
 					}
 					w.WriteHeader(http.StatusNoContent)
@@ -164,6 +164,58 @@ func TestForgejoMergeGates(t *testing.T) {
 			}
 			if test.wantMerge && result.(map[string]any)["merged"] != true {
 				t.Errorf("missing merge result: %v", result)
+			}
+		})
+	}
+}
+
+func TestForgejoServerProtectionBlocksMerge(t *testing.T) {
+	for _, mode := range []string{"normal", "full send", "reviewer override"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("COS_FULL_SEND", "0")
+			t.Setenv("COS_ADOPTED", "0")
+			waive := mode != "normal"
+			if mode == "full send" {
+				t.Setenv("COS_FULL_SEND", "1")
+			}
+			pr := forgejoTestPR(1, forgejoLogin, "cos/work")
+			attempts := 0
+			f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/user":
+					forgejoTestJSON(w, forgejoUser{Login: forgejoLogin})
+				case strings.HasSuffix(r.URL.Path, "/status"):
+					reviewStatus := "success"
+					if waive {
+						reviewStatus = "failure"
+					}
+					forgejoTestJSON(w, map[string]any{"statuses": []forgejoStatus{{Context: "build", Status: "success"}, {Context: "ts-reviewer", Status: reviewStatus}}})
+				case strings.HasSuffix(r.URL.Path, "/reviews"):
+					forgejoTestJSON(w, []forgejoReview{{User: forgejoUser{Login: forgejoReviewer}, State: "APPROVED"}})
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/merge"):
+					attempts++
+					var body struct {
+						Force bool `json:"force_merge"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					// A required check/review is now blocked at the server, after the GETs.
+					if body.Force {
+						w.WriteHeader(http.StatusNoContent)
+					} else {
+						w.WriteHeader(http.StatusMethodNotAllowed)
+					}
+				default:
+					forgejoTestJSON(w, pr)
+				}
+			})
+			f.Config.SkipReviewer = mode == "reviewer override"
+			result, err := f.Merge(context.Background(), "test", 1)
+			if err == nil || !strings.Contains(err.Error(), "HTTP 405") || result != nil || attempts != 1 {
+				t.Fatalf("server protection bypassed or forced retry attempted: result=%v err=%v attempts=%d", result, err, attempts)
 			}
 		})
 	}

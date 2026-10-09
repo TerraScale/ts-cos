@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +26,7 @@ var localCommands = map[string]commandSpec{
 func validateLocal(command string, args []string) error {
 	spec, ok := localCommands[command]
 	if !ok {
-		return fmt.Errorf("unknown command %q", command)
+		return errors.New("unknown command")
 	}
 	if len(args) < spec.Min || len(args) > spec.Max {
 		return fmt.Errorf("usage: cos %s", spec.Usage)
@@ -49,22 +47,23 @@ type OperationError string
 func (e OperationError) Error() string         { return string(e) }
 func (e OperationError) PublicMessage() string { return string(e) }
 
-func LocalCommand(ctx context.Context, cfg Config, command string, args []string) (out any, opErr error) {
+func localObjectJSON(raw string) (map[string]any, error) {
+	value, err := objectJSON(raw)
+	if err != nil {
+		if err.Error() == "expected a JSON object" {
+			return nil, OperationError("expected a JSON object")
+		}
+		return nil, OperationError("invalid JSON object")
+	}
+	return value, nil
+}
+
+func LocalCommand(ctx context.Context, cfg Config, command string, args []string) (any, error) {
 	if command == "asks" {
 		command = "asks-host"
 	}
-	defer func() {
-		if opErr != nil {
-			message := opErr.Error()
-			token, err := os.ReadFile(filepath.Join(cfg.Home, ".config/cos/tokens", cfg.LocalHost))
-			if err == nil && strings.TrimSpace(string(token)) != "" {
-				message = strings.ReplaceAll(message, strings.TrimSpace(string(token)), "[redacted]")
-			}
-			opErr = OperationError(message)
-		}
-	}()
 	if err := validateLocal(command, args); err != nil {
-		return nil, err
+		return nil, OperationError(err.Error())
 	}
 	c, err := OpenT3(ctx, cfg, cfg.LocalHost)
 	if err != nil {
@@ -81,14 +80,14 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 		return c.Projects(ctx)
 	}
 	if command == "launch" {
-		input, err := objectJSON(args[0])
+		input, err := localObjectJSON(args[0])
 		if err != nil {
 			return nil, err
 		}
 		return c.Launch(ctx, input)
 	}
 	if command == "dispatch" {
-		input, err := objectJSON(args[0])
+		input, err := localObjectJSON(args[0])
 		if err != nil {
 			return nil, err
 		}
@@ -144,7 +143,7 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 	case "close", "delete":
 		return c.CloseTree(ctx, id, command == "delete")
 	case "handoff":
-		sel, err := objectJSON(args[1])
+		sel, err := localObjectJSON(args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -170,25 +169,25 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 	case "watch":
 		u, err := url.Parse(args[1])
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
-			return nil, errors.New("not a PR URL")
+			return nil, OperationError("not a PR URL")
 		}
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 		if len(parts) != 4 || parts[2] != "pulls" {
-			return nil, errors.New("not a PR URL")
+			return nil, OperationError("not a PR URL")
 		}
 		number, err := strconv.Atoi(parts[3])
 		if err != nil || number < 1 {
-			return nil, errors.New("not a PR URL")
+			return nil, OperationError("not a PR URL")
 		}
 		return c.Dispatch(ctx, map[string]any{"type": "thread.pull-request.watch", "threadId": id, "host": u.Host, "repository": strings.ToLower(parts[0] + "/" + parts[1]), "number": number, "watching": true, "link": map[string]any{"url": args[1], "source": "manual"}})
 	case "model":
-		sel, err := objectJSON(args[1])
+		sel, err := localObjectJSON(args[1])
 		if err != nil {
 			return nil, err
 		}
 		return c.Dispatch(ctx, map[string]any{"type": "thread.model-selection.set", "threadId": id, "modelSelection": sel})
 	case "respond":
-		answers, err := objectJSON(args[2])
+		answers, err := localObjectJSON(args[2])
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +229,7 @@ func (c *T3) Launch(ctx context.Context, input map[string]any) (any, error) {
 			}
 		}
 		if input["projectId"] == nil || input["projectId"] == "" {
-			return nil, fmt.Errorf("no project titled %v on %s", input["projectTitle"], c.Host)
+			return nil, OperationError(fmt.Sprintf("requested project was not found on %s", c.Host))
 		}
 	}
 	payload := map[string]any{"commandId": uuid(), "creationSource": "server", "projectId": input["projectId"], "title": input["title"], "modelSelection": input["modelSelection"], "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": map[string]any{"type": "root"}}
@@ -298,14 +297,14 @@ func (c *T3) CloseTree(ctx context.Context, id string, deleteThread bool) (TreeR
 		}
 		if t.SettledAt == nil {
 			if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.settle", "threadId": id}); err != nil {
-				out.Skipped = append(out.Skipped, map[string]string{"id": id, "reason": err.Error()})
+				out.Skipped = append(out.Skipped, map[string]string{"id": id, "reason": "settle failed"})
 				continue
 			}
 		}
 		out.Closed = append(out.Closed, id)
 		if deleteThread {
 			if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.delete", "threadId": id}); err != nil {
-				out.Skipped = append(out.Skipped, map[string]string{"id": id, "reason": err.Error()})
+				out.Skipped = append(out.Skipped, map[string]string{"id": id, "reason": "delete failed"})
 			} else {
 				*out.Deleted = append(*out.Deleted, id)
 			}
@@ -336,7 +335,7 @@ func (c *T3) Tidy(ctx context.Context) (TreeResult, error) {
 			continue
 		}
 		if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.settle", "threadId": t.ID}); err != nil {
-			out.Skipped = append(out.Skipped, map[string]string{"id": t.ID, "reason": err.Error()})
+			out.Skipped = append(out.Skipped, map[string]string{"id": t.ID, "reason": "settle failed"})
 		} else {
 			out.Closed = append(out.Closed, t.Title)
 		}
