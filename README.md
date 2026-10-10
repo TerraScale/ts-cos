@@ -19,17 +19,14 @@ Each host runs `cos serve --port 8790`. It embeds a dedicated COS NATS server
 with JetStream and exposes local T3 operations as NATS micro services. The page
 binds `0.0.0.0:8790`. This slice is read-only in the browser.
 
-1. Copy [examples/nats.conf](examples/nats.conf) to `~/.config/cos/nats.conf`.
-2. Set the node name, its Tailscale route listener, and shared client/route
-   credentials for the COS cluster. Run `chmod 600 ~/.config/cos/nats.conf`.
-3. Start `cos serve` on delta, beta, and mariogk-dev.
-4. Open `http://delta:8790` over Tailscale. Sign in as `cos` with the password
-   in that host's `~/.config/cos/dashboard-token`.
+The zero-configuration contract admits hosts through private NetBird network
+membership and discovers peers automatically. OCI Vault creates and delivers
+transport, dashboard and integration credentials. Manual configuration-file and
+secret-copy procedures are retired; the existing implementation's remaining
+switches and credential-file inputs are tracked in TS-795 for removal.
 
-The dashboard token is generated on first startup and stored with mode 0600.
-Every HTTP route, including `/status` and `/events`, requires it. Connections
-are limited to loopback and Tailscale addresses; forwarded headers do not grant
-access. The HTTP listener remains `0.0.0.0:8790` for the required host rollout.
+Every HTTP route, including `/status` and `/events`, requires authentication.
+Automatic provisioning must retain that boundary.
 
 The CLI connects to **its local** NATS node. Calls to `cos.<host>.<command>` route
 through that cluster; remote T3 HTTP connections and SSH tunnels are not used.
@@ -47,7 +44,7 @@ or authorized user nkeys with a private `~/.config/cos/nats.seed` (also 0600).
 COS rejects anonymous access, production cluster names, and gateway/leaf bridges.
 Its NATS cluster is independent of production ts-orchestrator NATS.
 
-Credentials stay in existing files:
+Legacy credential locations below are implementation debt; OCI Vault must deliver credentials automatically:
 
 | Source | Path |
 |---|---|
@@ -88,15 +85,10 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 
 Merge requires a mariogk-authored open PR, a `cos/` or `cos-hold/` branch,
 mergeability, successful checks, reviewer approval, and no requested changes.
-`COS_ADOPTED=1` permits an explicitly adopted non-COS branch. `COS_FULL_SEND=1`
-bypasses client-side ts-reviewer status/approval only: at least one other successful check,
-mergeability, and no other reviewer's requested changes still apply. Waiving a
-security, data-loss, correctness, or contract finding remains a COS judgment
-before invoking full send. The existing `.cos/skip-reviewer` marker preserves
-the temporary user bypass; removing it restores the gate on the next request.
-Every merge uses `force_merge=false`, including Full Send and reviewer bypasses.
-Forgejo's server-side branch protections still apply; a server rejection is
-reported without a forced retry.
+Reviewer and deployment checks always apply. Bypass environment variables
+and marker-file instructions are retired; their existing product-code paths are
+inventoried for a separate removal change. Forgejo's server-side branch
+protections still apply.
 
 ## Story and live data
 
