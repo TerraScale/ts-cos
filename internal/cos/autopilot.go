@@ -119,6 +119,8 @@ func StartAutopilot(ctx context.Context, host string, bus *Bus, store *Store, re
 		}}
 	a.compactor = &Compactor{Call: bus.Call, KV: func(ctx context.Context) (jetstream.KeyValue, error) {
 		return js.KeyValue(ctx, autopilotSettings)
+	}, Savings: func(ctx context.Context) (jetstream.KeyValue, error) {
+		return openKV(ctx, bus, savingsBucket)
 	}, Publish: a.publish}
 	if engine != nil {
 		engine.JS, engine.Publish = js, a.publish

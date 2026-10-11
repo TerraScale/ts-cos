@@ -61,6 +61,7 @@ func compactDecision(t FleetThread, usage ContextUsage, st compactState, now tim
 type Compactor struct {
 	Call    func(ctx context.Context, host, command string, args []string, out any) error
 	KV      func(ctx context.Context) (jetstream.KeyValue, error)
+	Savings func(ctx context.Context) (jetstream.KeyValue, error)
 	Publish func(context.Context, AutopilotEntry)
 
 	mu      sync.Mutex
@@ -123,7 +124,7 @@ func (c *Compactor) pass(ctx context.Context, live Live) {
 			case "compact":
 				c.report(ctx, h.Host, t.ThreadID, "compact", act.Reason, c.compact(ctx, kv, h.Host, t.ThreadID, st))
 			case "fresh":
-				id, err := c.fresh(ctx, kv, h.Host, t, st)
+				id, err := c.fresh(ctx, kv, h.Host, t, st, usage.UsedTokens)
 				if err != nil {
 					c.report(ctx, h.Host, t.ThreadID, "fresh-thread", "", err)
 				} else if id != "" {
@@ -137,19 +138,24 @@ func (c *Compactor) pass(ctx context.Context, live Live) {
 // compact sends /compact with the handoff focus and records when it ran.
 func (c *Compactor) compact(ctx context.Context, kv jetstream.KeyValue, host, thread string, st compactState) error {
 	focus, err := CurrentBehavior().Render("compact_focus", nil)
+	var out CompactResult
 	if err == nil {
-		err = c.Call(ctx, host, "compact", []string{thread, focus}, nil)
+		err = c.Call(ctx, host, "compact", []string{thread, focus}, &out)
 	}
 	if err != nil {
 		return err
+	}
+	if out.Before.UsedTokens > out.After.UsedTokens {
+		c.saved(ctx, out.Before.UsedTokens-out.After.UsedTokens)
 	}
 	st.CompactedAt = time.Now()
 	return kvPutJSON(ctx, kv, compactKey(thread), st)
 }
 
 // fresh starts a new thread on the same worktree with the last reply as its brief,
-// then settles the old one. It returns "" when the thread has no worktree to continue in.
-func (c *Compactor) fresh(ctx context.Context, kv jetstream.KeyValue, host string, t FleetThread, st compactState) (string, error) {
+// then settles the old one. carried is the context the old thread was holding.
+// It returns "" when the thread has no worktree to continue in.
+func (c *Compactor) fresh(ctx context.Context, kv jetstream.KeyValue, host string, t FleetThread, st compactState, carried int) (string, error) {
 	var info map[string]any
 	if err := c.Call(ctx, host, "thread", []string{t.ThreadID}, &info); err != nil {
 		return "", err
@@ -179,6 +185,7 @@ func (c *Compactor) fresh(ctx context.Context, kv jetstream.KeyValue, host strin
 	if err := c.Call(ctx, host, "launch", []string{string(input)}, &launched); err != nil {
 		return "", err
 	}
+	c.saved(ctx, carried-len(brief)/4)
 	// Record Fresh before settling, so a failed settle never launches a second thread.
 	st.Fresh = true
 	if err := kvPutJSON(ctx, kv, compactKey(t.ThreadID), st); err != nil {
@@ -232,6 +239,21 @@ func (c *Compactor) resume(ctx context.Context, kv jetstream.KeyValue, live Live
 			}
 			c.report(ctx, h.Host, t.ThreadID, "resume", "ticket "+ticket+" is running again", err)
 		}
+	}
+}
+
+// saved records context removed from a worker as fresh-brief savings. It never fails a compaction.
+// A one-time lower bound: every later turn would have re-sent this context too.
+func (c *Compactor) saved(ctx context.Context, tokens int) {
+	if c.Savings == nil || tokens <= 0 {
+		return
+	}
+	kv, err := c.Savings(ctx)
+	if err == nil {
+		err = RecordSaving(ctx, kv, SavingFreshBrief, tokens, 0, time.Now())
+	}
+	if err != nil {
+		c.Publish(ctx, AutopilotEntry{Kind: "error", Action: "savings", Reason: err.Error()})
 	}
 }
 

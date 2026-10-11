@@ -87,21 +87,22 @@ type compactCall struct {
 
 // fakeCompact records every bus call and every log entry a beat makes.
 type fakeCompact struct {
-	calls   []compactCall
-	usage   map[string]ContextUsage
-	threads map[string]map[string]any
-	failing string // thread whose /compact fails
-	kv      *fakeCompactKV
-	entries []AutopilotEntry
-	block   chan struct{} // when set, /compact signals started and waits for block
-	started chan struct{}
+	calls    []compactCall
+	usage    map[string]ContextUsage
+	compacts map[string]CompactResult
+	threads  map[string]map[string]any
+	failing  string // thread whose /compact fails
+	kv       *fakeCompactKV
+	entries  []AutopilotEntry
+	block    chan struct{} // when set, /compact signals started and waits for block
+	started  chan struct{}
 }
 
 // waitPass blocks until the compactor's background pass has finished.
 func waitPass(c *Compactor) { c.passes.Wait() }
 
 func newFakeCompact() *fakeCompact {
-	return &fakeCompact{usage: map[string]ContextUsage{}, threads: map[string]map[string]any{}, kv: &fakeCompactKV{data: map[string][]byte{}}}
+	return &fakeCompact{usage: map[string]ContextUsage{}, compacts: map[string]CompactResult{}, threads: map[string]map[string]any{}, kv: &fakeCompactKV{data: map[string][]byte{}}}
 }
 
 func (f *fakeCompact) compactor() *Compactor {
@@ -118,6 +119,8 @@ func (f *fakeCompact) compactor() *Compactor {
 			switch o := out.(type) {
 			case *ContextUsage:
 				*o = f.usage[args[0]]
+			case *CompactResult:
+				*o = f.compacts[args[0]]
 			case *map[string]any:
 				if command == "launch" {
 					*o = map[string]any{"threadId": "thread-new"}
@@ -267,6 +270,84 @@ func TestCompactBeatRunsOnePassInBackground(t *testing.T) {
 	// The compaction just ran, so the cooldown holds the second pass to a context check.
 	if want := []string{"ctx", "compact", "ctx"}; !slices.Equal(f.commands(), want) {
 		t.Fatalf("calls after release = %v, want %v", f.commands(), want)
+	}
+}
+
+// savingsTodayTokens reads today's fresh-brief tokens from the savings bucket.
+func savingsTodayTokens(t *testing.T, ctx context.Context, kv jetstream.KeyValue) int {
+	t.Helper()
+	report, err := SavingsReport(ctx, kv, 1, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report[0].Kinds[SavingFreshBrief].Tokens
+}
+
+func TestCompactRecordsContextRemoved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	savings := memoryTestBuckets(t, ctx, savingsBucket)[0]
+	f := newFakeCompact()
+	f.usage["t1"] = ContextUsage{Pct: 72}
+	f.compacts["t1"] = CompactResult{Before: ContextUsage{UsedTokens: 150000}, After: ContextUsage{UsedTokens: 30000}}
+	c := f.compactor()
+	c.Savings = func(context.Context) (jetstream.KeyValue, error) { return savings, nil }
+	c.Beat(ctx, liveWith(FleetThread{ThreadID: "t1", Status: "idle"}))
+	waitPass(c)
+	if got := savingsTodayTokens(t, ctx, savings); got != 120000 {
+		t.Fatalf("fresh-brief tokens = %d, want 120000", got)
+	}
+}
+
+func TestCompactFreshRecordsCarriedContextMinusBrief(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	savings := memoryTestBuckets(t, ctx, savingsBucket)[0]
+	f := newFakeCompact()
+	f.usage["t1"] = ContextUsage{Pct: 55, UsedTokens: 120000}
+	f.threads["t1"] = map[string]any{"worktreePath": "/wt/ts813", "branch": "cos/ts-813", "title": "TS-813 work", "lastReply": "Pushed PR #90"}
+	if err := kvPutJSON(ctx, f.kv, compactKey("t1"), compactState{CompactedAt: time.Now().Add(-10 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	c := f.compactor()
+	c.Savings = func(context.Context) (jetstream.KeyValue, error) { return savings, nil }
+	c.Beat(ctx, liveWith(FleetThread{ThreadID: "t1", Project: "ts-cos", Status: "idle", Title: "TS-813 work"}))
+	waitPass(c)
+	brief, err := CurrentBehavior().Render("fresh_brief", freshBrief{LastReply: "Pushed PR #90"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := savingsTodayTokens(t, ctx, savings), 120000-len(brief)/4; got != want {
+		t.Fatalf("fresh-brief tokens = %d, want %d", got, want)
+	}
+}
+
+func TestCompactWithoutSavingsRecordsNothing(t *testing.T) {
+	f := newFakeCompact()
+	f.usage["t1"] = ContextUsage{Pct: 72}
+	f.compacts["t1"] = CompactResult{Before: ContextUsage{UsedTokens: 150000}, After: ContextUsage{UsedTokens: 30000}}
+	c := f.compactor() // Savings is nil
+	c.Beat(context.Background(), liveWith(FleetThread{ThreadID: "t1", Status: "idle"}))
+	waitPass(c)
+	if len(f.entries) != 1 || f.entries[0].Kind != "act" || f.entries[0].Action != "compact" {
+		t.Fatalf("entries = %+v", f.entries)
+	}
+}
+
+func TestCompactSavingsFailureDoesNotFailCompaction(t *testing.T) {
+	f := newFakeCompact()
+	f.usage["t1"] = ContextUsage{Pct: 72}
+	f.compacts["t1"] = CompactResult{Before: ContextUsage{UsedTokens: 150000}, After: ContextUsage{UsedTokens: 30000}}
+	c := f.compactor()
+	c.Savings = func(context.Context) (jetstream.KeyValue, error) { return nil, errors.New("no savings bucket") }
+	c.Beat(context.Background(), liveWith(FleetThread{ThreadID: "t1", Status: "idle"}))
+	waitPass(c)
+	if len(f.entries) != 2 || f.entries[0].Kind != "error" || f.entries[0].Action != "savings" || f.entries[1].Action != "compact" || f.entries[1].Kind != "act" {
+		t.Fatalf("entries = %+v", f.entries)
+	}
+	var st compactState
+	if _, err := kvJSON(context.Background(), f.kv, compactKey("t1"), &st); err != nil || st.CompactedAt.IsZero() {
+		t.Fatalf("state = %+v, %v", st, err)
 	}
 }
 
