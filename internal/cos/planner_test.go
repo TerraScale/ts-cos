@@ -127,7 +127,7 @@ func TestPlanBriefsTargetHaikuAndOwnFiles(t *testing.T) {
 		if w.Target["model"] != "claude-haiku-5-5" || w.Target["providerInstanceId"] != "claudeAgent" {
 			t.Errorf("%s target = %v", w.ID, w.Target)
 		}
-		if !strings.Contains(w.Brief, "Opus 5.5 advisor") {
+		if worker, _ := planTarget()["model"].(string); !strings.Contains(w.Brief, worker) || !strings.Contains(w.Brief, "advisor (COS)") {
 			t.Errorf("%s brief missing advisor line: %s", w.ID, w.Brief)
 		}
 	}

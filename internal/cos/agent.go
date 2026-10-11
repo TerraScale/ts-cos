@@ -50,6 +50,8 @@ type AgentState struct {
 	Orphans       []AgentThread     `json:"orphans,omitempty"`
 	// DigestSince is where the next escalation digest starts; it survives a fresh COS thread.
 	DigestSince time.Time `json:"digestSince,omitempty"`
+	// EventsSince is where the next immediate-event read starts; it survives a fresh COS thread.
+	EventsSince time.Time `json:"eventsSince,omitempty"`
 }
 
 // addReason keeps every pending restart reason, so a failover is never hidden by a later trigger.
@@ -90,6 +92,7 @@ type Agent struct {
 	shown           map[string]string
 	orphanCheck     time.Time
 	digestCheck     time.Time
+	eventCheck      time.Time
 	hot, nextPoll   time.Time
 	saved           string
 }
@@ -116,10 +119,27 @@ func NewAgent(cfg Config, chat *Chat, store *Store, bus *Bus) *Agent {
 		Remote: bus.Call}
 }
 
+// openAgentKV binds COS_AGENT with leader-only reads, so Step never acts on a stale state.
+func openAgentKV(ctx context.Context, bus *Bus) (jetstream.KeyValue, error) {
+	if _, err := openKV(ctx, bus, agentBucket); err != nil {
+		return nil, err
+	}
+	js, err := bus.JetStream()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := leaderReads(ctx, js, agentBucket); err != nil {
+		return nil, err
+	}
+	return openKV(ctx, bus, agentBucket) // re-bind: the first handle still uses direct gets
+}
+
 // Run drives COS while this node holds the cluster lease (Bus.Lead) and idles otherwise.
 func (a *Agent) Run(ctx context.Context, bus *Bus) {
 	for a.KV == nil {
-		kv, err := openKV(ctx, bus, agentBucket)
+		kv, err := openAgentKV(ctx, bus)
 		if err == nil {
 			a.Context, err = openKV(ctx, bus, contextBucket)
 		}
@@ -294,6 +314,13 @@ func (a *Agent) Step(ctx context.Context) error {
 		reasons = append(reasons, "digest")
 		items++ // digestWake returns text only, so a digest counts as one item
 	}
+	if text, n, err := a.eventWake(ctx, &st, now); err != nil {
+		slog.Warn("COS events", "error", err)
+	} else if n > 0 {
+		wake = append(wake, text)
+		reasons = append(reasons, "event")
+		items += n
+	}
 	busy := false
 	// Poll T3 every second while COS works or a wake is due, otherwise every 30 seconds.
 	if st.ThreadID != "" && (len(wake) > 0 || now.Before(a.hot) || !now.Before(a.nextPoll)) {
@@ -425,7 +452,7 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 		}
 	}
 	carried, oldBrief, replaced := st.CarriedTokens, st.BriefTokens, st.ThreadID != ""
-	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince, Asked: st.Asked, Wakes: st.Wakes}
+	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince, EventsSince: st.EventsSince, Asked: st.Asked, Wakes: st.Wakes}
 	st.BriefTokens = len(brief) / 4
 	if a.Savings != nil {
 		// Savings are best effort: a failed write must never fail the restart that already launched.
@@ -536,7 +563,7 @@ func agentCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 		return err
 	}
 	defer bus.Close()
-	kv, err := openKV(ctx, bus, agentBucket)
+	kv, err := openAgentKV(ctx, bus)
 	if err != nil {
 		return err
 	}

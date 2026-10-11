@@ -43,25 +43,26 @@ var usageBucketConfig = jetstream.KeyValueConfig{Bucket: usageBucket, History: 1
 
 // UsageRow is one day's usage for one session and model on one host.
 type UsageRow struct {
-	Day          string         `json:"day"`
-	Host         string         `json:"host"`
-	Project      string         `json:"project"`
-	Kind         string         `json:"kind"`
-	Worktree     string         `json:"worktree,omitempty"`
-	Branch       string         `json:"branch,omitempty"`
-	Ticket       string         `json:"ticket,omitempty"`
-	Session      string         `json:"session"`
-	Model        string         `json:"model"`
-	Effort       string         `json:"effort,omitempty"`
-	Input        int64          `json:"input"`
-	Output       int64          `json:"output"`
-	CacheWrite5m int64          `json:"cacheWrite5m"`
-	CacheWrite1h int64          `json:"cacheWrite1h"`
-	CacheRead    int64          `json:"cacheRead"`
-	Messages     int            `json:"messages"`
-	Tools        map[string]int `json:"tools,omitempty"` // advisor tool calls by toolCategory
-	First        time.Time      `json:"first"`
-	Last         time.Time      `json:"last"`
+	Day          string           `json:"day"`
+	Host         string           `json:"host"`
+	Project      string           `json:"project"`
+	Kind         string           `json:"kind"`
+	Worktree     string           `json:"worktree,omitempty"`
+	Branch       string           `json:"branch,omitempty"`
+	Ticket       string           `json:"ticket,omitempty"`
+	Session      string           `json:"session"`
+	Model        string           `json:"model"`
+	Effort       string           `json:"effort,omitempty"`
+	Input        int64            `json:"input"`
+	Output       int64            `json:"output"`
+	CacheWrite5m int64            `json:"cacheWrite5m"`
+	CacheWrite1h int64            `json:"cacheWrite1h"`
+	CacheRead    int64            `json:"cacheRead"`
+	Messages     int              `json:"messages"`
+	Tools        map[string]int   `json:"tools,omitempty"` // advisor tool calls by toolCategory
+	Waste        map[string]int64 `json:"waste,omitempty"` // tokens of turns reacting to rework, by wasteKind
+	First        time.Time        `json:"first"`
+	Last         time.Time        `json:"last"`
 }
 
 var usageDateSuffix = regexp.MustCompile(`-\d{8}$`)
@@ -122,6 +123,73 @@ type usageEntry struct {
 	} `json:"message"`
 }
 
+// usageGateFails are the failure lines of .cos/gate.sh.
+var usageGateFails = []string{"LOCAL GATE FAIL", "CONFLICT vs origin/main", "NOT MERGED"}
+
+// usageWaste finds rework: a failed gate, a git rebase or an API retry. The turn that
+// reacts to it is the next new message, and that message's tokens are waste.
+type usageWaste struct {
+	rebases map[string]bool   // Bash tool_use IDs whose command is a git rebase
+	pending string            // kind of the latest rework result not yet answered
+	kinds   map[string]string // message ID -> kind of the rework it reacts to
+}
+
+// rebaseCall reports whether a tool_use is a Bash call running git rebase.
+func (w *usageWaste) rebaseCall(id, name string, input json.RawMessage) {
+	var in struct {
+		Command string `json:"command"`
+	}
+	if name == "Bash" && json.Unmarshal(input, &in) == nil && strings.Contains(in.Command, "git rebase") {
+		w.rebases[id] = true
+	}
+}
+
+// results reads a user line's tool_result blocks and sets the pending kind.
+func (w *usageWaste) results(line []byte) {
+	var e struct {
+		Message struct {
+			Content []struct {
+				Type      string          `json:"type"`
+				ToolUseID string          `json:"tool_use_id"`
+				Content   json.RawMessage `json:"content"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &e) != nil {
+		return
+	}
+	for _, c := range e.Message.Content {
+		if c.Type != "tool_result" {
+			continue
+		}
+		text := usageResultText(c.Content)
+		switch {
+		case slices.ContainsFunc(usageGateFails, func(s string) bool { return strings.Contains(text, s) }):
+			w.pending = "gate"
+		case w.rebases[c.ToolUseID]:
+			w.pending = "rebase"
+		}
+	}
+}
+
+// usageResultText is a tool_result's content, which is a string or a list of text blocks.
+func usageResultText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(raw, &blocks)
+	var b strings.Builder
+	for _, blk := range blocks {
+		b.WriteString(blk.Text)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 // scanTranscript sums one transcript. Claude Code writes one line per content block,
 // each repeating the message's usage with a growing count, so lines dedupe by message
 // ID and keep the per-field max.
@@ -134,6 +202,7 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 	kind, worktree := usageProject(project)
 	msgs := map[string]*UsageRow{}
 	seenTool := map[string]bool{} // a tool_use block can repeat on later lines
+	waste := usageWaste{rebases: map[string]bool{}, kinds: map[string]string{}}
 	r := bufio.NewReader(f)
 	for n := 0; ; n++ {
 		line, err := r.ReadBytes('\n')
@@ -142,6 +211,12 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 		}
 		if err != nil {
 			return nil, err
+		}
+		if bytes.Contains(line, []byte(`"isApiErrorMessage":true`)) {
+			waste.pending = "retry" // an API error is synthetic, so it never counts as the reacting turn
+		}
+		if bytes.Contains(line, []byte(`"tool_result"`)) {
+			waste.results(line)
 		}
 		if !bytes.Contains(line, []byte(`"type":"assistant"`)) || !bytes.Contains(line, []byte(`"usage"`)) {
 			continue
@@ -160,6 +235,10 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 			m = &UsageRow{Day: ts.Format("2006-01-02"), Host: host, Project: project, Kind: kind, Worktree: worktree,
 				Session: e.SessionID, Model: e.Message.Model, First: ts, Last: ts, Messages: 1}
 			msgs[id] = m
+			if waste.pending != "" {
+				waste.kinds[id] = waste.pending
+				waste.pending = ""
+			}
 		}
 		u := e.Message.Usage
 		w5, w1 := u.CacheWrite, int64(0)
@@ -175,6 +254,9 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 		m.CacheWrite1h = max(m.CacheWrite1h, w1)
 		if ts.After(m.Last) {
 			m.Last = ts
+		}
+		for _, c := range e.Message.Content {
+			waste.rebaseCall(c.ID, c.Name, c.Input) // every model, not only advisors
 		}
 		if usageWorker(e.Message.Model) {
 			continue
@@ -192,7 +274,15 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 		}
 	}
 	merged := map[usageGroup]UsageRow{}
-	for _, m := range msgs {
+	for id, m := range msgs {
+		// Tokens are summed only now, from the final max of a message that streamed over several lines.
+		if kind := waste.kinds[id]; kind != "" {
+			output := m.Output
+			if kind == "retry" {
+				output = 0 // the resumed turn re-sends an expired prompt; its output is productive work
+			}
+			m.Waste = map[string]int64{kind: usageTokens(UsageTotal{Input: m.Input, Output: output, CacheWrite: m.CacheWrite5m + m.CacheWrite1h})}
+		}
 		usageAdd(merged, *m)
 	}
 	return usageRows(merged), nil
@@ -205,7 +295,8 @@ func usageAdd(m map[usageGroup]UsageRow, r UsageRow) {
 	g := usageGroup{r.Day, r.Host, r.Project, r.Session, r.Model}
 	cur, ok := m[g]
 	if !ok {
-		r.Tools = maps.Clone(r.Tools) // the cached scan rows must not share this map
+		r.Tools = maps.Clone(r.Tools) // the cached scan rows must not share these maps
+		r.Waste = maps.Clone(r.Waste)
 		m[g] = r
 		return
 	}
@@ -214,6 +305,12 @@ func usageAdd(m map[usageGroup]UsageRow, r UsageRow) {
 			cur.Tools = map[string]int{}
 		}
 		cur.Tools[k] += n
+	}
+	for k, n := range r.Waste {
+		if cur.Waste == nil {
+			cur.Waste = map[string]int64{}
+		}
+		cur.Waste[k] += n
 	}
 	cur.Input += r.Input
 	cur.Output += r.Output
@@ -359,13 +456,19 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 		bus.Lead(ctx, func(ctx context.Context) { runBudgets(ctx, bus, store) })
 	})
 	root := filepath.Join(home, ".claude", "projects")
+	codexRoot := filepath.Join(home, ".codex", "sessions")
 	var scanner usageScanner
+	var codex codexScanner
 	published := map[string][]byte{}
 	failed := 0
 	tick := time.NewTicker(usageScanEvery)
 	defer tick.Stop()
 	for {
-		rows, err := scanner.Scan(root, host, time.Now())
+		now := time.Now()
+		rows, err := scanner.Scan(root, host, now)
+		codexRows, codexErr := codex.Scan(codexRoot, host, now)
+		rows = append(rows, codexRows...)
+		err = errors.Join(err, codexErr)
 		if err != nil && ctx.Err() == nil {
 			logErr(ctx, slog.LevelError, "scan usage", err)
 		}
@@ -608,22 +711,23 @@ func (s *Store) Usage(ctx context.Context, sinceDay string) ([]UsageRow, error) 
 }
 
 type UsageTotal struct {
-	Key           string         `json:"key"`
-	Label         string         `json:"label"`
-	Host          string         `json:"host,omitempty"`
-	Thread        string         `json:"thread,omitempty"`
-	Ticket        string         `json:"ticket,omitempty"`
-	Input         int64          `json:"input"`
-	Output        int64          `json:"output"`
-	CacheWrite    int64          `json:"cacheWrite"`
-	CacheRead     int64          `json:"cacheRead"`
-	AdvisorOutput int64          `json:"advisorOutput"`
-	WorkerOutput  int64          `json:"workerOutput"`
-	Workers       int            `json:"workers"`
-	Parallel      int            `json:"parallel"`
-	HaikuShare    int            `json:"haikuShare"`
-	Tools         map[string]int `json:"tools,omitempty"`
-	Subagent      bool           `json:"-"` // the group resolved to a subagent only: usage, never a policy target
+	Key           string           `json:"key"`
+	Label         string           `json:"label"`
+	Host          string           `json:"host,omitempty"`
+	Thread        string           `json:"thread,omitempty"`
+	Ticket        string           `json:"ticket,omitempty"`
+	Input         int64            `json:"input"`
+	Output        int64            `json:"output"`
+	CacheWrite    int64            `json:"cacheWrite"`
+	CacheRead     int64            `json:"cacheRead"`
+	AdvisorOutput int64            `json:"advisorOutput"`
+	WorkerOutput  int64            `json:"workerOutput"`
+	Workers       int              `json:"workers"`
+	Parallel      int              `json:"parallel"`
+	HaikuShare    int              `json:"haikuShare"`
+	Tools         map[string]int   `json:"tools,omitempty"`
+	Waste         map[string]int64 `json:"waste,omitempty"`
+	Subagent      bool             `json:"-"` // the group resolved to a subagent only: usage, never a policy target
 }
 
 type usageSpan struct{ first, last time.Time }
@@ -676,11 +780,14 @@ func usageGroupKey(r UsageRow, by string) string {
 // usageTotal sums rows. Workers are the distinct Haiku sessions; Parallel is the most
 // of them running at one instant.
 func usageTotal(key string, rows []UsageRow) UsageTotal {
-	t := UsageTotal{Key: key, Label: key, Ticket: latestUsage(rows).Ticket, Tools: map[string]int{}}
+	t := UsageTotal{Key: key, Label: key, Ticket: latestUsage(rows).Ticket, Tools: map[string]int{}, Waste: map[string]int64{}}
 	spans := map[string]usageSpan{}
 	for _, r := range rows {
 		for k, n := range r.Tools {
 			t.Tools[k] += n
+		}
+		for k, n := range r.Waste {
+			t.Waste[k] += n
 		}
 		t.Input += r.Input
 		t.Output += r.Output

@@ -32,6 +32,15 @@ func (c *usageCount) add(r UsageRow) {
 	c.CacheRead += r.CacheRead
 }
 
+// plus returns c with o's totals added.
+func (c usageCount) plus(o usageCount) usageCount {
+	c.Messages += o.Messages
+	c.Tokens += o.Tokens
+	c.Output += o.Output
+	c.CacheRead += o.CacheRead
+	return c
+}
+
 // usageVerifyReport is the usage-verify answer: one host's three independent totals for today.
 type usageVerifyReport struct {
 	Host       string                `json:"host"`
@@ -59,6 +68,7 @@ func usageVerify(ctx context.Context, bus *Bus, store *Store, host string, args 
 		return usageVerifyReport{}, err
 	}
 	root := filepath.Join(home, ".claude", "projects")
+	codexRoot := filepath.Join(home, ".codex", "sessions")
 	kv, err := openKVConfig(ctx, bus, usageBucketConfig)
 	if err != nil {
 		return usageVerifyReport{}, err
@@ -67,6 +77,11 @@ func usageVerify(ctx context.Context, bus *Bus, store *Store, host string, args 
 	if err != nil {
 		return usageVerifyReport{}, err
 	}
+	codexRows, err := todayCodexUsage(codexRoot, host, now)
+	if err != nil {
+		return usageVerifyReport{}, err
+	}
+	rows = append(rows, codexRows...)
 	if _, err := publishUsage(ctx, kv, rows, map[string][]byte{}); err != nil {
 		return usageVerifyReport{}, fmt.Errorf("publish usage: %w", err)
 	}
@@ -74,6 +89,11 @@ func usageVerify(ctx context.Context, bus *Bus, store *Store, host string, args 
 	if err != nil {
 		return usageVerifyReport{}, err
 	}
+	codex, err := codexTotals(codexRoot, day)
+	if err != nil {
+		return usageVerifyReport{}, err
+	}
+	transcript = transcript.plus(codex)
 	bucket, err := kvUsageTotals(ctx, kv, host, day)
 	if err != nil {
 		return usageVerifyReport{}, err

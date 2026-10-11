@@ -4,20 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// haikuLaunch matches a thread launch that selects Haiku. delegate_task targets use providerInstanceId, so they never match.
-var haikuLaunch = regexp.MustCompile(`(?i)"instanceId"\s*:\s*"claudeAgent"\s*,\s*"model"\s*:\s*"claude-haiku`)
-
-// haikuThread matches prose that tells an agent to open a Haiku 5.5 thread.
-var haikuThread = regexp.MustCompile(`(?i)haiku 5\.5 thread`)
-
-// checkAdvisorPrinciple reads the deployed behavior bundle and requires its briefs to keep "Opus advises, Haiku executes".
+// checkAdvisorPrinciple reads the deployed behavior bundle and requires its briefs to keep "ADVISOR decides, WORKERS execute".
 func checkAdvisorPrinciple(ctx context.Context, e *E2EEnv) (string, error) {
 	bus, err := e.bus(ctx)
 	if err != nil {
@@ -44,33 +40,57 @@ func checkAdvisorPrinciple(ctx context.Context, e *E2EEnv) (string, error) {
 	if err := json.Unmarshal(entry.Value(), &bundle); err != nil {
 		return "", err
 	}
-	var problems []string
-	for _, name := range []string{"brief.md", "templates/selfbrief.tmpl"} {
-		problems = append(problems, advisorProblems(name, bundle.Files[name])...)
+	b, err := ParseBehavior(bundle.Version, bundle.Files)
+	if err != nil {
+		return "", fmt.Errorf("deployed behavior %s does not load: %w", bundle.Version, err)
 	}
+	problems := briefProblems(b.AgentBrief(), b.Models)
+	problems = append(problems, advisorProblems("brief.md", b.AgentBrief(), b.Models)...)
+	problems = append(problems, advisorProblems("templates/selfbrief.tmpl", bundle.Files["templates/selfbrief.tmpl"], b.Models)...)
 	if len(problems) > 0 {
-		return "", fmt.Errorf("deployed behavior %s breaks \"Opus advises, Haiku executes\": %s", bundle.Version, strings.Join(problems, "; "))
+		return "", fmt.Errorf("deployed behavior %s breaks \"ADVISOR decides, WORKERS execute\": %s", bundle.Version, strings.Join(problems, "; "))
 	}
-	return "deployed behavior " + bundle.Version + ": brief.md and selfbrief carry Opus advisor + Haiku delegate_task subagents, no Haiku threads", nil
+	return "deployed behavior " + bundle.Version + ": brief names every pair's advisor and worker, selfbrief delegates to workers, no worker threads", nil
+}
+
+// workerNames is an alternation of the worker-only models, for matching a launch or prose that runs one as a thread.
+func workerNames(pol ModelPolicy) string {
+	names := make([]string, 0, len(pol.WorkerOnly))
+	for _, m := range pol.WorkerOnly {
+		names = append(names, regexp.QuoteMeta(m))
+	}
+	return strings.Join(names, "|")
+}
+
+// briefProblems lists what the brief must say: the principle, and each pair's advisor and worker model.
+func briefProblems(content string, pol ModelPolicy) []string {
+	var problems []string
+	if !strings.Contains(content, "ADVISOR decides, WORKERS execute") {
+		problems = append(problems, "brief: no \"ADVISOR decides, WORKERS execute\"")
+	}
+	for _, k := range slices.Sorted(maps.Keys(pol.Pairs)) {
+		for _, m := range []string{pol.Pairs[k].Advisor.Model, pol.Pairs[k].Worker.Model} {
+			if !strings.Contains(content, m) {
+				problems = append(problems, "brief: no "+m+" in pair "+k)
+			}
+		}
+	}
+	return problems
 }
 
 // advisorProblems lists how one behavior file breaks the advisor principle. A missing file has empty content and fails the same checks.
-func advisorProblems(name, content string) []string {
+func advisorProblems(name, content string, pol ModelPolicy) []string {
 	var problems []string
-	if !strings.Contains(content, "Opus 5.5") && !strings.Contains(content, "claude-opus-5-5") {
-		problems = append(problems, name+": no Opus 5.5 advisor")
-	}
-	if !strings.Contains(content, "claude-haiku-5-5") {
-		problems = append(problems, name+": no claude-haiku-5-5 delegate")
-	}
 	if !strings.Contains(content, "delegate_task") {
 		problems = append(problems, name+": no delegate_task")
 	}
-	if haikuLaunch.MatchString(content) {
-		problems = append(problems, name+": launches a Haiku thread")
+	launch := regexp.MustCompile(`(?i)"instanceId"\s*:\s*"[^"]*"\s*,\s*"model"\s*:\s*"(` + workerNames(pol) + `)"`)
+	if launch.MatchString(content) {
+		problems = append(problems, name+": launches a worker model as a thread")
 	}
-	if haikuThread.MatchString(content) {
-		problems = append(problems, name+": tells agents to use a Haiku 5.5 thread")
+	prose := regexp.MustCompile(`(?i)(` + workerNames(pol) + `) thread`)
+	if prose.MatchString(content) {
+		problems = append(problems, name+": tells agents to open a worker-model thread")
 	}
 	return problems
 }

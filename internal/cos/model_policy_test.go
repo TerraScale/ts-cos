@@ -36,7 +36,7 @@ func noWorkersUsage(u *UsageTotal) {
 
 func adviseLine(t *testing.T) string {
 	t.Helper()
-	line, err := CurrentBehavior().Render("advise_split", struct{}{})
+	line, err := CurrentBehavior().Render("advise_split", adviseFor(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,22 +54,22 @@ func TestUsagePolicy(t *testing.T) {
 		last  map[string]time.Time
 		want  []Decision
 	}{
-		{name: "below the floor after the first hour", want: []Decision{act("nudge_haiku_share")}},
+		{name: "below the floor after the first hour", want: []Decision{act("nudge_worker_share")}},
 		{name: "within the first hour", seen: func(s map[string]threadSeen) { s["beta/p"] = threadSeen{First: now.Add(-30 * time.Minute)} }},
 		{name: "under the token minimum", usage: func(u *UsageTotal) { u.Output, u.AdvisorOutput, u.WorkerOutput = 1100, 1000, 100 }},
 		{name: "nudged an hour ago", last: map[string]time.Time{"share:t1": now.Add(-time.Hour)}},
-		{name: "nudged three hours ago", last: map[string]time.Time{"share:t1": now.Add(-3 * time.Hour)}, want: []Decision{act("nudge_haiku_share")}},
+		{name: "nudged three hours ago", last: map[string]time.Time{"share:t1": now.Add(-3 * time.Hour)}, want: []Decision{act("nudge_worker_share")}},
 		{name: "at the floor", usage: func(u *UsageTotal) { u.HaikuShare = 50 }},
 		{name: "unactionable without a T3 thread", usage: func(u *UsageTotal) { u.Thread = "" }},
 		{name: "haiku 4.5 subagent", usage: func(u *UsageTotal) { u.HaikuShare = 60 }, seen: func(s map[string]threadSeen) {
-			s["beta/p"] = threadSeen{First: now.Add(-2 * time.Hour), Haiku45: true}
-		}, want: []Decision{escalate("subagent-haiku-4-5"), act("nudge_haiku45")}},
+			s["beta/p"] = threadSeen{First: now.Add(-2 * time.Hour), Advisor: "claude-opus-5-5", Workers: []string{"claude-haiku-4-5"}}
+		}, want: []Decision{escalate("subagent-wrong-worker"), act("nudge_wrong_worker")}},
 		{name: "haiku 4.5 subagent nudged within the window", usage: func(u *UsageTotal) { u.HaikuShare = 60 }, seen: func(s map[string]threadSeen) {
-			s["beta/p"] = threadSeen{First: now.Add(-2 * time.Hour), Haiku45: true}
-		}, last: map[string]time.Time{"haiku45:t1": now.Add(-time.Hour)}},
+			s["beta/p"] = threadSeen{First: now.Add(-2 * time.Hour), Advisor: "claude-opus-5-5", Workers: []string{"claude-haiku-4-5"}}
+		}, last: map[string]time.Time{"wrong-worker:t1": now.Add(-time.Hour)}},
 		{name: "no workers after the first hour", usage: noWorkersUsage, want: []Decision{act("nudge_no_workers")}},
 		{name: "no workers nudged within the window falls back to the share nudge", usage: noWorkersUsage,
-			last: map[string]time.Time{"noworkers:t1": now.Add(-time.Hour)}, want: []Decision{act("nudge_haiku_share")}},
+			last: map[string]time.Time{"noworkers:t1": now.Add(-time.Hour)}, want: []Decision{act("nudge_worker_share")}},
 		{name: "no workers under the token minimum", usage: func(u *UsageTotal) { noWorkersUsage(u); u.AdvisorOutput, u.Output = 1000, 1000 }},
 	}
 	for _, tt := range tests {
@@ -92,9 +92,9 @@ func TestUsagePolicyShareNudgeText(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("decisions = %+v, want one nudge", got)
 	}
-	for _, want := range []string{"Haiku 5.5 workers did 12% of this thread's output", "(4000 worker vs 29000 advisor tokens, 7 workers, at most 2 in parallel)",
+	for _, want := range []string{"workers did 12% of this thread's output", "(4000 worker vs 29000 advisor tokens, 7 workers, at most 2 in parallel)",
 		"5 build/test loops", "2 git rebase/push/fetch", "30 file reads", "4 git reads", "1 live ops", "2 CI calls",
-		"As the Opus advisor, hand those to parallel Haiku 5.5 workers."} {
+		"As the advisor, delegate those to claude-haiku-5-5 via target"} {
 		if !strings.Contains(got[0].Wake, want) {
 			t.Errorf("wake = %q, want it to contain %q", got[0].Wake, want)
 		}
@@ -114,7 +114,7 @@ func TestUsagePolicyNoWorkersNudgeText(t *testing.T) {
 	if len(got) != 1 || got[0].Rule != "nudge_no_workers" {
 		t.Fatalf("decisions = %+v, want one no-workers nudge", got)
 	}
-	if want := "COS: this thread has done 52000 Opus advisor output tokens with no Haiku 5.5 workers. As the Opus advisor, split the work and run it on parallel Haiku 5.5 workers."; !strings.HasPrefix(got[0].Wake, want) {
+	if want := "COS: this thread has done 52000 advisor output tokens with no claude-haiku-5-5 workers. As the advisor, split the work and run it on parallel claude-haiku-5-5 workers via delegate_task target"; !strings.HasPrefix(got[0].Wake, want) {
 		t.Errorf("wake = %q, want it to start with %q", got[0].Wake, want)
 	}
 	if !strings.HasSuffix(got[0].Wake, "\n"+adviseLine(t)) {
@@ -175,7 +175,7 @@ func TestHaikuWithoutAdvisorReason(t *testing.T) {
 	}}}}
 	got := fleetModelPolicy(live, time.Now(), nil, nil)
 	if len(got) != 1 || got[0].Host != "beta" || got[0].Thread != "p1" || got[0].Sig != "noadvisor" ||
-		got[0].Reason != "Haiku claude-haiku-5-5 worker under a claude-sonnet-x parent; every Haiku worker needs an Opus 5.5 advisor" {
+		got[0].Reason != "worker claude-haiku-5-5 under a claude-sonnet-x parent; every worker needs its pair's advisor" {
 		t.Fatalf("decisions = %+v, want one escalation of p1 with the advisor reason", got)
 	}
 }
@@ -224,7 +224,7 @@ func TestRulesEnginePolicy(t *testing.T) {
 
 	r.Policy(ctx, live)
 	if len(rec.calls) != 1 || rec.calls[0].host != "beta" || rec.calls[0].command != "send" ||
-		rec.calls[0].args[0] != "t1" || !strings.Contains(rec.calls[0].args[1], "with no Haiku 5.5 workers") {
+		rec.calls[0].args[0] != "t1" || !strings.Contains(rec.calls[0].args[1], "with no claude-haiku-5-5 workers") {
 		t.Fatalf("calls = %+v, want one no-workers nudge to beta t1", rec.calls)
 	}
 	if _, ok := kv.data[nudgeKey("noworkers", "t1")]; !ok {
@@ -347,8 +347,8 @@ func TestRulesEnginePolicyHaiku45NudgeOnce(t *testing.T) {
 	// A failed send leaves the window open, so the next beat retries the nudge.
 	rec.sendErr = errors.New("nats: timeout")
 	r.Policy(ctx, live)
-	if _, ok := kv.data[nudgeKey("haiku45", "t1")]; ok {
-		t.Fatalf("haiku45 window recorded after a failed send: %v", kv.data)
+	if _, ok := kv.data[nudgeKey("wrong-worker", "t1")]; ok {
+		t.Fatalf("wrong-worker window recorded after a failed send: %v", kv.data)
 	}
 	rec.sendErr, rec.calls = nil, nil
 
@@ -356,8 +356,8 @@ func TestRulesEnginePolicyHaiku45NudgeOnce(t *testing.T) {
 	if len(rec.calls) != 1 || !strings.Contains(rec.calls[0].args[1], "claude-haiku-4-5") {
 		t.Fatalf("calls = %+v, want one haiku 4.5 nudge to t1", rec.calls)
 	}
-	if _, ok := kv.data[nudgeKey("haiku45", "t1")]; !ok {
-		t.Fatalf("haiku45 window not recorded: %v", kv.data)
+	if _, ok := kv.data[nudgeKey("wrong-worker", "t1")]; !ok {
+		t.Fatalf("wrong-worker window not recorded: %v", kv.data)
 	}
 
 	rec.calls = nil
@@ -408,7 +408,7 @@ func TestModelPolicyTemplatesAreRequired(t *testing.T) {
 }
 
 func TestModelPolicyTemplatesRenderOneLine(t *testing.T) {
-	for _, name := range []string{"advise_split", "nudge_haiku_share", "nudge_no_workers", "nudge_haiku45"} {
+	for _, name := range []string{"advise_split", "nudge_worker_share", "nudge_no_workers", "nudge_wrong_worker"} {
 		out, err := CurrentBehavior().Render(name, behaviorTemplates[name])
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

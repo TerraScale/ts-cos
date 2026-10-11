@@ -78,13 +78,13 @@ func queueLimitResume(ctx context.Context, bus *Bus, host, thread, title, model 
 // Model rules (user 2026-10-11): threads run their pair's advisor at high effort; the same failure twice escalates to high-stakes effort, never to a worker model.
 
 // wakeText renders a wake with the advisor split line; every wake ends with it.
-func wakeText(name string, data any) (string, error) {
+func wakeText(name string, data any, model string) (string, error) {
 	b := CurrentBehavior()
 	text, err := b.Render(name, data)
 	if err != nil {
 		return "", err
 	}
-	split, err := b.Render("advise_split", struct{}{})
+	split, err := b.Render("advise_split", adviseFor(model))
 	if err != nil {
 		return "", err
 	}
@@ -211,7 +211,7 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 	out := []Decision{}
 	pol := CurrentBehavior().Models
 	if owner != nil && owner.Lineage == nil && pol.WorkerOnlyModel(owner.Model) {
-		x := d(ClassAct, "model-opus-thread", "threads run Opus 5.5; Haiku 5.5 only as delegate_task subagents")
+		x := d(ClassAct, "model-opus-thread", "threads run their pair's advisor; workers only as delegate_task subagents")
 		x.Model = pol.Advisor(pol.PairOrLeader(owner.Model), false)
 		out = append(out, x)
 	}
@@ -219,7 +219,7 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		if owner == nil {
 			return append(out, d(ClassEscalate, "orphan", reason+"; no live thread owns it"))
 		}
-		text, err := wakeText("wake_"+rule, data)
+		text, err := wakeText("wake_"+rule, data, owner.Model)
 		if err != nil {
 			return append(out, d(ClassRecord, rule, "template failed: "+err.Error()))
 		}

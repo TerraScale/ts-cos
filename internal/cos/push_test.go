@@ -93,10 +93,11 @@ func TestPushSubscribeRoutes(t *testing.T) {
 	if got := post("application/json", good); got != http.StatusNoContent {
 		t.Fatalf("valid subscription: HTTP %d, want 204", got)
 	}
-	entry, err := p.kv.Get(ctx, pushSubKey(good.Endpoint))
-	if err != nil {
-		t.Fatal(err)
-	}
+	var entry jetstream.KeyValueEntry
+	chatTestWait(t, "stored subscription", func() bool {
+		entry, err = p.kv.Get(ctx, pushSubKey(good.Endpoint))
+		return err == nil
+	})
 	var stored pushSub
 	if err := json.Unmarshal(entry.Value(), &stored); err != nil || stored.User != "tester" {
 		t.Fatalf("stored subscription %+v, %v", stored, err)
@@ -188,9 +189,10 @@ func TestPushSendDelivery(t *testing.T) {
 	if got := receive(); got.Title != "COS" || got.Category != "chat" || got.Body != "hello" {
 		t.Fatalf("payload %+v", got)
 	}
-	if _, err := p.kv.Get(ctx, pushSubKey(gone.Endpoint)); err != jetstream.ErrKeyNotFound {
-		t.Fatalf("expired subscription still stored: %v", err)
-	}
+	chatTestWait(t, "expired subscription removed", func() bool {
+		_, err = p.kv.Get(ctx, pushSubKey(gone.Endpoint))
+		return err == jetstream.ErrKeyNotFound
+	})
 
 	if err := p.SetPref(ctx, "tester", "chat", false); err != nil {
 		t.Fatal(err)
@@ -209,13 +211,18 @@ func TestPushSendDelivery(t *testing.T) {
 	if err := p.Unsubscribe(ctx, "mallory", ok.Endpoint); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.kv.Get(ctx, pushSubKey(ok.Endpoint)); err != nil {
+	chatTestWait(t, "subscription stored before unsubscribe", func() bool {
+		_, err = p.kv.Get(ctx, pushSubKey(ok.Endpoint))
+		return err == nil
+	})
+	if err != nil {
 		t.Fatalf("another user removed the subscription: %v", err)
 	}
 	if err := p.Unsubscribe(ctx, "tester", ok.Endpoint); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.kv.Get(ctx, pushSubKey(ok.Endpoint)); err != jetstream.ErrKeyNotFound {
-		t.Fatalf("owner unsubscribe left the subscription: %v", err)
-	}
+	chatTestWait(t, "owner unsubscribe", func() bool {
+		_, err = p.kv.Get(ctx, pushSubKey(ok.Endpoint))
+		return err == jetstream.ErrKeyNotFound
+	})
 }

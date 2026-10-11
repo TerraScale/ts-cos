@@ -505,12 +505,19 @@ the replicated bucket `COS_AGENT`; the chat stays in `COS_CHAT`, never in T3.
 ```sh
 cos agent                        # thread, host, last restart reason
 cos agent restart 'new plan'     # fresh brief at the next wake
-cos agent wakes                  # last 20 wakes: reason, items, tokens, API-equivalent cost
+cos agent wakes                  # last 20 wakes: reason, items, tokens per wake
 cos context set focus '<text>'   # change focus: COS restarts with a fresh brief now
 ```
 
-Each COS wake records its tokens and API-equivalent cost (Opus 5.5 rates) once its
-run finishes; the subscription pays the real bill. `/settings` shows the same list.
+Each COS wake records its tokens per wake (input, cached, cache writes, output) once
+its run finishes. `/settings` shows the same list.
+
+**COS wakes.** The `immediate` kinds in `behavior/wake.json` (chat messages, Inbox
+answers) wake COS at once; each one is read from `COS_EVENTS` every 5 seconds and sent as
+one line. Worker questions and pending requests are urgent escalations: they wake COS 2
+minutes after they are published, so a problem fixed in that time is not reported. Everything else
+is batched into a digest every `digestSeconds`, and at most `maxWakesPerHour` digest wakes
+happen in an hour; urgent escalations ignore that limit.
 
 ## Autopilot: heartbeat and rules engine
 

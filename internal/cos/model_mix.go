@@ -226,6 +226,47 @@ func (p ModelPolicy) BriefLine(pair string) string {
 	return fmt.Sprintf("ADVISOR decides, WORKERS execute: you are the advisor on %s; your workers are %s via delegate_task target %s. Never run a worker model as a thread.", label, m.Worker.Model, target)
 }
 
+// effortOf is a pair's advisor effort, or "" when its advisor sets none.
+func effortOf(m ModelPair) string {
+	for _, o := range m.Advisor.Options {
+		if slices.Contains(effortOptions, o.ID) {
+			return o.Value
+		}
+	}
+	return ""
+}
+
+// targetJSON is the delegate_task target of a pair's worker, as JSON.
+func (p ModelPolicy) targetJSON(pair string) string {
+	target, _ := json.Marshal(p.WorkerTarget(pair))
+	return string(target)
+}
+
+// BriefSection is the Model policy part of every brief: the leader, each pair's route and models, and how a launch names its pair.
+func (p ModelPolicy) BriefSection() string {
+	var b strings.Builder
+	b.WriteString("## Model policy (behavior/models.json)\n\n")
+	b.WriteString("ADVISOR decides, WORKERS execute.\n\n")
+	leader := p.Pairs[p.Leader]
+	fmt.Fprintf(&b, "You are COS and run on the leader pair %s: advisor %s (%s), workers %s via delegate_task target %s.\n\n",
+		p.Leader, leader.Advisor.Model, effortOf(leader), leader.Worker.Model, p.targetJSON(p.Leader))
+	var routes []string
+	for _, k := range slices.Sorted(maps.Keys(p.Pairs)) {
+		pair := p.Pairs[k]
+		fmt.Fprintf(&b, "- %s: %s. Advisor %s (%s, %s for high stakes); workers %s via delegate_task target %s.\n",
+			k, p.Route[k], pair.Advisor.Model, effortOf(pair), pair.HighStakesEffort, pair.Worker.Model, p.targetJSON(k))
+		routes = append(routes, fmt.Sprintf("`\"pair\":\"%s\"`", k))
+	}
+	fmt.Fprintf(&b, "\nEvery launch and every `./cos self change` states its pair by the route: %s. Work that failed twice on sol goes to opus.\n", strings.Join(routes, " or "))
+	priority := "(none)"
+	if len(p.Priority) > 0 {
+		priority = strings.Join(p.Priority, ", ")
+	}
+	fmt.Fprintf(&b, "Priority (first = highest): %s.\n", priority)
+	b.WriteString("To change the pairs, routes, leader or priority, run `./cos models set '<json merge patch>'`, e.g. `{\"priority\":[\"TS-819\",\"TS-813\"]}`. It goes live through a self-change.\n")
+	return b.String()
+}
+
 // launchInput sets a launch's pair and brief: a launch that names a pair gets its advisor as the model,
 // and every launch's message says who advises and who works, unless it already does.
 func launchInput(pol ModelPolicy, input map[string]any) (map[string]any, error) {

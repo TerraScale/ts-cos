@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -346,5 +347,82 @@ func TestPublishUsageWritesDuplicateKeyOnce(t *testing.T) {
 	key := usageKey(first)
 	if kv.attempts[key] != 1 || !bytes.Equal(kv.stored[key], want) {
 		t.Fatalf("attempts = %d, stored = %s; want one write of the last row", kv.attempts[key], kv.stored[key])
+	}
+}
+
+// usageTestMsg is an assistant line for message id with one content block.
+func usageTestMsg(id string, input, output int64, content string) string {
+	return fmt.Sprintf(`{"type":"assistant","timestamp":"2026-10-10T10:00:00Z","sessionId":"s1","message":{"id":%q,"model":"claude-opus-5-5","content":[%s],"usage":{"input_tokens":%d,"output_tokens":%d,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}}}`, id, content, input, output)
+}
+
+// usageTestResult is a user line with one tool_result; content is raw JSON.
+func usageTestResult(id, content string) string {
+	return fmt.Sprintf(`{"type":"user","timestamp":"2026-10-10T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"content":%s}]}}`, id, content)
+}
+
+func usageTestBash(id, command string) string {
+	cmd, _ := json.Marshal(command)
+	return fmt.Sprintf(`{"type":"tool_use","id":%q,"name":"Bash","input":{"command":%s}}`, id, cmd)
+}
+
+const usageTestText = `{"type":"text","text":"ok"}`
+
+func TestUsageWasteCountsTheTurnThatReactsToRework(t *testing.T) {
+	gate := usageTestBash("t1", "bash .cos/gate.sh")
+	cases := []struct {
+		name  string
+		lines []string
+		want  map[string]int64
+	}{
+		{"gate failure", []string{
+			usageTestMsg("m1", 10, 5, gate),
+			usageTestResult("t1", `"LOCAL GATE FAIL: go test"`),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, map[string]int64{"gate": 37}},
+		{"gate failure in a text list", []string{
+			usageTestMsg("m1", 10, 5, gate),
+			usageTestResult("t1", `[{"type":"text","text":"NOT MERGED #12"}]`),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, map[string]int64{"gate": 37}},
+		{"successful gate", []string{
+			usageTestMsg("m1", 10, 5, gate),
+			usageTestResult("t1", `"#12 MERGED"`),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, nil},
+		{"git rebase", []string{
+			usageTestMsg("m1", 10, 5, usageTestBash("t1", "git rebase origin/main")),
+			usageTestResult("t1", `"Successfully rebased"`),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, map[string]int64{"rebase": 37}},
+		{"API retry", []string{
+			usageTestMsg("m1", 10, 5, usageTestText),
+			`{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-10-10T10:00:01Z","sessionId":"s1","message":{"id":"e1","model":"<synthetic>","content":[{"type":"text","text":"API Error"}],"usage":{"input_tokens":0,"output_tokens":0}}}`,
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, map[string]int64{"retry": 30}},
+		{"streamed reacting message", []string{
+			usageTestMsg("m1", 10, 5, gate),
+			usageTestResult("t1", `"LOCAL GATE FAIL"`),
+			usageTestMsg("m2", 30, 3, usageTestText),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, map[string]int64{"gate": 37}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "s.jsonl")
+			if err := os.WriteFile(path, []byte(strings.Join(c.lines, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := scanTranscript(path, usageWorkerProject, "delta", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || !maps.Equal(rows[0].Waste, c.want) {
+				t.Fatalf("waste = %+v; want %v", rows, c.want)
+			}
+			totals := SummarizeUsage(rows, Live{}, "kind")
+			if len(totals) != 1 || !maps.Equal(totals[0].Waste, c.want) {
+				t.Fatalf("total waste = %+v; want %v", totals, c.want)
+			}
+		})
 	}
 }

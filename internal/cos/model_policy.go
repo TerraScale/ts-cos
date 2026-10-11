@@ -4,49 +4,67 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Model policy (user 2026-10-11): every thread is an Opus 5.5 advisor and Haiku 5.5 workers do the
-// work as parallel delegate_task subagents. The leader's beat reads TS-826's usage and nudges the
-// threads that run too much themselves.
+// Model policy (user 2026-10-11): every thread is the advisor of a pair from behavior/models.json and its
+// workers do the work as parallel delegate_task subagents. The leader's beat reads TS-826's usage and
+// nudges the threads that run too much themselves.
 const (
-	shareFloor     = 50            // percent of output tokens on Haiku 5.5
+	shareFloor     = 50            // percent of output tokens on workers
 	shareGrace     = time.Hour     // a thread's first hour is never nudged
 	shareMinTokens = 20000         // too little output to judge
 	nudgeEvery     = 2 * time.Hour // at most one nudge of each kind per thread per window
 )
 
-// ShareData fills nudge_haiku_share: a thread's Haiku share and what its advisor ran itself.
+// adviseData names a thread's pair: its advisor model, its worker model and the worker's delegate_task target.
+type adviseData struct{ Advisor, Worker, Target string }
+
+// ShareData fills nudge_worker_share: a thread's worker share and what its advisor ran itself.
 type ShareData struct {
-	HaikuPct, Workers, Parallel         int
+	adviseData
+	WorkerPct, Workers, Parallel        int
 	WorkerOutput, AdvisorOutput         int64
 	Build, Git, Read, GitRead, Live, CI int
 }
 
-// WorkersData fills nudge_no_workers: a thread's advisor output with no Haiku 5.5 worker at all.
-type WorkersData struct{ AdvisorOutput int64 }
-
-func init() {
-	behaviorTemplates["advise_split"] = struct{}{}
-	behaviorTemplates["nudge_haiku_share"] = ShareData{HaikuPct: 20, WorkerOutput: 10000, AdvisorOutput: 40000, Workers: 3, Parallel: 2, Build: 5, Git: 2, Read: 30, GitRead: 4, Live: 1, CI: 2}
-	behaviorTemplates["nudge_no_workers"] = WorkersData{AdvisorOutput: 40000}
-	behaviorTemplates["nudge_haiku45"] = struct{}{}
+// WorkersData fills nudge_no_workers: a thread's advisor output with no worker at all.
+type WorkersData struct {
+	adviseData
+	AdvisorOutput int64
 }
 
-// threadSeen is what the policy needs beyond the totals: when a thread first ran, and whether it ran Haiku 4.5.
+// wrongWorkerData fills nudge_wrong_worker: a worker model that is not the worker of the thread's pair.
+type wrongWorkerData struct {
+	adviseData
+	Model string
+}
+
+func init() {
+	pair := adviseData{Advisor: "claude-opus-5-5", Worker: "claude-haiku-5-5", Target: `{"providerInstanceId":"claudeAgent","model":"claude-haiku-5-5"}`}
+	behaviorTemplates["nudge_worker_share"] = ShareData{adviseData: pair, WorkerPct: 20, WorkerOutput: 10000, AdvisorOutput: 40000, Workers: 3, Parallel: 2, Build: 5, Git: 2, Read: 30, GitRead: 4, Live: 1, CI: 2}
+	behaviorTemplates["nudge_no_workers"] = WorkersData{adviseData: pair, AdvisorOutput: 40000}
+	behaviorTemplates["nudge_wrong_worker"] = wrongWorkerData{adviseData: pair, Model: "claude-haiku-4-5"}
+}
+
+// threadSeen is what the policy needs beyond the totals: when a thread first ran, the advisor model it ran
+// as, and the worker models its subagents ran.
 type threadSeen struct {
 	First   time.Time
-	Haiku45 bool
+	Advisor string
+	Workers []string
 }
 
 func seenThreads(rows []UsageRow) map[string]threadSeen {
+	pol := CurrentBehavior().Models
 	out := map[string]threadSeen{}
 	for _, r := range rows {
 		k := usageGroupKey(r, "thread")
@@ -54,15 +72,42 @@ func seenThreads(rows []UsageRow) map[string]threadSeen {
 		if !ok || r.First.Before(s.First) {
 			s.First = r.First
 		}
-		s.Haiku45 = s.Haiku45 || strings.Contains(r.Model, "haiku-4-5")
+		switch {
+		case pol.WorkerOnlyModel(r.Model):
+			if !slices.Contains(s.Workers, r.Model) {
+				s.Workers = append(s.Workers, r.Model)
+			}
+		case s.Advisor == "":
+			s.Advisor = r.Model
+		}
 		out[k] = s
 	}
 	return out
 }
 
+// wrongWorker is a worker model a subagent of the thread ran that is not the worker of the thread's pair.
+func wrongWorker(pol ModelPolicy, s threadSeen) (string, bool) {
+	worker := pol.Pairs[pol.PairOrLeader(s.Advisor)].Worker.Model
+	for _, m := range s.Workers {
+		if normalizeModel(m) != normalizeModel(worker) {
+			return m, true
+		}
+	}
+	return "", false
+}
+
+// adviseFor names a thread's pair. A model no pair names gets the leader pair.
+func adviseFor(model string) adviseData {
+	pol := CurrentBehavior().Models
+	pair := pol.PairOrLeader(model)
+	target, _ := json.Marshal(pol.WorkerTarget(pair))
+	return adviseData{Advisor: pol.Pairs[pair].Advisor.Model, Worker: pol.Pairs[pair].Worker.Model, Target: string(target)}
+}
+
 // usagePolicy is pure: per-thread usage, when each thread first ran and the last nudge of each kind ("<kind>:<threadId>") decide the nudges.
-// A thread with no Haiku workers gets the no-workers nudge instead of the share nudge in the same beat.
+// A thread with no worker subagents gets the no-workers nudge instead of the share nudge in the same beat.
 func usagePolicy(totals []UsageTotal, seen map[string]threadSeen, now time.Time, last map[string]time.Time, paused map[string]bool) []Decision {
+	pol := CurrentBehavior().Models
 	var out []Decision
 	for _, u := range totals {
 		if u.Thread == "" || u.Host == "" || u.Subagent {
@@ -73,29 +118,31 @@ func usagePolicy(totals []UsageTotal, seen map[string]threadSeen, now time.Time,
 		}
 		s := seen[u.Key]
 		age := now.Sub(s.First)
-		if s.Haiku45 && now.Sub(last["haiku45:"+u.Thread]) >= nudgeEvery {
+		pair := adviseFor(s.Advisor)
+		if worker, ok := wrongWorker(pol, s); ok && now.Sub(last["wrong-worker:"+u.Thread]) >= nudgeEvery {
 			// no Sig on the escalate: the paired nudge's successful send records the window
+			reason := fmt.Sprintf("a subagent of this thread ran on %s, not its worker %s", worker, pair.Worker)
 			out = append(out,
-				Decision{Class: ClassEscalate, Rule: "subagent-haiku-4-5", Reason: "a subagent of this thread ran on claude-haiku-4-5", Host: u.Host, Thread: u.Thread},
-				nudge(u.Host, u.Thread, "haiku45", "nudge_haiku45", "a subagent ran on claude-haiku-4-5", struct{}{}))
+				Decision{Class: ClassEscalate, Rule: "subagent-wrong-worker", Reason: reason, Host: u.Host, Thread: u.Thread},
+				nudge(u.Host, u.Thread, s.Advisor, "wrong-worker", "nudge_wrong_worker", reason, wrongWorkerData{adviseData: pair, Model: worker}))
 		}
 		switch {
 		case u.Workers == 0 && u.AdvisorOutput >= shareMinTokens && age >= shareGrace && now.Sub(last["noworkers:"+u.Thread]) >= nudgeEvery:
-			reason := fmt.Sprintf("no Haiku 5.5 workers after the first hour, %d advisor output tokens", u.AdvisorOutput)
-			out = append(out, nudge(u.Host, u.Thread, "noworkers", "nudge_no_workers", reason, WorkersData{AdvisorOutput: u.AdvisorOutput}))
+			reason := fmt.Sprintf("no worker subagents after the first hour, %d advisor output tokens", u.AdvisorOutput)
+			out = append(out, nudge(u.Host, u.Thread, s.Advisor, "noworkers", "nudge_no_workers", reason, WorkersData{adviseData: pair, AdvisorOutput: u.AdvisorOutput}))
 		case u.HaikuShare < shareFloor && age >= shareGrace && u.Output >= shareMinTokens && now.Sub(last["share:"+u.Thread]) >= nudgeEvery:
-			share := ShareData{HaikuPct: u.HaikuShare, WorkerOutput: u.WorkerOutput, AdvisorOutput: u.AdvisorOutput, Workers: u.Workers, Parallel: u.Parallel,
+			share := ShareData{adviseData: pair, WorkerPct: u.HaikuShare, WorkerOutput: u.WorkerOutput, AdvisorOutput: u.AdvisorOutput, Workers: u.Workers, Parallel: u.Parallel,
 				Build: u.Tools["build"], Git: u.Tools["git"], Read: u.Tools["read"], GitRead: u.Tools["gitread"], Live: u.Tools["live"], CI: u.Tools["ci"]}
-			reason := fmt.Sprintf("Haiku share %d%% < %d%% after the first hour", u.HaikuShare, shareFloor)
-			out = append(out, nudge(u.Host, u.Thread, "share", "nudge_haiku_share", reason, share))
+			reason := fmt.Sprintf("worker share %d%% < %d%% after the first hour", u.HaikuShare, shareFloor)
+			out = append(out, nudge(u.Host, u.Thread, s.Advisor, "share", "nudge_worker_share", reason, share))
 		}
 	}
 	return out
 }
 
-// fleetModelPolicy is pure: a top-level thread on Haiku switches to Opus 5.5, and a Haiku subagent whose
-// parent is not on Opus escalates the parent as a Haiku worker without an advisor (once per window).
-// Forks are real threads and switch like top-level ones; only delegate_task subagents stay on Haiku.
+// fleetModelPolicy is pure: a top-level thread on a worker model switches to its pair's advisor, and a worker
+// whose parent is not an advisor escalates the parent (once per window).
+// Forks are real threads and switch like top-level ones; only delegate_task subagents run as workers.
 func fleetModelPolicy(live Live, now time.Time, last map[string]time.Time, paused map[string]bool) []Decision {
 	pol := CurrentBehavior().Models
 	var out []Decision
@@ -109,14 +156,14 @@ func fleetModelPolicy(live Live, now time.Time, last map[string]time.Time, pause
 				continue
 			}
 			if t.Lineage == nil || t.Lineage.Relation != "subagent" {
-				out = append(out, Decision{Class: ClassAct, Rule: "model-opus-thread", Reason: "threads run Opus 5.5; Haiku 5.5 only as delegate_task subagents",
+				out = append(out, Decision{Class: ClassAct, Rule: "model-opus-thread", Reason: "threads run their pair's advisor; workers only as delegate_task subagents",
 					Host: h.Host, Thread: t.ThreadID, Model: pol.Advisor(pol.PairOrLeader(t.Model), false)})
 				continue
 			}
 			parent, known := byID[t.Lineage.Parent]
 			if known && !pol.IsAdvisor(parent.Model) && !pausedThread(paused, parent) && now.Sub(last["noadvisor:"+parent.ThreadID]) >= nudgeEvery {
 				out = append(out, Decision{Class: ClassEscalate, Rule: "haiku-without-advisor", Sig: "noadvisor",
-					Reason: fmt.Sprintf("Haiku %s worker under a %s parent; every Haiku worker needs an Opus 5.5 advisor", t.Model, parent.Model),
+					Reason: fmt.Sprintf("worker %s under a %s parent; every worker needs its pair's advisor", t.Model, parent.Model),
 					Host:   h.Host, Thread: parent.ThreadID})
 			}
 		}
@@ -129,9 +176,9 @@ func pausedThread(paused map[string]bool, t FleetThread) bool {
 	return paused[strings.ToUpper(ticketPattern.FindString(t.Title+" "+t.Branch))]
 }
 
-// nudge wakes a thread with its rendered template; a template that will not render is recorded instead.
-func nudge(host, thread, kind, rule, reason string, data any) Decision {
-	text, err := wakeText(rule, data)
+// nudge wakes a thread with its rendered template, naming the thread's pair; a template that will not render is recorded instead.
+func nudge(host, thread, model, kind, rule, reason string, data any) Decision {
+	text, err := wakeText(rule, data, model)
 	if err != nil {
 		return Decision{Class: ClassRecord, Rule: rule, Reason: "template failed: " + err.Error(), Host: host, Thread: thread}
 	}
@@ -165,7 +212,7 @@ func nudgeTimes(ctx context.Context, kv jetstream.KeyValue, now time.Time, total
 		if u.Thread != "" {
 			read("share", u.Thread)
 			read("noworkers", u.Thread)
-			read("haiku45", u.Thread)
+			read("wrong-worker", u.Thread)
 		}
 	}
 	for _, h := range live.Fleet {

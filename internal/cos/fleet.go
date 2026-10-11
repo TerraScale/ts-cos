@@ -18,6 +18,7 @@ type FleetThread struct {
 	Status     string `json:"status"`
 	Model      string `json:"model"`
 	Branch     string `json:"branch"`
+	Updated    string `json:"updated,omitempty"`
 	NeedsInput bool   `json:"needsInput"`
 	Lineage    *struct {
 		Parent   string `json:"parent"`
@@ -67,7 +68,7 @@ func (c *T3) Shell(ctx context.Context) (HostFleet, error) {
 		if t.ArchivedAt != nil || t.DeletedAt != nil || t.SettledAt != nil {
 			continue
 		}
-		ft := FleetThread{ThreadID: t.ID, Project: projects[t.ProjectID], Title: t.Title, Status: t.Status, Model: t.ModelSelection.Model, Branch: t.Branch, NeedsInput: len(t.PendingRuntimeRequest) > 0 && string(t.PendingRuntimeRequest) != "null", LastError: t.LastError, PRs: []ThreadPR{}}
+		ft := FleetThread{ThreadID: t.ID, Project: projects[t.ProjectID], Title: t.Title, Status: t.Status, Model: t.ModelSelection.Model, Branch: t.Branch, Updated: t.UpdatedAt, NeedsInput: len(t.PendingRuntimeRequest) > 0 && string(t.PendingRuntimeRequest) != "null", LastError: t.LastError, PRs: []ThreadPR{}}
 		if t.Lineage.Parent != "" {
 			ft.Lineage = &struct {
 				Parent   string `json:"parent"`

@@ -836,21 +836,20 @@ func TestHaikuThreads(t *testing.T) {
 }
 
 func TestAdvisorProblems(t *testing.T) {
-	const good = `Opus 5.5 advises. Haiku runs as delegate_task {"providerInstanceId":"claudeAgent","model":"claude-haiku-5-5"}.`
-	const noAdvisor = "delegate_task to claude-haiku-5-5"
+	const good = `delegate_task {"providerInstanceId":"claudeAgent","model":"claude-haiku-5-5"}`
+	pol := CurrentBehavior().Models
 	tests := []struct {
 		name, text string
 		want       []string
 	}{
 		{"good", good, nil},
-		{"launch", good + ` {"instanceId":"claudeAgent","model":"claude-haiku-5-5"}`, []string{"brief.md: launches a Haiku thread"}},
-		{"prose", good + " Then use a Haiku 5.5 thread.", []string{"brief.md: tells agents to use a Haiku 5.5 thread"}},
-		{"empty", "", []string{"brief.md: no Opus 5.5 advisor", "brief.md: no claude-haiku-5-5 delegate", "brief.md: no delegate_task"}},
-		{"no advisor", noAdvisor, []string{"brief.md: no Opus 5.5 advisor"}},
+		{"launch", good + ` {"instanceId":"claudeAgent","model":"claude-haiku-5-5"}`, []string{"brief.md: launches a worker model as a thread"}},
+		{"prose", good + " Then use a claude-haiku-5-5 thread.", []string{"brief.md: tells agents to open a worker-model thread"}},
+		{"empty", "", []string{"brief.md: no delegate_task"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := advisorProblems("brief.md", tc.text)
+			got := advisorProblems("brief.md", tc.text, pol)
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("advisorProblems = %q, want %q", got, tc.want)
 			}
