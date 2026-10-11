@@ -459,6 +459,7 @@ func runNodes(ctx context.Context, cfg Config, bus *Bus) {
 		defer stop()
 		return EnsureNodeStreams(attempt, js)
 	})
+	go runRestarts(ctx, js, cfg.LocalHost)
 	c := &nodeCollector{cfg: cfg, build: NodeBuild{Revision: Version, Time: CurrentBuild(cfg).Built}}
 	minute, quarter := nodeBucket{width: time.Minute}, nodeBucket{width: 15 * time.Minute}
 	failing := map[string]bool{}

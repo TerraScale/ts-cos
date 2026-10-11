@@ -1,0 +1,34 @@
+package cos
+
+// nodeRestarts lists a node's service starts over the last seven days, each with its kind.
+templ nodeRestarts(c NodeCard) {
+	<section class="card" aria-labelledby="restarts-heading">
+		<header class="card-head"><h2 id="restarts-heading">Restarts (7 d)</h2></header>
+		if c.restartsErr {
+			<p class="muted">Restart history is unavailable.</p>
+		} else if len(c.Restarts) == 0 {
+			<p class="muted">No restarts in 7 days</p>
+		} else {
+			<div class="table-wrap">
+				<table class="table table-compact">
+					<thead>
+						<tr>
+							<th scope="col">Time</th>
+							<th scope="col">Kind</th>
+							<th scope="col">Detail</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range c.Restarts {
+							<tr>
+								<th scope="row">{ r.Time.UTC().Format("Jan 2 15:04") }</th>
+								<td><span class="stage" data-stage={ restartStage(r.Kind) }>{ r.Kind }</span></td>
+								<td>{ r.Detail }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</section>
+}

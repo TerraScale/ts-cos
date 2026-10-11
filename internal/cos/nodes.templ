@@ -61,7 +61,12 @@ templ nodeCard(c NodeCard) {
 			}
 		}
 		if s := c.summary(); s != "" {
-			<p class="muted">{ s }</p>
+			<p class="muted">
+				{ s }
+				if c.unexpectedRestarts() > 0 {
+					<span class="stage" data-stage="failed">{ integer(c.unexpectedRestarts()) } unexpected</span>
+				}
+			</p>
 		}
 	</section>
 }
