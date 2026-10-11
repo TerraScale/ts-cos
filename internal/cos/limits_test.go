@@ -186,10 +186,15 @@ func newLimitsRig(t *testing.T) *limitsRig {
 			return nil
 		},
 		file: func(_ context.Context, in InboxInput) error {
+			// Filed exactly as Inbox.Add would validate it, so a rejected source fails here.
+			if _, err := in.item(r.clock); err != nil {
+				return err
+			}
 			r.files = append(r.files, in)
 			return nil
 		},
-		now: func() time.Time { return r.clock },
+		now:     func() time.Time { return r.clock },
+		timeout: limitsTimeout,
 	}
 	return r
 }
@@ -316,5 +321,52 @@ func TestLimitsUnitStoreRoundTrip(t *testing.T) {
 	w.limitsJSON(rec, httptest.NewRequest(http.MethodGet, "/limits", nil))
 	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Body.String(), `"reachable":true`) {
 		t.Fatalf("GET /limits = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLimitsUnitWindowChangePublishes(t *testing.T) {
+	r := newLimitsRig(t)
+	ctx := context.Background()
+	r.p.poll(ctx)
+	// Utilization and reset moves alone are not a change; a status flip to rejected is, because it blocks sends.
+	r.body = []byte(strings.Replace(string(r.body), `"Anthropic-Ratelimit-Unified-5h-Status": "allowed"`, `"Anthropic-Ratelimit-Unified-5h-Status": "rejected"`, 1))
+	r.p.poll(ctx)
+	if len(r.events) != 2 {
+		t.Fatalf("window flip published %d events, want 2", len(r.events))
+	}
+	if !strings.Contains(string(r.events[1].Data), `"windows":[{"name":"5h","status":"rejected"}`) {
+		t.Fatalf("event data lacks the rejected window: %s", r.events[1].Data)
+	}
+}
+
+func TestLimitsUnitKeyReadIsBounded(t *testing.T) {
+	r := newLimitsRig(t)
+	r.p.timeout = 20 * time.Millisecond
+	r.p.key = func(ctx context.Context) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	r.p.poll(context.Background())
+	if len(r.states) != 1 || r.states[0].Reachable || r.states[0].Error != "CLIProxyAPI: management key unavailable" || r.p.failures != 1 {
+		t.Fatalf("stalled key read: states %+v, failures %d", r.states, r.p.failures)
+	}
+}
+
+func TestLimitsUnitModelOrderIgnored(t *testing.T) {
+	cooldown := func(model string) string {
+		return `{"scope":"model","reason":"quota","model_key":"` + model + `","remaining_seconds":600}`
+	}
+	states := func(order ...string) LimitsState {
+		raw := `{"provider":"claude","label":"m@example.com","status":"active","cooldowns":[` + strings.Join(order, ",") + `]}`
+		var f cliproxyAuthFile
+		if err := json.Unmarshal([]byte(raw), &f); err != nil {
+			t.Fatal(err)
+		}
+		return LimitsState{At: limitsNow, Reachable: true, Credentials: limitCredentials([]cliproxyAuthFile{f}, limitsNow)}
+	}
+	a := states(cooldown("claude-opus-5-5"), cooldown("claude-haiku-5-5"))
+	b := states(cooldown("claude-haiku-5-5"), cooldown("claude-opus-5-5"))
+	if limitsChanged(a, b) {
+		t.Fatal("the same cooldowns in another order counted as a change")
 	}
 }
