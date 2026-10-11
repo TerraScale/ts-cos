@@ -298,6 +298,7 @@ type selfDriver struct {
 	check   func(context.Context, selfCheck) ([]selfCheckResult, bool, error)
 	rollout func(context.Context, selfRecord) (done bool, failure string, err error)
 	e2e     func(ctx context.Context, skip string) (failures string)
+	asks    func(context.Context, selfRecord) (question string)
 	say     func(context.Context, string)
 	finish  func(context.Context, selfRecord)
 }
@@ -311,6 +312,7 @@ func newSelfDriver(cfg Config, bus *Bus, store selfStore) *selfDriver {
 	}
 	d.rollout = d.rolloutDone
 	d.e2e = d.runE2E
+	d.asks = d.workerQuestion
 	d.say = func(ctx context.Context, text string) { selfChatPost(ctx, bus, text) }
 	return d
 }
@@ -438,6 +440,11 @@ func (d *selfDriver) advance(ctx context.Context, r selfRecord, rolling string) 
 		return r.to(selfWorking, host), nil
 	case selfWorking:
 		p, err := d.f.selfFindPR(ctx, r.Branch)
+		if err == nil && p == nil {
+			if q := d.asks(ctx, r); q != "" {
+				return r.to(selfBlocked, "worker needs you: "+selfClip(q)), nil
+			}
+		}
 		if err != nil || p == nil {
 			return r, err
 		}
@@ -595,6 +602,18 @@ func (d *selfDriver) closeOut(ctx context.Context, r selfRecord) {
 			_ = d.store.save(ctx, orig, rev)
 		}
 	}
+}
+
+// workerQuestion returns the worker's last reply once it has stopped to ask the user (NEEDS-USER), so the change does not wait silently.
+func (d *selfDriver) workerQuestion(ctx context.Context, r selfRecord) string {
+	var t struct {
+		RunStatus string `json:"runStatus"`
+		LastReply string `json:"lastReply"`
+	}
+	if r.Thread == "" || d.bus.Call(ctx, r.Host, "thread", []string{r.Thread}, &t) != nil || t.RunStatus != "completed" || !strings.Contains(t.LastReply, "NEEDS-USER") {
+		return ""
+	}
+	return t.LastReply
 }
 
 func (d *selfDriver) brief(r selfRecord) string {

@@ -260,6 +260,7 @@ type selfTestRig struct {
 	// Full e2e suite: what it reports and which own check it skipped per run.
 	e2eFail string
 	e2eRuns []string
+	asks    string // the worker's open NEEDS-USER question
 }
 
 func newSelfTestRig(t *testing.T, ctx context.Context) *selfTestRig {
@@ -307,6 +308,7 @@ func newSelfTestRig(t *testing.T, ctx context.Context) *selfTestRig {
 		rig.e2eRuns = append(rig.e2eRuns, skip)
 		return rig.e2eFail
 	}
+	d.asks = func(context.Context, selfRecord) string { return rig.asks }
 	d.finish = func(ctx context.Context, r selfRecord) {
 		rig.closed = append(rig.closed, r.ID+":"+r.State)
 		if r.State == selfDone && r.Reverts != "" {
@@ -499,6 +501,29 @@ func TestSelfChangeMergedPRIsNotFailed(t *testing.T) {
 	}
 }
 
+func TestSelfChangeWorkerQuestionBlocks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rig := newSelfTestRig(t, ctx)
+	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.State, r.Ticket, r.Branch, r.Host, r.Thread = selfWorking, "TS-901", "cos/ts-901", "delta", "thread-1"
+	if err := rig.d.store.create(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	rig.d.step(ctx)
+	if got := rig.state(t, ctx, r.ID); got.State != selfWorking {
+		t.Fatalf("working worker without a PR should keep waiting: %+v", got)
+	}
+	rig.asks = "NEEDS-USER: CI needs a protected test edit"
+	rig.d.step(ctx)
+	if got := rig.state(t, ctx, r.ID); got.State != selfBlocked || !strings.Contains(got.Note, "protected test edit") {
+		t.Fatalf("worker question not surfaced: %+v", got)
+	}
+}
+
 func TestSelfChangeGuardsAndQueue(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -539,7 +564,8 @@ func TestSelfChangeGuardsAndQueue(t *testing.T) {
 	if got.State != selfBlocked || !strings.Contains(got.Note, "protected") || rig.fake.merged[7] {
 		t.Fatalf("protected change not blocked: %+v", got)
 	}
-	if !strings.HasPrefix(rig.said[len(rig.said)-1], "TS-901 · needs you: touches protected") {
+	// Separator-free: the progress template is a behavior file that self-changes may edit.
+	if last := rig.said[len(rig.said)-1]; !strings.HasPrefix(last, "TS-901") || !strings.Contains(last, "needs you: touches protected") {
 		t.Fatalf("chat said %q", rig.said[len(rig.said)-1])
 	}
 
