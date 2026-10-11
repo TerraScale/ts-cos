@@ -155,10 +155,6 @@ func e2eClip(s string, n int) string {
 	return s
 }
 
-func versionCommand(w io.Writer) error {
-	return output(w, map[string]any{"revision": strings.TrimSuffix(Version, "-dirty"), "modified": strings.HasSuffix(Version, "-dirty")})
-}
-
 func E2E(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	env := &E2EEnv{cfg: cfg, run: cfg.hostRun, main: func(ctx context.Context) (e2eMain, error) { return mainHead(ctx, cfg) }}
 	report := runE2E(ctx, env, e2eChecks(), args)

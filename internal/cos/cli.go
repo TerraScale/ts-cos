@@ -313,6 +313,10 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	hooks := NewHooks(bus)
 	go hooks.Start(ctx)
 	w.Hooks = hooks
+	probe := func(ctx context.Context) []string { return dashboardProbe(ctx, *port, auth) }
+	if err := bus.serveReleases(ctx, cfg, probe, cancel); err != nil {
+		return err
+	}
 	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s), NewRulesEngine(cfg, bus, s))
 	if err != nil {
 		return err
@@ -340,6 +344,8 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	}
 	go func() { defer close(chatDone); w.Chat.Run(ctx, bus) }()
 	defer func() { cancel(); <-pollDone; <-chatDone }()
+	go releasesOf(cfg).watchdog(ctx, CurrentBuild(cfg).Revision, trialTimeout,
+		func(ctx context.Context) []string { return bus.health(ctx, probe) }, cancel)
 	slog.Info("COS dashboard listening", "address", l.Addr().String())
 	err = serveDashboard(ctx, server, l, cancel)
 	if errors.Is(err, http.ErrServerClosed) {

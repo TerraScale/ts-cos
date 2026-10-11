@@ -2,11 +2,25 @@
 Description=TerraScale COS
 Wants=network-online.target
 After=network-online.target
+# Never stop restarting; ExecStopPost below decides which build starts.
+StartLimitIntervalSec=0
 
 [Service]
-ExecStart=%h/.local/bin/cos serve
+# READY=1 means started. A build on trial sends it only once healthy (cluster member,
+# JetStream in sync, dashboard and its SSE stream), so systemd stops one that is not healthy within 60 s.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=60
+# A trial build gets exactly one start: a trial left from the previous start (its
+# ExecStopPost was killed, or the host lost power) reverts first. Then a deploy's
+# trial.next becomes the trial for this start.
+ExecStartPre=/bin/sh -c 'cd %h/.local/share/cos && if [ -e trial ]; then ln -sfn "$$(readlink good)" current.tmp && mv -fT current.tmp current && mv -f trial reverted; fi; if [ -e trial.next ]; then mv -f trial.next trial; fi'
+ExecStart=%h/.local/share/cos/current/cos serve
+# Watchdog: any stop of an unconfirmed build (crash, start timeout, kill, rollback)
+# points current back at the last-known-good build. Only sh, so it never depends on the new binary.
+ExecStopPost=/bin/sh -c 'cd %h/.local/share/cos && if [ -e trial ]; then ln -sfn "$$(readlink good)" current.tmp && mv -fT current.tmp current && mv -f trial reverted; fi'
 Restart=always
-RestartSec=5
+RestartSec=2
 
 [Install]
 WantedBy=default.target

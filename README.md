@@ -20,11 +20,12 @@ Every COS host (delta, beta, mariogk-dev) runs the same user service with no
 configuration file:
 
 ```sh
-deploy/install.sh   # builds this checkout into ~/.local/bin/cos and (re)starts cos.service
+deploy/install.sh   # bootstraps this clean checkout as the last-known-good build and (re)starts cos.service
 ```
 
 `deploy/cos.service` runs `cos serve` (dashboard on `0.0.0.0:8790`), restarts on
 any exit and starts at boot (user lingering is on for mariogk on all hosts).
+`install.sh` is only for bootstrapping a host; rollouts replace builds afterwards.
 
 On start a node:
 
@@ -102,6 +103,33 @@ Forgejo and Ku POST to `https://cos.terrascale.tech/hooks/forgejo` and
   requests per minute from one address on one node: `429`.
 
 Every other HTTP route, including `/status` and `/events`, requires a session.
+
+### Builds and the watchdog (TS-818)
+
+Each host keeps its builds in `~/.local/share/cos/builds/<revision>/cos` (the
+newest three plus whatever is in use). `current` is the build systemd starts,
+`good` the last-known-good one, and `~/.local/bin/cos` points at `current`.
+`cos version` (and `cos.<host>.release.version` over NATS) reports the revision,
+commit and build time, the last-known-good revision and whether the running
+build is still on trial.
+
+A rollout installs a build on one host at a time through
+`cos.<host>.release.install`: the host fetches it from the replicated `cos_builds`
+object store (digest checked), runs `cos version` on it, points `current` at it,
+writes `trial.next` and restarts. `cos.service` turns `trial.next` into `trial`
+for that start. The unit is `Type=notify` with a 60-second start timeout: a
+build on trial sends `READY=1` only once it is a NATS cluster member, JetStream
+is in sync, `/login` answers 200 and, signed in with a short-lived `cos-probe`
+session over loopback, its dashboard renders and its SSE stream opens. Any stop
+while `trial` exists (crash, no `READY` within 60 seconds, kill, rollback) makes
+`ExecStopPost`, which is plain `sh`, point `current` back at `good` before
+systemd restarts it. A trial build gets exactly one start: if `ExecStopPost`
+never ran (the whole unit was SIGKILLed, the host lost power), `ExecStartPre`
+reverts before starting. The watchdog
+therefore needs neither the new binary nor the cluster. The rollout confirms a
+healthy build with `release.commit` (it becomes `good`); an unconfirmed build
+stops itself after 10 minutes, which reverts it. `release.restore` puts a host
+back on a given build.
 
 The CLI connects to **its local** NATS node. Calls to `cos.<host>.<command>` route
 through that cluster; remote T3 HTTP connections and SSH tunnels are not used.
