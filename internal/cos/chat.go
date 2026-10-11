@@ -3,6 +3,8 @@ package cos
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +33,7 @@ const (
 	chatMainTab     = "cos"
 	chatMaxTabs     = 12
 	chatTabPrefix   = "tab."
+	chatTagPrefix   = "tag."
 	chatTabNameMax  = 40
 	chatTabFocusMax = 2000
 )
@@ -60,6 +63,15 @@ type ChatTab struct {
 	Created time.Time `json:"created"`
 	Closed  bool      `json:"closed,omitempty"`
 	rev     uint64
+}
+
+// ChatTag marks a thread as belonging to a chat tab; COS is true for the tab's own COS thread.
+type ChatTag struct {
+	ThreadID string    `json:"threadId"`
+	Host     string    `json:"host"`
+	Tab      string    `json:"tab"`
+	COS      bool      `json:"cos,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // ChatAsk is a pending T3 question from the COS thread; any node can answer it over NATS.
@@ -125,8 +137,10 @@ type Chat struct {
 	mu      sync.Mutex
 	entries map[string]ChatEntry
 	tabs    map[string]ChatTab
-	ready   bool
-	subs    map[*chatSub]struct{}
+	// tags maps each tag's KV key to the tag.
+	tags  map[string]ChatTag
+	ready bool
+	subs  map[*chatSub]struct{}
 	// recheck is how often follow verifies the bucket's identity; tests shorten it.
 	recheck time.Duration
 }
@@ -138,7 +152,7 @@ type chatSub struct {
 }
 
 func NewChat() *Chat {
-	return &Chat{entries: map[string]ChatEntry{}, tabs: map[string]ChatTab{}, subs: map[*chatSub]struct{}{}, recheck: 5 * time.Second}
+	return &Chat{entries: map[string]ChatEntry{}, tabs: map[string]ChatTab{}, tags: map[string]ChatTag{}, subs: map[*chatSub]struct{}{}, recheck: 5 * time.Second}
 }
 
 // Run creates the chat and context buckets (retrying until JetStream has quorum) and follows every change until ctx ends.
@@ -174,6 +188,7 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 				c.kv, c.savings, c.ready = nil, nil, false
 				clear(c.entries)
 				clear(c.tabs)
+				clear(c.tags)
 				c.notify("")
 				c.mu.Unlock()
 				err = errors.New("chat watcher stopped")
@@ -257,6 +272,17 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 		}
 		t.ID, t.rev = id, u.Revision()
 		c.tabs[id] = t
+	case strings.HasPrefix(u.Key(), chatTagPrefix):
+		if u.Operation() != jetstream.KeyValuePut {
+			delete(c.tags, u.Key())
+			break
+		}
+		var t ChatTag
+		if err := json.Unmarshal(u.Value(), &t); err != nil {
+			slog.Error("invalid chat tag", "key", u.Key())
+			return
+		}
+		c.tags[u.Key()] = t
 	case u.Operation() != jetstream.KeyValuePut:
 		delete(c.entries, u.Key())
 	default:
@@ -327,6 +353,20 @@ func (c *Chat) Entries(tab string) []ChatEntry {
 	if len(out) > chatShown {
 		out = out[len(out)-chatShown:]
 	}
+	return out
+}
+
+// Tags returns the thread tags of tab, sorted by thread ID.
+func (c *Chat) Tags(tab string) []ChatTag {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := []ChatTag{}
+	for _, t := range c.tags {
+		if t.Tab == tab {
+			out = append(out, t)
+		}
+	}
+	slices.SortFunc(out, func(a, b ChatTag) int { return strings.Compare(a.ThreadID, b.ThreadID) })
 	return out
 }
 
@@ -416,25 +456,30 @@ func (c *Chat) UpdateTab(ctx context.Context, t ChatTab) error {
 	return nil
 }
 
-// DeleteTab removes the tab's cached entries, then its key.
+// DeleteTab removes the tab's cached entries and thread tags, then its key.
 func (c *Chat) DeleteTab(ctx context.Context, id string) error {
 	if id == "" || id == chatMainTab {
 		return fmt.Errorf("tab %q cannot be deleted", id)
 	}
 	c.mu.Lock()
 	kv := c.kv
-	ids := []string{}
+	keys := []string{}
 	for _, e := range c.entries {
 		if e.Tab == id {
-			ids = append(ids, e.ID)
+			keys = append(keys, e.ID)
+		}
+	}
+	for key, t := range c.tags {
+		if t.Tab == id {
+			keys = append(keys, key)
 		}
 	}
 	c.mu.Unlock()
 	if kv == nil {
 		return errors.New("chat store is starting; try again in a few seconds")
 	}
-	for _, e := range ids {
-		if err := kv.Delete(ctx, e); err != nil {
+	for _, key := range keys {
+		if err := kv.Delete(ctx, key); err != nil {
 			return err
 		}
 	}
@@ -515,6 +560,44 @@ func PutChat(ctx context.Context, b *Bus, e ChatEntry) (ChatEntry, error) {
 		return e, err
 	}
 	return putChatEntry(ctx, kv, e)
+}
+
+// PutTag records that a thread belongs to a chat tab; every node's watcher picks it up.
+func (c *Chat) PutTag(ctx context.Context, t ChatTag) error {
+	c.mu.Lock()
+	kv := c.kv
+	c.mu.Unlock()
+	if kv == nil {
+		return errors.New("chat store is starting; try again in a few seconds")
+	}
+	return putTag(ctx, kv, t)
+}
+
+// TagThread tags a thread from any component (e.g. the CLI's launch) without the dashboard's Chat.
+func TagThread(ctx context.Context, b *Bus, t ChatTag) error {
+	kv, err := openKV(ctx, b, chatBucket)
+	if err != nil {
+		return err
+	}
+	return putTag(ctx, kv, t)
+}
+
+func putTag(ctx context.Context, kv jetstream.KeyValue, t ChatTag) error {
+	if t.ThreadID == "" {
+		return errors.New("tag needs a thread ID")
+	}
+	data, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	_, err = kv.Put(ctx, tagKey(t.ThreadID), data)
+	return err
+}
+
+// tagKey hashes the thread ID: thread IDs contain characters KV keys do not allow.
+func tagKey(threadID string) string {
+	sum := sha256.Sum256([]byte(threadID))
+	return chatTagPrefix + hex.EncodeToString(sum[:])[:16]
 }
 
 var errBusUnavailable = errors.New("COS bus unavailable")

@@ -1,7 +1,7 @@
 package cos
 
 // The chat page is the chat with the Inbox column beside it; the top bar's Inbox toggle shows it on phones.
-templ chatPage(h chatHeader, v Dashboard, tabs []ChatTab, tab ChatTab, entries []ChatEntry, notice string) {
+templ chatPage(h chatHeader, v Dashboard, tabs []ChatTab, tab ChatTab, entries []ChatEntry, threads []panelThread, notice string) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("COS · TerraScale")
@@ -9,8 +9,10 @@ templ chatPage(h chatHeader, v Dashboard, tabs []ChatTab, tab ChatTab, entries [
 			@releaseWatch()
 			@chatHead(h, "chat")
 			<div class="cos-chat-body">
+				@threadPanel(threads)
 				<main id="main" class="cos-chat-main">
 					@chatTabs(tabs, tab)
+					@threadToggle()
 					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)
 					</div>

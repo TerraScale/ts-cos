@@ -1,0 +1,46 @@
+package cos
+
+// threadPanel lists the live threads of the chat tab on screen, on the left; the Threads toggle in the chat pane opens it.
+templ threadPanel(threads []panelThread) {
+	<aside id="thread-panel" class="cos-thread-panel" aria-label="Threads" data-attr:data-open="$threads">
+		<header>
+			<h2>Threads <span class="ts-meta">{ integer(len(threads)) }</span></h2>
+			<button type="button" class="ts-icon-btn" aria-label="Close threads" data-on:click="$threads=false">×</button>
+		</header>
+		<nav class="cos-thread-list">
+			for _, t := range threads {
+				<div class="cos-thread-item">
+					<span>{ t.Title }</span>
+					<span class="ts-meta">{ t.Host } · { t.Model } · { t.Status }
+						if t.NeedsInput {
+							· needs input
+						}
+						· { t.ago() }
+					</span>
+					if t.PR != nil {
+						<div class="ts-meta">
+							<a href={ t.PR.URL }>{ t.PR.label() }</a>
+							if t.PR.CI != "" {
+								· CI { t.PR.CI }
+								if t.PR.Mergeable {
+									· mergeable
+								} else {
+									· not mergeable
+								}
+							}
+						</div>
+					}
+					<div class="ts-row cos-thread-actions"></div>
+				</div>
+			}
+		</nav>
+		if len(threads) == 0 {
+			<p class="ts-meta">No threads yet. Threads this tab's COS launches show up here.</p>
+		}
+	</aside>
+}
+
+// threadToggle opens and closes the Threads panel; the signal lives here because this element is never patched.
+templ threadToggle() {
+	<button type="button" class="ts-btn ts-btn-ghost cos-thread-panel-toggle" data-signals="{threads:false}" data-on:click="$threads=!$threads">Threads</button>
+}

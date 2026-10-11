@@ -431,13 +431,21 @@ func TestAgent(t *testing.T) {
 			t.Fatal("cos wrapper mode", info.Mode())
 		}
 		wrapper, _ := os.ReadFile(filepath.Join(root, "cos"))
-		if !strings.Contains(string(wrapper), "exec '/bin/cos'") {
+		if !strings.Contains(string(wrapper), "exec '/bin/cos'") || !strings.Contains(string(wrapper), "COS_TAB='cos'") {
 			t.Fatal(string(wrapper))
 		}
 		st := e.state()
 		if st.ThreadID != "thread-1" || st.Host != "delta" || st.Delivered != id || st.Reason != "first start" {
 			t.Fatalf("state = %+v", st)
 		}
+		chatTestWait(t, "COS thread tag", func() bool {
+			for _, tag := range e.chat.Tags(chatMainTab) {
+				if tag.ThreadID == "thread-1" && tag.Host == "delta" && tag.COS {
+					return true
+				}
+			}
+			return false
+		})
 		chatTestWait(t, "fresh thread notice", func() bool {
 			for _, entry := range e.chat.Entries(chatMainTab) {
 				if entry.Role == "system" && strings.Contains(entry.Text, "fresh thread") {

@@ -25,6 +25,20 @@
 @media (min-width: 80rem) {
   .cos-chat-body { grid-template-columns: minmax(0, 1fr) 26rem; }
 }
+/* Threads panel floats over the chat's left edge, out of the grid, so the Inbox column stays on the right */
+.cos-chat-body { position: relative; }
+.cos-thread-panel { display: none; }
+.cos-thread-panel[data-open]:not([data-open="false"]) {
+  display: block;
+  position: absolute; inset-block: 0; inset-inline-start: 0;
+  z-index: var(--ts-z-overlay);
+  width: min(22rem, 100%);
+  overflow-y: auto;
+  padding: var(--ts-s4);
+  background: var(--ts-surface);
+  border-inline-end: 1px solid var(--ts-line);
+  box-shadow: var(--ts-shadow-overlay);
+}
 /* Phones and narrow windows: the top bar's Inbox toggle swaps the chat for the Inbox */
 @media (max-width: 59.99rem) {
   .cos-chat[data-tab=inbox] .cos-chat-main { display: none; }
