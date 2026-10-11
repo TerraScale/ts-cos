@@ -1,0 +1,101 @@
+package ui
+
+import (
+	"strings"
+
+	"git.terrascale.tech/TerraScale/ts-cos/internal/ui/icons"
+)
+
+// FieldProps labels one form control; children are the control itself. Error
+// is the message from a failed submission; the control spreads ControlAttrs so
+// assistive technology announces the hint and error with it.
+type FieldProps struct {
+	ID    string
+	Label string
+	Hint  string
+	Error string
+}
+
+// ControlAttrs describes the control by the field's hint and error. A field
+// with an error marks its control invalid and autofocuses it; the browser
+// focuses the first such control on the page.
+func (p FieldProps) ControlAttrs() templ.Attributes {
+	attrs := templ.Attributes{}
+	var describedBy []string
+	if p.Hint != "" {
+		describedBy = append(describedBy, p.ID+"-hint")
+	}
+	if p.Error != "" {
+		describedBy = append(describedBy, p.ID+"-error")
+		attrs["aria-invalid"] = "true"
+		attrs["autofocus"] = true
+	}
+	if len(describedBy) > 0 {
+		attrs["aria-describedby"] = strings.Join(describedBy, " ")
+	}
+	return attrs
+}
+
+templ Field(p FieldProps) {
+	<div class="ts-field">
+		<label class="ts-label" for={ p.ID }>{ p.Label }</label>
+		{ children... }
+		if p.Hint != "" {
+			<p class="ts-hint" id={ p.ID + "-hint" }>{ p.Hint }</p>
+		}
+		if p.Error != "" {
+			<p class="ts-field-error" id={ p.ID + "-error" }>{ p.Error }</p>
+		}
+	</div>
+}
+
+// PasswordProps configures a password control. Name defaults to ID; Attrs
+// are added to the input, such as a field's ControlAttrs.
+type PasswordProps struct {
+	ID           string
+	Name         string
+	Autocomplete string
+	Placeholder  string
+	MinLength    int
+	Attrs        templ.Attributes
+}
+
+// PasswordInput is a required password field whose reveal toggle appears once
+// the field has a value. Datastar keeps the state in local (_-prefixed)
+// signals, so nothing is sent to the server.
+templ PasswordInput(p PasswordProps) {
+	<div class="ts-input-group" data-signals={ passwordSignals(p.ID) }>
+		<input
+			class="ts-input"
+			type="password"
+			id={ p.ID }
+			name={ displayName(p.Name, p.ID) }
+			autocomplete={ p.Autocomplete }
+			if p.Placeholder != "" {
+				placeholder={ p.Placeholder }
+			}
+			if p.MinLength > 0 {
+				minlength={ p.MinLength }
+			}
+			required
+			{ p.Attrs... }
+			data-attr:type={ "$" + passwordSignal(p.ID, "reveal") + " ? 'text' : 'password'" }
+			data-on:input={ "$" + passwordSignal(p.ID, "filled") + " = el.value !== ''; $" + passwordSignal(p.ID, "filled") + " || ($" + passwordSignal(p.ID, "reveal") + " = false)" }
+		/>
+		<button
+			class="ts-input-adornment"
+			type="button"
+			data-password-toggle
+			aria-controls={ p.ID }
+			aria-pressed="false"
+			aria-label="Show password"
+			hidden
+			data-attr:hidden={ "!$" + passwordSignal(p.ID, "filled") }
+			data-attr:aria-pressed={ "String($" + passwordSignal(p.ID, "reveal") + ")" }
+			data-attr:aria-label={ "$" + passwordSignal(p.ID, "reveal") + " ? 'Hide password' : 'Show password'" }
+			data-on:click={ "$" + passwordSignal(p.ID, "reveal") + " = !$" + passwordSignal(p.ID, "reveal") }
+		>
+			@icons.Eye(18)
+		</button>
+	</div>
+}
