@@ -54,3 +54,28 @@ templ passwordPage(notice string) {
 		<p class="auth-foot"><a href="/">Back to the dashboard</a></p>
 	}
 }
+
+// invitePage sets the password of an invited account; the link's token is the form's action.
+templ invitePage(token, notice string) {
+	@authLayout("Set your password", notice) {
+		<form method="post" action={ templ.SafeURL("/invite/" + token) } class="stack">
+			<label class="field">
+				<span class="field-label">New password</span>
+				<input type="password" name="new" autocomplete="new-password" minlength="12" maxlength="72" required autofocus/>
+				<span class="field-hint">12 to 72 characters.</span>
+			</label>
+			<label class="field">
+				<span class="field-label">Repeat new password</span>
+				<input type="password" name="confirm" autocomplete="new-password" minlength="12" maxlength="72" required/>
+			</label>
+			<button type="submit" class="btn-primary btn-block">Set password and sign in</button>
+		</form>
+	}
+}
+
+// inviteUnavailablePage is the page for a link that cannot be used, with the reason in notice.
+templ inviteUnavailablePage(notice string) {
+	@authLayout("Invite unavailable", notice) {
+		<p class="auth-foot"><a href="/login">Sign in</a></p>
+	}
+}

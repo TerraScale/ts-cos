@@ -70,6 +70,7 @@ func (w *Web) routes() *http.ServeMux {
 	w.pushRoutes(mux)
 	w.nodesRoutes(mux)
 	w.nodeDetailRoutes(mux)
+	adminRoutes(mux, adminPages{auth: w.auth, threads: w.Bus})
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := View(r.Context(), w.Store)
 		if err != nil {

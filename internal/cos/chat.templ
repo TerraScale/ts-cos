@@ -179,6 +179,9 @@ templ settingsPage(a AutopilotState, b budgetPanelData, push PushState, wakes []
 					<a class="navlink" href="/">Chat</a>
 					<a class="navlink" href="/nodes">Nodes</a>
 					<a class="navlink" href="/settings" aria-current="page">Settings</a>
+					if isAdmin(ctx) {
+						<a class="navlink" href="/admin">Admin</a>
+					}
 				</nav>
 			</header>
 			<main class="page page-narrow">
@@ -247,6 +250,9 @@ templ chatHead(h chatHeader) {
 			<a class="navlink" href="/nodes">Nodes</a>
 			<a class="navlink hide-sm" href="/tokens">Tokens</a>
 			<a class="navlink" href="/settings">Settings</a>
+			if isAdmin(ctx) {
+				<a class="navlink" href="/admin">Admin</a>
+			}
 		</nav>
 	</header>
 }

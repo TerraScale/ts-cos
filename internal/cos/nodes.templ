@@ -25,6 +25,9 @@ templ nodesTopbar() {
 			<a class="navlink" href="/inbox">Inbox</a>
 			<a class="navlink" href="/nodes" aria-current="page">Nodes</a>
 			<a class="navlink" href="/settings">Settings</a>
+			if isAdmin(ctx) {
+				<a class="navlink" href="/admin">Admin</a>
+			}
 		</nav>
 	</header>
 }
