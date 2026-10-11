@@ -380,3 +380,117 @@ func TestRenderMarkdownLinkSchemes(t *testing.T) {
 		})
 	}
 }
+
+func TestChatAnswerPartial(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	nodes, _ := chatTestCluster(t, ctx)
+	chat := NewChat()
+	go chat.Run(ctx, nodes[0])
+	for _, n := range nodes[1:] {
+		go NewChat().Run(ctx, n)
+	}
+	chatTestWait(t, "chat ready", chat.Ready)
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	web := NewWeb(store, nil)
+	web.Chat = chat
+	questions := []ChatQuestion{
+		{ID: "pick", Header: "Deploy", Text: "Which window?", Options: []string{"Now", "Tonight"}},
+		{ID: "scope", Header: "Scope", Text: "How much?", Options: []string{"Small", "Large"}},
+	}
+	put := func(ask ChatAsk) string {
+		t.Helper()
+		e, err := chat.Put(ctx, ChatEntry{Role: "cos", Ask: &ask})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chatTestWait(t, "ask entry", func() bool { _, ok := chat.Entry(e.ID); return ok })
+		return e.ID
+	}
+	post := func(query string, datastar bool) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/chat/answer?"+query, nil)
+		req.RemoteAddr = "127.0.0.1:4000"
+		if datastar {
+			req.Header.Set("Datastar-Request", "true")
+		}
+		rec := httptest.NewRecorder()
+		web.routes().ServeHTTP(rec, req)
+		return rec
+	}
+	id := put(ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q1", Questions: questions})
+
+	t.Run("first answer is kept and the ask stays open", func(t *testing.T) {
+		if rec := post("e="+id+"&q=pick&o=1", true); rec.Code != http.StatusNoContent {
+			t.Fatal(rec.Code, rec.Body.String())
+		}
+		chatTestWait(t, "partial answer", func() bool {
+			e, ok := chat.Entry(id)
+			return ok && e.Ask.Answers["pick"] == "Tonight" && !e.Ask.Done
+		})
+	})
+
+	t.Run("missing Datastar header is forbidden", func(t *testing.T) {
+		if rec := post("e="+id+"&q=scope&o=0", false); rec.Code != http.StatusForbidden {
+			t.Fatal(rec.Code)
+		}
+		e, _ := chat.Entry(id)
+		if _, ok := e.Ask.Answers["scope"]; ok {
+			t.Fatal("rejected request stored an answer")
+		}
+	})
+
+	t.Run("unknown option or question is a bad request", func(t *testing.T) {
+		if rec := post("e="+id+"&q=scope&o=5", true); rec.Code != http.StatusBadRequest {
+			t.Fatal("unknown option:", rec.Code)
+		}
+		if rec := post("e="+id+"&q=nope&o=0", true); rec.Code != http.StatusBadRequest {
+			t.Fatal("unknown question:", rec.Code)
+		}
+	})
+
+	t.Run("answered ask is a conflict", func(t *testing.T) {
+		done := put(ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q2", Questions: questions, Done: true})
+		if rec := post("e="+done+"&q=pick&o=0", true); rec.Code != http.StatusConflict {
+			t.Fatal(rec.Code)
+		}
+	})
+
+	t.Run("answers to one ask go through back to back", func(t *testing.T) {
+		three := append(slices.Clone(questions), ChatQuestion{ID: "when", Header: "When", Text: "Which day?", Options: []string{"Mon", "Tue"}})
+		multi := put(ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q3", Questions: three})
+		for _, q := range []string{"pick", "scope"} {
+			if rec := post("e="+multi+"&q="+q+"&o=0", true); rec.Code != http.StatusNoContent {
+				t.Fatal(q, rec.Code, rec.Body.String())
+			}
+		}
+		if rec := post("e="+multi+"&q=pick&o=1", true); rec.Code != http.StatusConflict {
+			t.Fatal("re-answer", rec.Code, rec.Body.String())
+		}
+		e, _ := chat.Entry(multi)
+		if len(e.Ask.Answers) != 2 || e.Ask.Done {
+			t.Fatalf("ask = %+v", e.Ask)
+		}
+	})
+
+	t.Run("last answer needs the COS bus", func(t *testing.T) {
+		seen, _ := chat.Entry(id)
+		bare := NewChat()
+		bare.kv = chat.kv
+		bare.entries[id] = seen
+		web.Chat = bare
+		defer func() { web.Chat = chat }()
+		if rec := post("e="+id+"&q=scope&o=0", true); rec.Code != http.StatusServiceUnavailable {
+			t.Fatal(rec.Code)
+		}
+		// The answer was fenced in, then rolled back because T3 was never reached.
+		e, _ := bare.Entry(id)
+		if e.Ask.Done || len(e.Ask.Answers) != 1 {
+			t.Fatalf("ask = %+v", e.Ask)
+		}
+	})
+}

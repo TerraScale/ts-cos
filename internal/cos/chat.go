@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -36,6 +37,24 @@ type ChatEntry struct {
 	Text      string    `json:"text"`
 	Tools     []string  `json:"tools,omitempty"`
 	Streaming bool      `json:"streaming,omitempty"`
+	Ask       *ChatAsk  `json:"ask,omitempty"`
+	rev       uint64
+}
+
+// ChatAsk is a pending T3 question from the COS thread; any node can answer it over NATS.
+type ChatAsk struct {
+	Host      string            `json:"host"`
+	ThreadID  string            `json:"threadId"`
+	RequestID string            `json:"requestId"`
+	Questions []ChatQuestion    `json:"questions"`
+	Answers   map[string]string `json:"answers"`
+	Done      bool              `json:"done,omitempty"`
+}
+type ChatQuestion struct {
+	ID      string   `json:"id"`
+	Header  string   `json:"header"`
+	Text    string   `json:"text"`
+	Options []string `json:"options"`
 }
 
 // chatID sorts by creation time; KV keys allow only [-/_=.a-zA-Z0-9].
@@ -81,6 +100,7 @@ type Chat struct {
 	kv jetstream.KeyValue
 	// savings is the savings ledger bucket, read by the Tokens page.
 	savings jetstream.KeyValue
+	bus     *Bus
 	mu      sync.Mutex
 	entries map[string]ChatEntry
 	ready   bool
@@ -101,6 +121,9 @@ func NewChat() *Chat {
 
 // Run creates the chat and context buckets (retrying until JetStream has quorum) and follows every change until ctx ends.
 func (c *Chat) Run(ctx context.Context, b *Bus) {
+	c.mu.Lock()
+	c.bus = b
+	c.mu.Unlock()
 	for {
 		_, err := openKV(ctx, b, contextBucket)
 		if err == nil {
@@ -205,7 +228,7 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 			slog.Error("invalid chat entry", "key", u.Key())
 			return
 		}
-		e.ID = u.Key()
+		e.ID, e.rev = u.Key(), u.Revision()
 		c.entries[e.ID] = e
 	}
 	if c.ready {
@@ -269,7 +292,22 @@ func (c *Chat) Entry(id string) (ChatEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[id]
-	return e, ok
+	return copyEntry(e), ok
+}
+
+// copyEntry clones what callers edit, so they never mutate the shared cache.
+func copyEntry(e ChatEntry) ChatEntry {
+	if e.Ask == nil {
+		return e
+	}
+	ask := *e.Ask
+	ask.Answers = maps.Clone(ask.Answers)
+	ask.Questions = slices.Clone(ask.Questions)
+	for i := range ask.Questions {
+		ask.Questions[i].Options = slices.Clone(ask.Questions[i].Options)
+	}
+	e.Ask = &ask
+	return e
 }
 
 func (c *Chat) Ready() bool {
@@ -313,6 +351,43 @@ func PutChat(ctx context.Context, b *Bus, e ChatEntry) (ChatEntry, error) {
 		return e, err
 	}
 	return putChatEntry(ctx, kv, e)
+}
+
+var errBusUnavailable = errors.New("COS bus unavailable")
+
+// Respond answers a pending T3 question on the host that owns the COS thread, over NATS.
+func (c *Chat) Respond(ctx context.Context, host, thread, request, answers string) error {
+	c.mu.Lock()
+	b := c.bus
+	c.mu.Unlock()
+	if b == nil {
+		return errBusUnavailable
+	}
+	return b.Call(ctx, host, "respond", []string{thread, request, answers}, nil)
+}
+
+// Replace writes e only if nobody changed it since it was read, so concurrent answers are not lost.
+func (c *Chat) Replace(ctx context.Context, e ChatEntry) error {
+	c.mu.Lock()
+	kv := c.kv
+	c.mu.Unlock()
+	if kv == nil {
+		return errors.New("chat store is starting; try again in a few seconds")
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	rev, err := kv.Update(ctx, e.ID, data, e.rev)
+	if err != nil {
+		return err
+	}
+	// Cache the write now, so an answer to the next question does not fence on a stale revision.
+	c.mu.Lock()
+	e.rev = rev
+	c.entries[e.ID] = copyEntry(e)
+	c.mu.Unlock()
+	return nil
 }
 
 var markdown = goldmark.New(goldmark.WithExtensions(extension.GFM),

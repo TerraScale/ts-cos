@@ -51,6 +51,7 @@ func (w *Web) routes() *http.ServeMux {
 	mux.HandleFunc("GET /{$}", w.chatHome)
 	mux.HandleFunc("GET /chat/events", w.chatEvents)
 	mux.HandleFunc("POST /chat", w.chatPost)
+	mux.HandleFunc("POST /chat/answer", w.chatAnswer)
 	mux.HandleFunc("GET /settings", w.settings)
 	mux.HandleFunc("POST /settings/budgets", w.budgetSave)
 	mux.HandleFunc("GET /inbox", w.inboxPage)

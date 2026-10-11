@@ -482,7 +482,8 @@ CLI. The first message of every thread renders `behavior/templates/brief.tmpl`. 
 the replicated bucket `COS_AGENT`; the chat stays in `COS_CHAT`, never in T3.
 
 - Every user chat message is sent to the thread (queued behind a running turn).
-  The leader mirrors each turn into one chat entry: text and collapsed tool calls.
+  The leader mirrors each turn into one chat entry: text, collapsed tool calls,
+  and pending T3 questions as buttons any node can answer over NATS.
 - A fresh thread starts with a brief (the `focus` context file first, then every
   shared context file up to 48 KiB, the last chat exchanges, `cos status --brief`)
   when: the `focus` file or the FULL SEND set changes, a PR leaves the open set (merged or closed),

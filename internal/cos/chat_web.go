@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -413,4 +416,63 @@ func (w *Web) inboxEvents(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func answerAction(entry, question string, option int) string {
+	return fmt.Sprintf("@post('/chat/answer?e=%s&q=%s&o=%d')", url.QueryEscape(entry), url.QueryEscape(question), option)
+}
+
+// chatAnswer records one choice; once every question has one, it answers T3 on the COS host over NATS.
+func (w *Web) chatAnswer(rw http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Datastar-Request") != "true" {
+		http.Error(rw, "Datastar request required", http.StatusForbidden)
+		return
+	}
+	query := r.URL.Query()
+	e, ok := w.Chat.Entry(query.Get("e"))
+	option, err := strconv.Atoi(query.Get("o"))
+	if !ok || e.Ask == nil || e.Ask.Done || err != nil {
+		http.Error(rw, "This question is no longer open", http.StatusConflict)
+		return
+	}
+	i := slices.IndexFunc(e.Ask.Questions, func(q ChatQuestion) bool { return q.ID == query.Get("q") })
+	if i < 0 || option < 0 || option >= len(e.Ask.Questions[i].Options) {
+		http.Error(rw, "Unknown question or option", http.StatusBadRequest)
+		return
+	}
+	// Refuse a second answer: the mirror may not have marked the ask Done yet, so this would overwrite.
+	if _, answered := e.Ask.Answers[e.Ask.Questions[i].ID]; answered {
+		http.Error(rw, "Already answered", http.StatusConflict)
+		return
+	}
+	if e.Ask.Answers == nil {
+		e.Ask.Answers = map[string]string{}
+	}
+	question := e.Ask.Questions[i].ID
+	e.Ask.Answers[question] = e.Ask.Questions[i].Options[option]
+	// Fence first: only the write that wins the revision race may deliver answers to T3.
+	if err := w.Chat.Replace(r.Context(), e); err != nil {
+		http.Error(rw, "The question changed meanwhile; try again", http.StatusConflict)
+		return
+	}
+	if len(e.Ask.Answers) == len(e.Ask.Questions) {
+		answers, _ := json.Marshal(e.Ask.Answers)
+		if err := w.Chat.Respond(r.Context(), e.Ask.Host, e.Ask.ThreadID, e.Ask.RequestID, string(answers)); err != nil {
+			slog.Error("answer COS question", "host", e.Ask.Host, "error", err)
+			// Undo the recorded answer so the question shows its buttons again.
+			if cur, ok := w.Chat.Entry(e.ID); ok && cur.Ask != nil {
+				delete(cur.Ask.Answers, question)
+				if err := w.Chat.Replace(context.WithoutCancel(r.Context()), cur); err != nil {
+					slog.Error("roll back COS answer", "entry", e.ID, "error", err)
+				}
+			}
+			if errors.Is(err, errBusUnavailable) {
+				http.Error(rw, "COS bus unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(rw, "COS host did not accept the answer; try again", http.StatusBadGateway)
+			return
+		}
+	}
+	rw.WriteHeader(http.StatusNoContent)
 }

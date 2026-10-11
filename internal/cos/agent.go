@@ -32,22 +32,23 @@ var agentModel = modelOpusHigh
 
 // AgentState is the replicated record of the one COS thread, so a new leader can take over.
 type AgentState struct {
-	Host          string        `json:"host"`
-	ThreadID      string        `json:"threadId"`
-	Started       time.Time     `json:"started"`
-	Reason        string        `json:"reason"`
-	Behavior      string        `json:"behavior"`
-	Focus         string        `json:"focus"`
-	OpenPRs       []string      `json:"openPRs"`
-	LastWake      time.Time     `json:"lastWake"`
-	Delivered     string        `json:"delivered"`
-	Restart       string        `json:"restart,omitempty"`
-	Run           string        `json:"run,omitempty"`
-	Reply         string        `json:"reply,omitempty"`
-	Compacted     string        `json:"compacted,omitempty"`
-	BriefTokens   int           `json:"briefTokens,omitempty"`
-	CarriedTokens int           `json:"carriedTokens,omitempty"`
-	Orphans       []AgentThread `json:"orphans,omitempty"`
+	Host          string            `json:"host"`
+	ThreadID      string            `json:"threadId"`
+	Started       time.Time         `json:"started"`
+	Reason        string            `json:"reason"`
+	Behavior      string            `json:"behavior"`
+	Focus         string            `json:"focus"`
+	OpenPRs       []string          `json:"openPRs"`
+	LastWake      time.Time         `json:"lastWake"`
+	Delivered     string            `json:"delivered"`
+	Restart       string            `json:"restart,omitempty"`
+	Run           string            `json:"run,omitempty"`
+	Reply         string            `json:"reply,omitempty"`
+	Compacted     string            `json:"compacted,omitempty"`
+	BriefTokens   int               `json:"briefTokens,omitempty"`
+	CarriedTokens int               `json:"carriedTokens,omitempty"`
+	Asked         map[string]string `json:"asked,omitempty"`
+	Orphans       []AgentThread     `json:"orphans,omitempty"`
 	// DigestSince is where the next escalation digest starts; it survives a fresh COS thread.
 	DigestSince time.Time `json:"digestSince,omitempty"`
 }
@@ -200,6 +201,7 @@ func (a *Agent) Step(ctx context.Context) error {
 					return err
 				}
 			}
+			// Asked stays: the next mirror closes asks whose requests are gone from the old thread.
 			st.ThreadID, st.Run, st.Reply, st.Compacted = "", "", "", ""
 			st.addReason("failover from " + st.Host)
 		}
@@ -372,7 +374,7 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 		}
 	}
 	carried, oldBrief, replaced := st.CarriedTokens, st.BriefTokens, st.ThreadID != ""
-	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince}
+	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince, Asked: st.Asked}
 	st.BriefTokens = len(brief) / 4
 	if a.Savings != nil {
 		// Savings are best effort: a failed write must never fail the restart that already launched.

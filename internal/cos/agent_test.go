@@ -91,6 +91,11 @@ func agentTestThread(status string, used int, requests string) string {
 	return fmt.Sprintf(`{"runs":[{"id":"r1","status":"%s"}],"turnItems":[{"type":"user_message","runId":"r1","text":"User: hi"},{"type":"dynamic_tool","runId":"r1","title":"cos fleet"},{"type":"assistant_message","runId":"r1","text":"Hello **there**"}],"runtimeRequests":%s,"providerTurns":[{"tokenUsage":{"usedTokens":%d,"maxTokens":1000000}}]}`, status, requests, used)
 }
 
+// agentTestQuestion is one pending runtime request with a single two-option question.
+func agentTestQuestion(status string) string {
+	return `[{"id":"q1","status":"` + status + `","createdAt":"2026-10-11T10:00:00Z","payload":{"questions":[{"id":"pick","header":"Deploy","question":"Which window?","options":[{"label":"Now"},{"label":"Tonight"}]}]}}]`
+}
+
 // agentTestCompact has a hidden /compact run after the visible reply.
 const agentTestCompact = `{"runs":[{"id":"r1","status":"completed"},{"id":"r2","status":"completed"}],"turnItems":[{"type":"assistant_message","runId":"r1","text":"Hello **there**"},{"type":"user_message","runId":"r2","text":"/compact keep only the open threads"},{"type":"assistant_message","runId":"r2","text":"done"}],"runtimeRequests":[],"providerTurns":[]}`
 
@@ -159,12 +164,19 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 func (e *agentTestEnv) reset(t *testing.T) {
 	t.Helper()
 	e.t = t
-	for _, old := range e.chat.Entries() {
-		if err := e.chatKV.Delete(e.ctx, old.ID); err != nil {
-			t.Fatal(err)
+	// A delete can be lost to a JetStream leader change, so re-issue it until the cache empties.
+	deadline := time.Now().Add(2 * time.Minute)
+	for len(e.chat.Entries()) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for chat cleared")
 		}
+		for _, old := range e.chat.Entries() {
+			if err := e.chatKV.Delete(e.ctx, old.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(time.Second)
 	}
-	chatTestWait(t, "chat cleared", func() bool { return len(e.chat.Entries()) == 0 })
 	for _, key := range []string{"state", "restart"} {
 		if err := e.agentKV.Purge(e.ctx, key); err != nil {
 			t.Fatal(err)
@@ -207,10 +219,19 @@ func (e *agentTestEnv) say(text string) string {
 	return entry.ID
 }
 
+// step retries only a lost KV revision race, as production does every second; other errors fail at once.
 func (e *agentTestEnv) step() {
 	e.t.Helper()
-	if err := e.a.Step(e.ctx); err != nil {
-		e.t.Fatal(err)
+	for attempt := 1; ; attempt++ {
+		err := e.a.Step(e.ctx)
+		var apiErr *jetstream.APIError
+		if err == nil {
+			return
+		}
+		if !errors.As(err, &apiErr) || apiErr.ErrorCode != jetstream.JSErrCodeStreamWrongLastSequence || attempt == 5 {
+			e.t.Fatal(err)
+		}
+		time.Sleep(time.Duration(50*attempt) * time.Millisecond)
 	}
 }
 
@@ -399,6 +420,65 @@ func TestAgent(t *testing.T) {
 		entries := e.cosEntries()
 		if len(entries) != 1 || entries[0].Text != "Hello **there**" {
 			t.Fatalf("hidden /compact run changed chat: %+v", entries)
+		}
+	})
+
+	t.Run("pending question becomes an ask that resolves", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("pending"))
+		e.say("deploy?")
+		e.step()
+		var askID string
+		var ask *ChatAsk
+		chatTestWait(t, "pending question", func() bool {
+			for _, entry := range e.chat.Entries() {
+				if entry.Ask != nil {
+					askID, ask = entry.ID, entry.Ask
+					return true
+				}
+			}
+			return false
+		})
+		if ask.Host != "delta" || ask.RequestID != "q1" || ask.Done || len(ask.Questions) != 1 {
+			t.Fatalf("ask = %+v", ask)
+		}
+		if got := ask.Questions[0].Options; !slices.Equal(got, []string{"Now", "Tonight"}) {
+			t.Fatal(got)
+		}
+
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
+		e.say("thanks")
+		e.step()
+		chatTestWait(t, "ask marked done", func() bool {
+			entry, ok := e.chat.Entry(askID)
+			return ok && entry.Ask != nil && entry.Ask.Done
+		})
+	})
+
+	t.Run("re-mirror after a failed save keeps one ask", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("pending"))
+		e.say("deploy?")
+		e.step()
+		asks := func() int {
+			n := 0
+			for _, entry := range e.chat.Entries() {
+				if entry.Ask != nil {
+					n++
+				}
+			}
+			return n
+		}
+		chatTestWait(t, "pending question", func() bool { return asks() == 1 })
+		st := e.state()
+		st.Asked = nil // the save that recorded the ask never landed
+		e.setState(st)
+		e.step()
+		e.say("settle")
+		if n := asks(); n != 1 {
+			t.Fatalf("asks = %d, want 1", n)
 		}
 	})
 

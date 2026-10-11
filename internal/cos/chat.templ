@@ -260,6 +260,22 @@ templ chatEntry(e ChatEntry) {
 					</details>
 				}
 				<div class="prose">@templ.Raw(renderMarkdown(e.Text))</div>
+				if e.Ask != nil {
+					for _, q := range e.Ask.Questions {
+						<p><strong>{ q.Header }</strong><br/>{ q.Text }</p>
+						if answer, ok := e.Ask.Answers[q.ID]; ok {
+							<p><mark>{ answer }</mark></p>
+						} else if e.Ask.Done {
+							<p><small>Answered elsewhere.</small></p>
+						} else {
+							<p class="options">
+								for i, option := range q.Options {
+									<button type="button" class="outline" data-on:click={ answerAction(e.ID, q.ID, i) }>{ option }</button>
+								}
+							</p>
+						}
+					}
+				}
 				if e.Streaming {
 					<small class="msg-status" aria-busy="true">Working…</small>
 				}

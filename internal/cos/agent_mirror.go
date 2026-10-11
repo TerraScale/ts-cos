@@ -19,13 +19,22 @@ type agentProjection struct {
 		RequestedAt time.Time `json:"requestedAt"`
 	} `json:"runs"`
 	TurnItems []struct {
-		Type     string          `json:"type"`
-		RunID    string          `json:"runId"`
-		Text     string          `json:"text"`
-		Title    string          `json:"title"`
-		FileName string          `json:"fileName"`
-		Input    json.RawMessage `json:"input"`
+		Type      string          `json:"type"`
+		RunID     string          `json:"runId"`
+		Text      string          `json:"text"`
+		Title     string          `json:"title"`
+		FileName  string          `json:"fileName"`
+		Input     json.RawMessage `json:"input"`
+		RequestID string          `json:"requestId"`
+		Questions json.RawMessage `json:"questions"`
 	} `json:"turnItems"`
+	RuntimeRequests []struct {
+		ID        string          `json:"id"`
+		Status    string          `json:"status"`
+		CreatedAt time.Time       `json:"createdAt"`
+		Payload   json.RawMessage `json:"payload"`
+		Request   json.RawMessage `json:"request"`
+	} `json:"runtimeRequests"`
 	ProviderTurns []map[string]any `json:"providerTurns"`
 }
 
@@ -35,6 +44,16 @@ func (p agentProjection) latest() (string, string) {
 	}
 	r := p.Runs[len(p.Runs)-1]
 	return r.ID, r.Status
+}
+
+// turnQuestions returns the questions of a runtime request's user_input_request item, which win over the payload.
+func (p agentProjection) turnQuestions(request string) json.RawMessage {
+	for _, item := range p.TurnItems {
+		if item.RequestID == request && len(item.Questions) > 0 && string(item.Questions) != "null" {
+			return item.Questions
+		}
+	}
+	return nil
 }
 
 func (p agentProjection) usedTokens() int {
@@ -75,7 +94,7 @@ func (p agentProjection) reply(run string) (string, []string, bool) {
 	return strings.Join(texts, "\n\n"), tools, false
 }
 
-// mirror copies new COS output into the replicated chat.
+// mirror copies new COS output and pending questions into the replicated chat.
 func (a *Agent) mirror(ctx context.Context, st *AgentState, p agentProjection) error {
 	start := 0
 	for i, r := range p.Runs {
@@ -95,6 +114,71 @@ func (a *Agent) mirror(ctx context.Context, st *AgentState, p agentProjection) e
 		if err := a.show(ctx, e); err != nil {
 			return err
 		}
+	}
+	pending := map[string]bool{}
+	for _, r := range p.RuntimeRequests {
+		if r.Status != "pending" {
+			continue
+		}
+		pending[r.ID] = true
+		if _, ok := st.Asked[r.ID]; ok {
+			continue
+		}
+		payload := r.Payload
+		if len(payload) == 0 || string(payload) == "null" {
+			payload = r.Request
+		}
+		if q := p.turnQuestions(r.ID); q != nil {
+			payload = fmt.Appendf(nil, `{"questions":%s}`, q)
+		}
+		var in struct {
+			Questions []struct {
+				ID       string `json:"id"`
+				Header   string `json:"header"`
+				Question string `json:"question"`
+				Options  []struct {
+					Label string `json:"label"`
+				} `json:"options"`
+			} `json:"questions"`
+		}
+		if json.Unmarshal(payload, &in) != nil || len(in.Questions) == 0 {
+			continue
+		}
+		ask := &ChatAsk{Host: a.Host, ThreadID: st.ThreadID, RequestID: r.ID, Answers: map[string]string{}}
+		for _, q := range in.Questions {
+			cq := ChatQuestion{ID: q.ID, Header: q.Header, Text: q.Question}
+			for _, o := range q.Options {
+				cq.Options = append(cq.Options, o.Label)
+			}
+			ask.Questions = append(ask.Questions, cq)
+		}
+		// A re-mirror after a failed save keeps the entry, so answers already recorded in it survive.
+		id := replyID(r.ID, r.CreatedAt)
+		if _, ok := a.Chat.Entry(id); !ok {
+			if _, err := a.Chat.Put(ctx, ChatEntry{ID: id, Role: "cos", Ask: ask}); err != nil {
+				return err
+			}
+		}
+		if st.Asked == nil {
+			st.Asked = map[string]string{}
+		}
+		st.Asked[r.ID] = id
+	}
+	for request, id := range st.Asked {
+		if pending[request] {
+			continue
+		}
+		e, ok := a.Chat.Entry(id)
+		if !ok {
+			continue
+		}
+		if e.Ask != nil && !e.Ask.Done {
+			e.Ask.Done = true
+			if err := a.Chat.Replace(ctx, e); err != nil {
+				return err
+			}
+		}
+		delete(st.Asked, request)
 	}
 	return nil
 }
