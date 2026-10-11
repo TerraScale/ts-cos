@@ -47,7 +47,7 @@ func TestAutopilotLeaderOnlyAndReplicated(t *testing.T) {
 	})
 	for i, host := range hosts {
 		var err error
-		engine := &RulesEngine{Store: stores[i], Call: func(context.Context, string, string, []string) error { return nil }}
+		engine := &RulesEngine{Store: stores[i], Call: func(context.Context, string, string, []string, any) error { return nil }}
 		engines[i] = engine
 		pilots[i], err = StartAutopilot(ctx, host, nodes[i], stores[i], func(context.Context) []AutopilotEntry {
 			beats[i].Add(1)

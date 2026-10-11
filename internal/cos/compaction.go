@@ -155,35 +155,13 @@ func (c *Compactor) compact(ctx context.Context, kv jetstream.KeyValue, host, th
 // then settles the old one. carried is the context the old thread was holding.
 // It returns "" when the thread has no worktree to continue in.
 func (c *Compactor) fresh(ctx context.Context, kv jetstream.KeyValue, host string, t FleetThread, st compactState, carried int) (string, error) {
-	var info map[string]any
-	if err := c.Call(ctx, host, "thread", []string{t.ThreadID}, &info); err != nil {
-		return "", err
-	}
-	path, _ := info["worktreePath"].(string)
-	if path == "" {
-		return "", nil
-	}
-	title, _ := info["title"].(string)
-	branch, _ := info["branch"].(string)
-	last, _ := info["lastReply"].(string)
-	brief, err := CurrentBehavior().Render("fresh_brief", freshBrief{LastReply: last})
-	if err != nil {
-		return "", err
-	}
-	pol := CurrentBehavior().Models
-	pair := pol.PairOrLeader(t.Model)
-	input, err := json.Marshal(map[string]any{
-		"projectTitle":      t.Project,
-		"title":             title,
-		"modelSelection":    pol.Advisor(pair, false),
-		"workspaceStrategy": map[string]any{"type": "existing_worktree", "worktreePath": path, "branch": branch},
-		"message":           brief + "\n\n" + pol.BriefLine(pair),
+	var brief string
+	id, _, ok, err := launchSuccessor(ctx, c.Call, host, t, CurrentBehavior().Models.PairOrLeader(t.Model), func(last string) (string, error) {
+		var err error
+		brief, err = CurrentBehavior().Render("fresh_brief", freshBrief{LastReply: last})
+		return brief, err
 	})
-	if err != nil {
-		return "", err
-	}
-	var launched map[string]any
-	if err := c.Call(ctx, host, "launch", []string{string(input)}, &launched); err != nil {
+	if err != nil || !ok {
 		return "", err
 	}
 	c.saved(ctx, carried-len(brief)/4)
@@ -192,7 +170,6 @@ func (c *Compactor) fresh(ctx context.Context, kv jetstream.KeyValue, host strin
 	if err := kvPutJSON(ctx, kv, compactKey(t.ThreadID), st); err != nil {
 		return "", err
 	}
-	id, _ := launched["threadId"].(string)
 	return id, c.Call(ctx, host, "settle", []string{t.ThreadID}, nil)
 }
 

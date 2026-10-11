@@ -82,6 +82,10 @@ type Decision struct {
 	Inbox *InboxInput                                  // file this item in the COS Inbox
 	Sig   string                                       // wake signature for dedup and "same failure twice"
 	Do    func(ctx context.Context, env RuleEnv) error // custom action of a registered rule
+	// Handoff is the pair a fresh thread takes over on (same worktree); the old thread is settled.
+	Handoff    string
+	from       *FleetThread // the failed thread a handoff starts from
+	fromReason string
 }
 
 // PRFacts is the fresh state of the event's PR, fetched by the engine.
@@ -95,9 +99,10 @@ type PRFacts struct {
 
 // WakeMemory is the last wake per thread, replicated in KV across leaders.
 type WakeMemory struct {
-	Sig   string `json:"sig"`
-	SHA   string `json:"sha"`
-	Count int    `json:"count"`
+	Sig      string `json:"sig"`
+	SHA      string `json:"sha"`
+	Count    int    `json:"count"`
+	HandedTo string `json:"handedTo,omitempty"` // the fresh thread a handoff started; set before the old thread settles
 }
 
 // Classify is pure: the event, the latest live snapshot, the fresh PR (if any)
@@ -188,6 +193,13 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		case memory.Sig == x.Sig && memory.SHA == sha:
 			return append(out, d(ClassRecord, rule, "already woken: "+reason))
 		case memory.Sig == x.Sig && memory.Count >= 1:
+			if pair := pol.PairOrLeader(owner.Model); pair != pol.Leader && owner.Lineage == nil {
+				// A fresh leader-pair thread takes the work; the failed thread gets no wake.
+				h := d(ClassAct, "handoff-"+pol.Leader, "same failure twice on "+pair+": "+reason)
+				h.Handoff, h.Wake, h.Sig = pol.Leader, text, x.Sig
+				h.from, h.fromReason = owner, reason
+				return append(out, h, d(ClassEscalate, "same-failure-twice", reason+" (twice on "+pair+"; handed off to "+pol.Leader+")"))
+			}
 			m := d(ClassAct, "escalate-model", "same failure twice: "+reason)
 			m.Model = pol.Advisor(pol.PairOrLeader(owner.Model), true)
 			// The model switches first, so the escalated model handles this wake.
@@ -303,7 +315,7 @@ type RulesEngine struct {
 	Publish func(context.Context, AutopilotEntry)
 	PR      func(ctx context.Context, repo string, number int) (*PRFacts, error)
 	Merge   func(ctx context.Context, repo string, number int) error
-	Call    func(ctx context.Context, host, command string, args []string) error
+	Call    func(ctx context.Context, host, command string, args []string, out any) error
 	Inbox   func(ctx context.Context, in InboxInput) error
 	kvMu    sync.Mutex
 	memory  jetstream.KeyValue
@@ -336,9 +348,7 @@ func NewRulesEngine(cfg Config, bus *Bus, store *Store) *RulesEngine {
 			_, err := f.Merge(ctx, repo, number, MergeOrder{})
 			return err
 		},
-		Call: func(ctx context.Context, host, command string, args []string) error {
-			return bus.Call(ctx, host, command, args, nil)
-		},
+		Call: bus.Call,
 		Inbox: func(ctx context.Context, in InboxInput) error {
 			if inbox == nil {
 				var err error
@@ -499,15 +509,25 @@ func (r *RulesEngine) execute(ctx context.Context, eventID string, d Decision, p
 		}
 	case d.Model != nil:
 		sel, _ := json.Marshal(d.Model)
-		if err := r.Call(ctx, d.Host, "model", []string{d.Thread, string(sel)}); err != nil {
+		if err := r.Call(ctx, d.Host, "model", []string{d.Thread, string(sel)}, nil); err != nil {
 			entry.Kind, entry.Reason = "error", d.Reason+"; model change failed: "+publicText(err)
 		}
 	case d.Inbox != nil:
 		if err := r.Inbox(ctx, *d.Inbox); err != nil {
 			entry.Kind, entry.Reason = "error", d.Reason+"; inbox failed: "+publicText(err)
 		}
+	case d.Handoff != "":
+		id, ok, err := r.handOff(ctx, d, key, memory)
+		switch {
+		case err != nil:
+			return err // retried: the memory keeps a second launch from happening
+		case !ok:
+			entry.Kind, entry.Reason = ClassEscalate, d.Reason+"; no worktree to hand off; needs a manual handoff"
+		default:
+			entry.Target, entry.Reason = d.Host+" "+id, "handed off to "+d.Handoff+" thread "+id
+		}
 	case d.Wake != "":
-		if err := r.Call(ctx, d.Host, "send", []string{d.Thread, d.Wake}); err != nil {
+		if err := r.Call(ctx, d.Host, "send", []string{d.Thread, d.Wake}, nil); err != nil {
 			return fmt.Errorf("wake %s: %w", d.Thread, err)
 		}
 		sha := eventID
@@ -528,6 +548,30 @@ func (r *RulesEngine) execute(ctx context.Context, eventID string, d Decision, p
 	}
 	r.Publish(ctx, entry)
 	return nil
+}
+
+// handOff starts the handoff pair's thread on the failed thread's worktree, records it in memory, then
+// settles the failed thread. ok is false when there is no worktree. A retry sees memory.HandedTo and
+// only settles, so it never launches a second thread.
+func (r *RulesEngine) handOff(ctx context.Context, d Decision, key string, memory WakeMemory) (id string, ok bool, err error) {
+	id = memory.HandedTo
+	if id == "" {
+		from := CurrentBehavior().Models.PairOrLeader(d.from.Model)
+		brief := func(lastReply string) (string, error) {
+			return CurrentBehavior().Render("handoff_brief", handoffBrief{FromPair: from, FromModel: d.from.Model, Reason: d.fromReason, Wake: d.Wake, LastReply: lastReply})
+		}
+		if id, _, ok, err = launchSuccessor(ctx, r.Call, d.Host, *d.from, d.Handoff, brief); err != nil || !ok {
+			return "", ok, err
+		}
+		data, err := json.Marshal(WakeMemory{Sig: d.Sig, SHA: memory.SHA, Count: memory.Count, HandedTo: id})
+		if err != nil {
+			return "", true, err
+		}
+		if _, err := r.memory.Put(ctx, key, data); err != nil {
+			return "", true, err
+		}
+	}
+	return id, true, r.Call(ctx, d.Host, "settle", []string{d.Thread}, nil)
 }
 
 func decisionTarget(d Decision) string {

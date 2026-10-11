@@ -480,7 +480,7 @@ func newRulesEngine(t *testing.T, rec *rulesRecorder) *RulesEngine {
 			rec.fyi = append(rec.fyi, in)
 			return rec.fyiErr
 		},
-		Call: func(_ context.Context, host, command string, args []string) error {
+		Call: func(_ context.Context, host, command string, args []string, _ any) error {
 			rec.calls = append(rec.calls, rulesCall{host, command, args})
 			if command == "send" {
 				return rec.sendErr
