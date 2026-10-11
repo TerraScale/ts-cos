@@ -119,6 +119,9 @@ func budgetRaiseKey(day, scope string) string {
 	return "budget.raise." + strings.ReplaceAll(day, "-", "") + "." + scope
 }
 
+// budgetAppliedKey marks an answered budget item whose raise is stored. Inbox IDs are hex.
+func budgetAppliedKey(id string) string { return "budget.applied." + id }
+
 // budgetHuman formats a token count for a summary: 8.1M, 500k, 42.
 func budgetHuman(n int64) string {
 	v, unit := float64(n), ""
@@ -477,8 +480,19 @@ func budgetApply(ctx context.Context, bus *Bus, settings jetstream.KeyValue, st 
 		if !ok || !strings.HasPrefix(key, budgetRaiseKey(st.Day, "")) {
 			continue
 		}
+		// Each answer applies once: the raise follows today's use, so re-applying it every sweep
+		// would keep raising the limit and re-send RESUMED to every thread.
+		applied := budgetAppliedKey(item.ID)
+		if _, err := settings.Get(ctx, applied); err == nil {
+			continue
+		} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+			return err
+		}
 		raised, err := budgetStoreRaise(ctx, settings, key, value)
 		if err != nil {
+			return err
+		}
+		if _, err := settings.Put(ctx, applied, []byte(st.Day)); err != nil {
 			return err
 		}
 		if !raised || item.Thread != "" {

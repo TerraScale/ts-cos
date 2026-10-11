@@ -344,6 +344,30 @@ func TestBudgetStoreRaiseKeepsLargest(t *testing.T) {
 	}
 }
 
+func TestBudgetApplyOncePerAnswer(t *testing.T) {
+	ctx := context.Background()
+	kv := &fakeKV{data: map[string][]byte{}}
+	item := InboxItem{ID: "12e04d92a7001d67", Source: string(SourceBudget), Status: "answered",
+		Key:    "budget:" + budgetTestDay + ":" + budgetDaily + ":100:100000000",
+		Answer: &AnswerData{Option: "Resume all with +25% today"}}
+	st := budgetState{Day: budgetTestDay, Daily: UsageTotal{Input: 139_000_000}}
+	if err := budgetApply(ctx, nil, kv, st, []InboxItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	key := budgetRaiseKey(budgetTestDay, budgetDaily)
+	first := string(kv.data[key])
+	if first != "173750000" || string(kv.data[budgetAppliedKey(item.ID)]) != budgetTestDay {
+		t.Fatalf("first apply: raise %q, marker %q", first, kv.data[budgetAppliedKey(item.ID)])
+	}
+	st.Daily.Input = 180_000_000 // use keeps growing; the answer must not raise again
+	if err := budgetApply(ctx, nil, kv, st, []InboxItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(kv.data[key]); got != first {
+		t.Fatalf("second sweep raised again: %s, want %s", got, first)
+	}
+}
+
 func TestBudgetLoadLimits(t *testing.T) {
 	ctx := context.Background()
 	scope := budgetScope("beta/proj")
