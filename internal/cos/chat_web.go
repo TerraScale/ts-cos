@@ -232,12 +232,6 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		if err := patchElements(ctx, rw, kpiTiles(w.kpis(h))); err != nil {
 			return err
 		}
-		if err := patchElements(ctx, rw, countBadge("side-inbox", "badge", h.Inbox)); err != nil {
-			return err
-		}
-		if err := patchElements(ctx, rw, countBadge("tab-inbox", "tab-badge", h.Inbox)); err != nil {
-			return err
-		}
 		if err := patchNodes(); err != nil {
 			return err
 		}

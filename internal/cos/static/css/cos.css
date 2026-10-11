@@ -17,6 +17,7 @@
   border-inline-start: 1px solid var(--ts-line);
   padding: var(--ts-s4);
 }
+.cos-inbox-col > * + * { margin-top: var(--ts-s5); }
 @media (min-width: 60rem) {
   .cos-chat-body { grid-template-columns: minmax(0, 1fr) 22rem; }
   .cos-inbox-col { display: block; }

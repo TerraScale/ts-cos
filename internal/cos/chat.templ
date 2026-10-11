@@ -1,23 +1,15 @@
 package cos
 
-// The home is the app shell: Chat in the center, Inbox, Nodes and Work beside it. Phones pick one pane with the tab bar.
+// The chat page is the chat with the Inbox, Nodes and Work beside it; the KPI tiles sit above the log.
 templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b workBoard, ok bool, nodes []NodeCard, nodesOK bool) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("COS · TerraScale")
-		<body class="app chat" data-init="@get('/chat/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" data-signals="{tab:'chat'}" data-attr:data-tab="$tab">
+		<body class="ts-app cos-chat" data-init="@get('/chat/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" data-signals="{tab: location.hash.startsWith('#inbox') ? 'inbox' : 'chat'}" data-attr:data-tab="$tab">
 			@releaseWatch()
 			@chatHead(h, "chat")
-			<div class="app-body">
-				<nav class="sidebar" aria-label="Sections">
-					<p class="side-title">COS</p>
-					<a class="side-link" href="#pane-chat" title="Chat" data-on:click__prevent="$tab='chat'" data-attr:aria-current="$tab=='chat' ? 'page' : false">@icon("chat")<span>Chat</span></a>
-					<a class="side-link" href="#pane-inbox" title="Inbox" data-on:click__prevent="$tab='inbox'" data-attr:aria-current="$tab=='inbox' ? 'page' : false">@icon("inbox")<span>Inbox</span> @countBadge("side-inbox", "badge", h.Inbox)</a>
-					<a class="side-link" href="#pane-nodes" title="Nodes" data-on:click__prevent="$tab='nodes'" data-attr:aria-current="$tab=='nodes' ? 'page' : false">@icon("nodes")<span>Nodes</span></a>
-					<a class="side-link" href="#pane-work" title="Work" data-on:click__prevent="$tab='work'" data-attr:aria-current="$tab=='work' ? 'page' : false">@icon("work")<span>Work</span></a>
-					<a class="side-link" href="/settings" title="Settings">@icon("settings")<span>Settings</span></a>
-				</nav>
-				<main class="app-main" id="pane-chat">
+			<div class="cos-chat-body">
+				<main id="main" class="cos-chat-main">
 					@kpiTiles(k)
 					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)
@@ -28,50 +20,17 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 					</form>
 					<p id="chat-notice" class="toast" role="status"></p>
 				</main>
-				<aside class="app-aside" aria-label="Inbox, nodes and work">
+				<aside class="cos-inbox-col" aria-label="Inbox, nodes and work">
 					<section id="pane-inbox" class="pane">@inbox(v)</section>
 					@nodesSummary(nodes, nodesOK)
 					@workPane(b, ok)
 				</aside>
 			</div>
-			<nav class="tabbar" aria-label="Sections">
-				<a class="tab" href="#pane-chat" data-on:click__prevent="$tab='chat'" data-attr:aria-current="$tab=='chat' ? 'page' : false">@icon("chat")<span>Chat</span></a>
-				<a class="tab" href="#pane-inbox" data-on:click__prevent="$tab='inbox'" data-attr:aria-current="$tab=='inbox' ? 'page' : false">@icon("inbox")<span>Inbox</span> @countBadge("tab-inbox", "tab-badge", h.Inbox)</a>
-				<a class="tab" href="#pane-nodes" data-on:click__prevent="$tab='nodes'" data-attr:aria-current="$tab=='nodes' ? 'page' : false">@icon("nodes")<span>Nodes</span></a>
-				<a class="tab" href="#pane-work" data-on:click__prevent="$tab='work'" data-attr:aria-current="$tab=='work' ? 'page' : false">@icon("work")<span>Work</span></a>
-			</nav>
 		</body>
 	</html>
 }
 
-// countBadge keeps its id while the count changes, so each patch replaces it in place.
-templ countBadge(id, class string, n int) {
-	<span id={ id }>
-		if n > 0 {
-			<span class={ class }>{ integer(n) }</span>
-		}
-	</span>
-}
-
-// icon draws the rail and tab-bar glyphs with plain strokes; cos.css sizes and colors them.
-templ icon(name string) {
-	<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-		switch name {
-			case "chat":
-				<path d="M4 5h16v11H9l-5 4z"/>
-			case "inbox":
-				<path d="M3 13l2.5-7h13L21 13v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/>
-			case "nodes":
-				<rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/><path d="M7 6.5h2M7 17.5h2"/>
-			case "work":
-				<rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/><rect x="17" y="4" width="4" height="13" rx="1"/>
-			case "settings":
-				<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>
-		}
-	</svg>
-}
-
-// skeletonPane holds a sidebar slot until its feature lands.
+// skeletonPane holds a slot beside the chat until its feature lands.
 templ skeletonPane(id, title, note string) {
 	<section id={ id } class="pane panel">
 		<header class="panel-head"><h2>{ title }</h2></header>

@@ -59,11 +59,6 @@ func TestChatSSEHeaderFollowsState(t *testing.T) {
 	if tiles := readEvent(); !strings.Contains(tiles, `id="kpis"`) {
 		t.Fatal(tiles)
 	}
-	for _, badge := range []string{`id="side-inbox"`, `id="tab-inbox"`} {
-		if event := readEvent(); !strings.Contains(event, badge) {
-			t.Fatal(event)
-		}
-	}
 	if nodes := readEvent(); !strings.Contains(nodes, `id="pane-nodes"`) {
 		t.Fatal(nodes)
 	}
@@ -124,7 +119,7 @@ func TestChatRoutes(t *testing.T) {
 	if n := strings.Count(body, `class="kpi"`); n != 6 {
 		t.Fatalf("home renders %d KPI tiles, want 6", n)
 	}
-	for _, want := range []string{`id="pane-chat"`, `id="pane-inbox"`, `id="pane-nodes"`, `id="pane-work"`, `class="tabbar"`, `class="app-aside"`, `id="side-inbox"`, `id="tab-inbox"`} {
+	for _, want := range []string{`id="main"`, `id="pane-inbox"`, `id="pane-nodes"`, `id="pane-work"`, `class="cos-inbox-col"`} {
 		if !strings.Contains(body, want) {
 			t.Fatal("home missing", want)
 		}
