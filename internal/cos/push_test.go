@@ -93,13 +93,17 @@ func TestPushSubscribeRoutes(t *testing.T) {
 	if got := post("application/json", good); got != http.StatusNoContent {
 		t.Fatalf("valid subscription: HTTP %d, want 204", got)
 	}
+	tester, _, _, found, err := auth.account(ctx, "tester")
+	if err != nil || !found {
+		t.Fatalf("tester account: found %v, %v", found, err)
+	}
 	var entry jetstream.KeyValueEntry
 	chatTestWait(t, "stored subscription", func() bool {
-		entry, err = p.kv.Get(ctx, pushSubKey(good.Endpoint))
+		entry, err = p.kv.Get(ctx, tester.Key(pushSubKey(good.Endpoint)))
 		return err == nil
 	})
 	var stored pushSub
-	if err := json.Unmarshal(entry.Value(), &stored); err != nil || stored.User != "tester" {
+	if err := json.Unmarshal(entry.Value(), &stored); err != nil || stored.Sub.Endpoint != good.Endpoint {
 		t.Fatalf("stored subscription %+v, %v", stored, err)
 	}
 	for _, endpoint := range []string{"http://fcm.googleapis.com/fcm/send/x", "https://10.0.0.1/send/x", "https://fcm.googleapis.com:8443/send/x", "https://evil.example/send/x"} {
@@ -121,6 +125,7 @@ func TestPushSendDelivery(t *testing.T) {
 	defer cancel()
 	buses, _ := chatTestCluster(t, ctx)
 	p := pushTestStores(t, ctx, buses)[0]
+	tester, mallory := inboxTestUser(), inboxTestUser()
 
 	// The receiver stands in for a push service; /gone answers like an expired subscription.
 	type delivery struct {
@@ -154,10 +159,10 @@ func TestPushSendDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Subscribe(ctx, "tester", "test", ok); err != nil {
+	if err := p.Subscribe(WithUser(ctx, tester), "test", ok); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Subscribe(ctx, "tester", "test", gone); err != nil {
+	if err := p.Subscribe(WithUser(ctx, tester), "test", gone); err != nil {
 		t.Fatal(err)
 	}
 	receive := func() pushPayload {
@@ -182,7 +187,7 @@ func TestPushSendDelivery(t *testing.T) {
 		}
 	}
 
-	sent, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: "hello", URL: "/", Tag: "chat"})
+	sent, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: "hello", URL: "/", Tag: "chat", User: tester.ID})
 	if err != nil || sent != 1 {
 		t.Fatalf("send: %d, %v; want 1 device (the expired one is deleted)", sent, err)
 	}
@@ -190,39 +195,39 @@ func TestPushSendDelivery(t *testing.T) {
 		t.Fatalf("payload %+v", got)
 	}
 	chatTestWait(t, "expired subscription removed", func() bool {
-		_, err = p.kv.Get(ctx, pushSubKey(gone.Endpoint))
+		_, err = p.kv.Get(ctx, tester.Key(pushSubKey(gone.Endpoint)))
 		return err == jetstream.ErrKeyNotFound
 	})
 
-	if err := p.SetPref(ctx, "tester", "chat", false); err != nil {
+	if err := p.SetPref(WithUser(ctx, tester), "chat", false); err != nil {
 		t.Fatal(err)
 	}
-	if sent, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: "muted", Tag: "chat"}); err != nil || sent != 0 {
+	if sent, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: "muted", Tag: "chat", User: tester.ID}); err != nil || sent != 0 {
 		t.Fatalf("muted category: %d, %v; want 0 devices", sent, err)
 	}
 	nothing()
-	if sent, err := p.Send(ctx, Notice{Category: "test", Title: "COS", Body: "test", Tag: "test", User: "tester"}); err != nil || sent != 1 {
+	if sent, err := p.Send(ctx, Notice{Category: "test", Title: "COS", Body: "test", Tag: "test", User: tester.ID}); err != nil || sent != 1 {
 		t.Fatalf("test notice: %d, %v; want 1 (test is never filtered)", sent, err)
 	}
 	if got := receive(); got.Category != "test" {
 		t.Fatalf("test payload %+v", got)
 	}
 
-	if err := p.Unsubscribe(ctx, "mallory", ok.Endpoint); err != nil {
+	if err := p.Unsubscribe(WithUser(ctx, mallory), ok.Endpoint); err != nil {
 		t.Fatal(err)
 	}
 	chatTestWait(t, "subscription stored before unsubscribe", func() bool {
-		_, err = p.kv.Get(ctx, pushSubKey(ok.Endpoint))
+		_, err = p.kv.Get(ctx, tester.Key(pushSubKey(ok.Endpoint)))
 		return err == nil
 	})
 	if err != nil {
 		t.Fatalf("another user removed the subscription: %v", err)
 	}
-	if err := p.Unsubscribe(ctx, "tester", ok.Endpoint); err != nil {
+	if err := p.Unsubscribe(WithUser(ctx, tester), ok.Endpoint); err != nil {
 		t.Fatal(err)
 	}
 	chatTestWait(t, "owner unsubscribe", func() bool {
-		_, err = p.kv.Get(ctx, pushSubKey(ok.Endpoint))
+		_, err = p.kv.Get(ctx, tester.Key(pushSubKey(ok.Endpoint)))
 		return err == jetstream.ErrKeyNotFound
 	})
 }

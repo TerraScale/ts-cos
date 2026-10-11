@@ -42,7 +42,7 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 			http.Error(rw, "Unsupported push endpoint", http.StatusBadRequest)
 			return
 		}
-		if err := p.Subscribe(r.Context(), pushUser(r), r.UserAgent(), sub); err != nil {
+		if err := p.Subscribe(r.Context(), r.UserAgent(), sub); err != nil {
 			logErr(r.Context(), slog.LevelError, "save push subscription", err)
 			http.Error(rw, "Push subscription failed; try again", http.StatusInternalServerError)
 			return
@@ -60,7 +60,7 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 		if !pushDecode(rw, r, &body) {
 			return
 		}
-		if err := p.Unsubscribe(r.Context(), pushUser(r), body.Endpoint); err != nil {
+		if err := p.Unsubscribe(r.Context(), body.Endpoint); err != nil {
 			logErr(r.Context(), slog.LevelError, "delete push subscription", err)
 			http.Error(rw, "Push update failed; try again", http.StatusInternalServerError)
 			return
@@ -72,7 +72,8 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 		if p == nil {
 			return
 		}
-		sent, err := p.Send(r.Context(), Notice{Category: "test", Title: "COS", Body: "Test notification from " + p.host, URL: "/settings", Tag: "test", User: pushUser(r)})
+		user, _ := UserFrom(r.Context()) // no user: Send refuses the notice, so nothing is sent
+		sent, err := p.Send(r.Context(), Notice{Category: "test", Title: "COS", Body: "Test notification from " + p.host, URL: "/settings", Tag: "test", User: user.ID})
 		msg := fmt.Sprintf("Sent to %d devices", sent)
 		switch {
 		case err != nil:
@@ -96,7 +97,7 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 			http.NotFound(rw, r)
 			return
 		}
-		if err := p.SetPref(r.Context(), pushUser(r), category, state == "on"); err != nil {
+		if err := p.SetPref(r.Context(), category, state == "on"); err != nil {
 			logErr(r.Context(), slog.LevelError, "save push preference", err)
 			http.Error(rw, "Preference update failed; try again", http.StatusInternalServerError)
 			return
@@ -105,7 +106,7 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 			http.Redirect(rw, r, "/settings", http.StatusSeeOther)
 			return
 		}
-		pushPatch(r.Context(), rw, pushPanel(w.pushState(r.Context(), pushUser(r))))
+		pushPatch(r.Context(), rw, pushPanel(w.pushState(r.Context())))
 	})
 }
 
@@ -118,18 +119,18 @@ func (w *Web) pushReady(rw http.ResponseWriter) *Push {
 	return p
 }
 
-// pushState is what the settings panel shows user; an unready store shows the starting notice.
-func (w *Web) pushState(ctx context.Context, user string) PushState {
+// pushState is what the settings panel shows the signed-in user; an unready store shows the starting notice.
+func (w *Web) pushState(ctx context.Context) PushState {
 	p := w.push.Load()
 	if p == nil {
 		return PushState{}
 	}
-	devices, err := p.Devices(ctx, user)
+	devices, err := p.Devices(ctx)
 	if err != nil {
 		logErr(ctx, slog.LevelError, "read push devices", err)
 		return PushState{}
 	}
-	off, err := p.off(ctx, user)
+	off, err := p.off(ctx)
 	if err != nil {
 		logErr(ctx, slog.LevelError, "read push preferences", err)
 		return PushState{}
@@ -153,12 +154,6 @@ func pushDecode(rw http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
-}
-
-// pushUser is the signed-in user's name; Protect always sets it, so "" only appears in unauthenticated tests.
-func pushUser(r *http.Request) string {
-	u, _ := UserFrom(r.Context())
-	return u.Name
 }
 
 func pushKnown(id string) bool {

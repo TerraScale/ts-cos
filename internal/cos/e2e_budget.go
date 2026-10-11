@@ -57,7 +57,11 @@ func budgetE2EEvent(scope, day, host, thread string) (Event, error) {
 
 // budgetE2EItem reads the Inbox item filed under key; ok is false while it does not exist.
 func budgetE2EItem(ctx context.Context, in *Inbox, key string) (item InboxItem, ok bool, err error) {
-	entry, err := in.kv.Get(ctx, inboxID(key))
+	kv, err := UserKV(ctx, in.kv)
+	if err != nil {
+		return item, false, err
+	}
+	entry, err := kv.Get(ctx, inboxID(key))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return item, false, nil
 	}
@@ -117,13 +121,17 @@ func budgetE2EStaleKey(key string) bool {
 // budgetE2EClearStale removes what earlier checks left behind: fake Inbox items with their applied
 // markers, and fake raise keys. A run cut off by a restart never reaches its own cleanup.
 func budgetE2EClearStale(ctx context.Context, in *Inbox, settings jetstream.KeyValue) error {
-	inboxKeys, err := budgetE2EKeys(ctx, in.kv)
+	kv, err := UserKV(ctx, in.kv)
+	if err != nil {
+		return err
+	}
+	inboxKeys, err := budgetE2EKeys(ctx, kv)
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, id := range inboxKeys {
-		entry, err := in.kv.Get(ctx, id)
+		entry, err := kv.Get(ctx, id)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			continue
 		}
@@ -212,6 +220,9 @@ func checkBudgetFYI(ctx context.Context, e *E2EEnv) (evidence string, err error)
 	if err != nil {
 		return "", err
 	}
+	if ctx, err = e2eNodeContext(ctx, bus); err != nil {
+		return "", err
+	}
 	settings, err := js.KeyValue(ctx, autopilotSettings)
 	if err != nil {
 		return "", err
@@ -293,6 +304,9 @@ func checkBudgetPause(ctx context.Context, e *E2EEnv) (evidence string, err erro
 	}
 	in, err := OpenInbox(ctx, bus, host, false)
 	if err != nil {
+		return "", err
+	}
+	if ctx, err = e2eNodeContext(ctx, bus); err != nil {
 		return "", err
 	}
 	settings, err := js.KeyValue(ctx, autopilotSettings)

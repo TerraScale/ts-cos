@@ -28,16 +28,18 @@ func TestPushRecordLast(t *testing.T) {
 
 func TestNoticeFor(t *testing.T) {
 	approval := json.RawMessage(`{"kind":"approval"}`)
+	owner := inboxTestUser().ID
 	cases := []struct {
 		name  string
 		event Event
 		want  Notice
 		ok    bool
 	}{
-		{"approval", Event{Source: SourceInbox, Kind: KindInboxItemAdded, Severity: SeverityUrgent, Summary: "Deploy?", Item: "a1", Data: approval},
-			Notice{Category: "inbox", Title: "Approval needed", Body: "Deploy?", URL: "/inbox#inbox-a1", Tag: "inbox-a1", Urgent: true}, true},
-		{"untitled item", Event{Source: SourceInbox, Kind: KindInboxItemAdded, Severity: SeverityWarn, Item: "a3"},
-			Notice{Category: "inbox", Title: "Inbox", URL: "/inbox#inbox-a3", Tag: "inbox-a3"}, true},
+		{"approval", Event{Source: SourceInbox, Kind: KindInboxItemAdded, Severity: SeverityUrgent, Summary: "Deploy?", Item: "a1", User: owner, Data: approval},
+			Notice{Category: "inbox", User: owner, Title: "Approval needed", Body: "Deploy?", URL: "/inbox#inbox-a1", Tag: "inbox-a1", Urgent: true}, true},
+		{"untitled item", Event{Source: SourceInbox, Kind: KindInboxItemAdded, Severity: SeverityWarn, Item: "a3", User: owner},
+			Notice{Category: "inbox", User: owner, Title: "Inbox", URL: "/inbox#inbox-a3", Tag: "inbox-a3"}, true},
+		{"inbox item without its user is dropped", Event{Source: SourceInbox, Kind: KindInboxItemAdded, Severity: SeverityWarn, Item: "a4"}, Notice{}, false},
 		{"info item is silent", Event{Source: SourceInbox, Kind: KindInboxItemAdded, Severity: SeverityInfo, Item: "a2"}, Notice{}, false},
 		{"deploy", Event{Source: "deploy", Kind: "deploy.completed", Summary: "cos 1.2"},
 			Notice{Category: "done", Title: "Updated", Body: "cos 1.2", URL: "/", Tag: "deploy"}, true},

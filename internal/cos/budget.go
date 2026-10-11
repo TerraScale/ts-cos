@@ -510,7 +510,11 @@ func budgetSweep(ctx context.Context, bus *Bus, store *Store) error {
 			return err
 		}
 	}
-	_, history, err := store.Inbox(ctx)
+	admin, err := nodeUser(ctx, bus)
+	if err != nil {
+		return err
+	}
+	_, history, err := store.Inbox(WithUser(ctx, admin))
 	if err != nil {
 		return err
 	}

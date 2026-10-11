@@ -421,9 +421,11 @@ func TestRulesPROwnerSkipsSubagent(t *testing.T) {
 
 type fakeEntry struct {
 	jetstream.KeyValueEntry
+	key   string
 	value []byte
 }
 
+func (e fakeEntry) Key() string      { return e.key }
 func (e fakeEntry) Value() []byte    { return e.value }
 func (e fakeEntry) Revision() uint64 { return 1 }
 
@@ -437,7 +439,7 @@ func (kv *fakeKV) Get(_ context.Context, key string) (jetstream.KeyValueEntry, e
 	if !ok {
 		return nil, jetstream.ErrKeyNotFound
 	}
-	return fakeEntry{value: v}, nil
+	return fakeEntry{key: key, value: v}, nil
 }
 
 func (kv *fakeKV) Put(_ context.Context, key string, value []byte) (uint64, error) {

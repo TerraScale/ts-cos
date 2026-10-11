@@ -142,6 +142,7 @@ type Event struct {
 	Repo      string          `json:"repo,omitempty"` // owner/name
 	PR        int             `json:"pr,omitempty"`
 	Item      string          `json:"item,omitempty"` // Inbox item ID
+	User      string          `json:"user,omitempty"` // ULID of the user the event is about
 	Synthetic bool            `json:"synthetic,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }

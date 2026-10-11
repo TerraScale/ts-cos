@@ -261,7 +261,14 @@ func checkRollback(ctx context.Context, e *E2EEnv) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entry, err := in.kv.Get(ctx, inboxID("deploy:"+run.ID))
+	if ctx, err = e2eNodeContext(ctx, bus); err != nil {
+		return "", err
+	}
+	inbox, err := UserKV(ctx, in.kv)
+	if err != nil {
+		return "", err
+	}
+	entry, err := inbox.Get(ctx, inboxID("deploy:"+run.ID))
 	if err != nil {
 		problems = append(problems, "Inbox item deploy:"+run.ID+" not filed: "+err.Error())
 	} else {

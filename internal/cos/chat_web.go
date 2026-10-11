@@ -174,7 +174,7 @@ func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(status)
-	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context(), pushUser(r)), st.recentWakes(20)).Render(r.Context(), rw); err != nil {
+	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context()), st.recentWakes(20)).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render settings", err)
 	}
 }

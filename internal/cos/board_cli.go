@@ -82,7 +82,7 @@ func loadBoard(ctx context.Context, s *Store) (boardData, error) {
 	if err != nil {
 		return boardData{}, err
 	}
-	open, _, err := s.Inbox(ctx)
+	open, _, err := inboxFor(ctx, s)
 	if err != nil {
 		return boardData{}, err
 	}

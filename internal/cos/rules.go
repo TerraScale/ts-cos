@@ -346,7 +346,7 @@ func NewRulesEngine(cfg Config, bus *Bus, store *Store) *RulesEngine {
 					return err
 				}
 			}
-			_, err := inbox.Add(ctx, in)
+			_, err := inbox.addNode(ctx, in)
 			return err
 		}}
 	r.consumeFn = r.consume

@@ -13,6 +13,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// inboxTestUser is a signed-in user with a generated ID; no test uses a real account.
+func inboxTestUser() User { return User{ID: newULID(), Name: "tester", Role: roleMember} }
+
 type inboxTestNode struct {
 	bus   *Bus
 	store *Store
@@ -21,7 +24,7 @@ type inboxTestNode struct {
 
 func (n inboxTestNode) item(t *testing.T, id string) (InboxItem, bool) {
 	t.Helper()
-	open, history, err := n.store.Inbox(context.Background())
+	open, history, err := n.store.allInbox(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +86,22 @@ func TestInboxClusterLifecycle(t *testing.T) {
 		t.Cleanup(func() { store.Close() })
 		nodes[i] = inboxTestNode{bus: bus, store: store}
 	}
+	// Node T3s and COS events belong to the first admin, so it is bootstrapped before any node starts.
+	admin := inboxTestUser()
+	js, err := nodes[0].bus.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	busTestReady(t, "first admin bootstrapped", func() bool {
+		attempt, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		auth, err := js.CreateOrUpdateKeyValue(attempt, jetstream.KeyValueConfig{Bucket: authBucket, History: 1, Replicas: 3})
+		if err != nil {
+			return false
+		}
+		_, err = auth.Put(attempt, "bootstrapped", []byte(admin.ID))
+		return err == nil
+	})
 	runCtx, stop := context.WithCancel(ctx)
 	var running sync.WaitGroup
 	defer func() { stop(); running.Wait() }()
@@ -103,13 +122,16 @@ func TestInboxClusterLifecycle(t *testing.T) {
 		}
 	}
 	delta, beta, dev := nodes[0], nodes[1], nodes[2]
+	ctx = WithUser(ctx, admin) // the test drives the Inbox as its owner
 
 	// Filed on one node, the item shows on every node's SQLite mirror.
 	q, err := delta.inbox.Add(ctx, InboxInput{Title: "Which deploy window?", Context: "Prod deploy of ts-cos.", Options: []string{"Tonight", "Tomorrow"}, Ticket: "ts-815"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitInbox(t, nodes, q.ID, func(i InboxItem) bool { return i.Status == "open" && i.Ticket == "TS-815" })
+	waitInbox(t, nodes, q.ID, func(i InboxItem) bool {
+		return i.Status == "open" && i.Ticket == "TS-815" && i.Owner == admin.ID
+	})
 
 	// The same question again updates that item instead of filing a second one.
 	again, err := beta.inbox.Add(ctx, InboxInput{Title: "which  deploy window?", Context: "Now with a rollback plan.", Options: []string{"Tonight", "Tomorrow"}, Ticket: "TS-815"})
@@ -186,7 +208,7 @@ func TestInboxClusterLifecycle(t *testing.T) {
 	}
 	evented, _ := askInput(Ask{Host: "beta", ThreadID: "thread-event", Title: "TS-816 e2e worker", Question: "Run the slow suite?", Options: []string{"Yes", "No"}, Why: "CI time."}).item(time.Now())
 	waitInbox(t, nodes, evented.ID, func(i InboxItem) bool {
-		return i.Source == "worker" && i.Ticket == "TS-816" && i.Blocks == "TS-816 e2e worker" && len(i.Options) == 2
+		return i.Source == "worker" && i.Ticket == "TS-816" && i.Blocks == "TS-816 e2e worker" && len(i.Options) == 2 && i.Owner == admin.ID
 	})
 
 	// Worker NEEDS-USER blocks become items; answers are forwarded to the worker.
@@ -285,7 +307,7 @@ func TestInboxClusterLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fresh.Close()
-	if err := fresh.SaveInboxItem(ctx, InboxItem{ID: "ffffffffffffffff", Status: "open"}); err != nil {
+	if err := fresh.SaveInboxItem(ctx, InboxItem{ID: "ffffffffffffffff", Owner: admin.ID, Status: "open"}); err != nil {
 		t.Fatal(err)
 	}
 	mirrorCtx, stopMirror := context.WithCancel(ctx)

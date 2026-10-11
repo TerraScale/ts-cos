@@ -74,15 +74,16 @@ func TestBudgetE2EPurgeRemovesAppliedMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kv := &deleteKV{fakeKV{data: map[string][]byte{id: body, budgetAppliedKey(id): []byte(budgetTestDay)}}}
-	if err := budgetE2EPurge(&Inbox{kv: kv}, kv, "k")(context.Background()); err != nil {
+	owner := inboxTestUser()
+	kv := &deleteKV{fakeKV{data: map[string][]byte{owner.Key(id): body, budgetAppliedKey(id): []byte(budgetTestDay)}}}
+	if err := budgetE2EPurge(&Inbox{kv: kv}, kv, "k")(WithUser(context.Background(), owner)); err != nil {
 		t.Fatal(err)
 	}
 	if len(kv.data) != 0 {
 		t.Fatalf("purge left %v behind", kv.data)
 	}
-	kv.data[id] = body
-	if err := budgetE2EPurge(&Inbox{kv: kv}, kv, "k")(context.Background()); err != nil {
+	kv.data[owner.Key(id)] = body
+	if err := budgetE2EPurge(&Inbox{kv: kv}, kv, "k")(WithUser(context.Background(), owner)); err != nil {
 		t.Fatalf("purge without an applied marker failed: %v", err)
 	}
 }

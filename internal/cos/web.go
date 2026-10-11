@@ -103,6 +103,10 @@ func (w *Web) InboxAction(rw http.ResponseWriter, r *http.Request) {
 		http.NotFound(rw, r)
 		return
 	}
+	if errors.Is(err, errInboxNotFound) { // another user's item, or none: nothing changed
+		http.NotFound(rw, r)
+		return
+	}
 	var public OperationError
 	if errors.As(err, &public) {
 		http.Error(rw, public.PublicMessage(), http.StatusConflict)

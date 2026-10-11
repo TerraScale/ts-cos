@@ -229,7 +229,8 @@ func TestInboxUnitItemEvent(t *testing.T) {
 }
 
 func TestInboxUnitStoreOrderingAndPrune(t *testing.T) {
-	ctx := context.Background()
+	owner := inboxTestUser()
+	ctx := WithUser(context.Background(), owner)
 	store := openTestStore(t)
 	at := func(d time.Duration) time.Time { return inboxTestNow.Add(d) }
 	items := []InboxItem{
@@ -242,9 +243,14 @@ func TestInboxUnitStoreOrderingAndPrune(t *testing.T) {
 		{ID: "h3", Kind: "question", Title: "superseded", Status: "superseded", Created: at(0), Closed: at(2 * time.Hour)},
 	}
 	for _, item := range items {
+		item.Owner = owner.ID
 		if err := store.SaveInboxItem(ctx, item); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Another user's item with the same ID as one of ours never shows in our Inbox.
+	if err := store.SaveInboxItem(ctx, InboxItem{ID: "a", Owner: newULID(), Kind: "question", Title: "theirs", Status: "open", Created: at(0)}); err != nil {
+		t.Fatal(err)
 	}
 	open, history, err := store.Inbox(ctx)
 	if err != nil {
@@ -271,7 +277,7 @@ func TestInboxUnitStoreOrderingAndPrune(t *testing.T) {
 		t.Fatal(brief)
 	}
 
-	if err := store.PruneInbox(ctx, map[string]bool{"a": true, "c": true}); err != nil {
+	if err := store.PruneInbox(ctx, map[string]bool{owner.Key("a"): true, owner.Key("c"): true}); err != nil {
 		t.Fatal(err)
 	}
 	open, history, err = store.Inbox(ctx)

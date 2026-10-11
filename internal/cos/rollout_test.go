@@ -395,7 +395,22 @@ func TestRolledBackFYI(t *testing.T) {
 	r := newRollout(testRevision(2), "Group the Inbox by ticket", []string{"beta", "delta"}, time.Now())
 	r.From = map[string]string{"delta": testRevision(1), "beta": testRevision(1)}
 	r.Failure = "beta: the watchdog reverted it to its last-known-good build"
-	var err error
+	// Node items belong to the first admin, so it is bootstrapped before the FYI is filed.
+	admin := inboxTestUser()
+	js, err := buses[0].JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	busTestReady(t, "first admin bootstrapped", func() bool {
+		attempt, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		auth, err := js.CreateOrUpdateKeyValue(attempt, jetstream.KeyValueConfig{Bucket: authBucket, History: 1, Replicas: 3})
+		if err != nil {
+			return false
+		}
+		_, err = auth.Put(attempt, "bootstrapped", []byte(admin.ID))
+		return err == nil
+	})
 	busTestReady(t, "Inbox FYI", func() bool { err = rolledBackFYI(ctx, buses[0], "delta", r); return err == nil })
 	if err := rolledBackFYI(ctx, buses[1], "beta", r); err != nil {
 		t.Fatalf("repeat from a resumed leader: %v", err)
@@ -404,7 +419,11 @@ func TestRolledBackFYI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := inbox.kv.Get(ctx, inboxID("deploy:"+r.ID))
+	adminView, err := UserKV(WithUser(ctx, admin), inbox.kv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := adminView.Get(ctx, inboxID("deploy:"+r.ID))
 	if err != nil {
 		t.Fatal(err)
 	}

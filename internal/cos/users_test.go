@@ -408,3 +408,27 @@ func authTestServer(t *testing.T, auth *Auth) *httptest.Server {
 func authTestHTTP(t *testing.T) authTestClient {
 	return authTestClient{t, &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
+
+// TestSplitUserKey accepts only "u.<ULID>.<name>", so a bare "<ULID>.x" or a malformed owner never reads as per-user.
+func TestSplitUserKey(t *testing.T) {
+	id := newULID()
+	for key, want := range map[string]struct {
+		owner, name string
+		ok          bool
+	}{
+		"u." + id + ".x":   {id, "x", true},
+		id + ".x":          {},
+		"u.notulid.x":      {},
+		"u." + id + ".":    {},
+		"x":                {},
+		"u." + id:          {},
+		"u.":               {},
+		"v." + id + ".x":   {},
+		"u." + id + ".a.b": {id, "a.b", true},
+	} {
+		owner, name, ok := splitUserKey(key)
+		if owner != want.owner || name != want.name || ok != want.ok {
+			t.Errorf("splitUserKey(%q) = %q, %q, %v; want %q, %q, %v", key, owner, name, ok, want.owner, want.name, want.ok)
+		}
+	}
+}
