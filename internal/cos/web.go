@@ -55,6 +55,8 @@ func (w *Web) routes() *http.ServeMux {
 	mux.HandleFunc("GET /tokens/events", w.tokensEvents)
 	mux.HandleFunc("GET /release", clusterRelease.events)
 	mux.HandleFunc("GET /version", clusterRelease.version)
+	mux.HandleFunc("GET /work", w.workPage)
+	mux.HandleFunc("GET /work/events", w.workEvents)
 	w.autopilotRoutes(mux)
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := View(r.Context(), w.Store)

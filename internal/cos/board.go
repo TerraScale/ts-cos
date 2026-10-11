@@ -17,6 +17,15 @@ var (
 
 const boardRecent = 7 * 24 * time.Hour
 
+// boardStageArg maps "in-review" or "review" to its row stage; "" means every stage.
+func boardStageArg(arg string) (string, bool) {
+	if arg == "review" {
+		return "in review", true
+	}
+	stage := strings.ReplaceAll(arg, "-", " ")
+	return stage, stage == "" || slices.Contains(boardStages, stage)
+}
+
 type BoardThread struct {
 	Host, ThreadID, Title, Model, Status string
 	NeedsInput                           bool

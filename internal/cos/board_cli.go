@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"slices"
 	"strings"
 	"time"
 )
@@ -23,14 +22,12 @@ func boardCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 	stage := ""
 	ticket := ""
 	if len(args) == 1 {
+		var ok bool
 		switch {
 		case ticketPattern.FindString(args[0]) == args[0]:
 			ticket = strings.ToUpper(args[0])
-		case args[0] == "review":
-			stage = "in review"
 		default:
-			stage = strings.ReplaceAll(args[0], "-", " ")
-			if !slices.Contains(boardStages, stage) {
+			if stage, ok = boardStageArg(args[0]); !ok {
 				return usage
 			}
 		}
@@ -40,10 +37,11 @@ func boardCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 		return err
 	}
 	defer s.Close()
-	rows, err := loadBoard(ctx, s)
+	data, err := loadBoard(ctx, s)
 	if err != nil {
 		return err
 	}
+	rows := data.Rows
 	if ticket != "" {
 		row := BoardRow{Ticket: ticket}
 		for _, r := range rows {
@@ -66,22 +64,35 @@ func boardCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 	return output(w, map[string]any{"rows": out})
 }
 
-func loadBoard(ctx context.Context, s *Store) ([]BoardRow, error) {
+// boardData is everything the Work board reads from the local store; the CLI and the page share it.
+type boardData struct {
+	Rows  []BoardRow
+	Live  Live
+	Usage []UsageRow // the last seven days
+}
+
+// loadBoard reads SQLite only, so a page view makes no T3 or Forgejo calls.
+func loadBoard(ctx context.Context, s *Store) (boardData, error) {
+	now := time.Now()
 	tasks, err := s.allTasks(ctx)
 	if err != nil {
-		return nil, err
+		return boardData{}, err
 	}
 	live, err := s.Live(ctx)
 	if err != nil {
-		return nil, err
+		return boardData{}, err
 	}
 	open, _, err := s.Inbox(ctx)
 	if err != nil {
-		return nil, err
+		return boardData{}, err
 	}
 	spans, deployedAt, err := s.LatestEvents(ctx)
 	if err != nil {
-		return nil, err
+		return boardData{}, err
 	}
-	return BuildBoard(tasks, live, open, spans, deployedAt, time.Now()), nil
+	usage, err := s.Usage(ctx, now.Add(-boardRecent).UTC().Format("2006-01-02"))
+	if err != nil {
+		return boardData{}, err
+	}
+	return boardData{Rows: BuildBoard(tasks, live, open, spans, deployedAt, now), Live: live, Usage: usage}, nil
 }
