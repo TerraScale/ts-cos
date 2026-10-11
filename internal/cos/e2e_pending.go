@@ -25,8 +25,6 @@ var e2ePending = func() []E2ECheck {
 		{"failure.t3-schema-change", "TS-812", "T3 contract check"},
 		{"failure.nats-restart", "TS-810", "deployed cluster"},
 		{"failure.sqlite-disk-full", "TS-810", "deployed cluster"},
-		{"deploy.canary", "TS-818", "rolling canary deploy"},
-		{"deploy.rollback", "TS-818", "automatic rollback"},
 	}
 	checks := make([]E2ECheck, len(rows))
 	for i, r := range rows {

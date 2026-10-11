@@ -332,6 +332,8 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "access.logout", Stream: "TS-810", Run: accessCheck(checkLogout)},
 		E2ECheck{ID: "access.password-change", Stream: "TS-810", Run: accessCheck(checkPasswordChange)},
 		E2ECheck{ID: "deploy.reconnect", Stream: "TS-818", Run: accessCheck(checkReconnect)},
+		E2ECheck{ID: "deploy.canary", Stream: "TS-818", Run: checkCanary},
+		E2ECheck{ID: "deploy.rollback", Stream: "TS-818", Run: checkRollback},
 		E2ECheck{ID: "gate.self-change", Stream: "TS-817", Run: checkSelfGate},
 		E2ECheck{ID: "inbox.add-visible", Stream: "TS-815", Run: inboxCheck(checkInboxAddVisible)},
 		E2ECheck{ID: "inbox.answer-closes", Stream: "TS-815", Run: inboxCheck(checkInboxAnswerCloses)},
