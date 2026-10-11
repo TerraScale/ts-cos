@@ -826,12 +826,14 @@ func (d *sendDeliverer) moveP0(ctx context.Context, kv jetstream.KeyValue, key s
 	case id == "":
 		return fail(errors.New("the Sol successor launched without a thread id"))
 	}
-	if err := d.Call(ctx, e.Host, "settle", []string{e.Thread}, nil); err != nil {
-		return fail(err)
-	}
+	// The successor is running, so the entry goes even when the settle fails: a later delivery would reach the old thread.
+	settleErr := d.Call(ctx, e.Host, "settle", []string{e.Thread}, nil)
 	queued := e.Queued
 	if err := casSend(ctx, kv, key, func(cur *queuedSend, found bool) bool { return found && !cur.Queued.Equal(queued) }); err != nil {
 		return fail(err)
+	}
+	if settleErr != nil {
+		return fail(fmt.Errorf("successor %s started; settle the old thread by hand: %w", id, settleErr))
 	}
 	slog.Info("COS moved a P0 to Sol", "ticket", ticket, "thread", e.Thread, "successor", id)
 	return d.File(ctx, p0SolInbox(e.Host, ticket))

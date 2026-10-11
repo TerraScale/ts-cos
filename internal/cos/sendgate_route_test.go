@@ -171,7 +171,9 @@ func TestGateLaunchMovesStalledP0ToSol(t *testing.T) {
 type p0Calls struct {
 	infos     map[string]map[string]any
 	launchErr error // what launch returns after recording the call
-	n         int   // bus calls made
+	settleErr error // what settle returns after recording the call
+	sends     []string
+	n         int // bus calls made
 	launches  []string
 	settles   []string
 }
@@ -189,6 +191,9 @@ func (c *p0Calls) call(_ context.Context, _, cmd string, args []string, out any)
 		*out.(*map[string]any) = map[string]any{"threadId": fmt.Sprintf("succ-%d", len(c.launches))}
 	case "settle":
 		c.settles = append(c.settles, args[0])
+		return c.settleErr
+	case "send":
+		c.sends = append(c.sends, args[0])
 	default:
 		return errors.New("unexpected " + cmd)
 	}
@@ -332,6 +337,40 @@ func TestStalledP0MovesOnceToSol(t *testing.T) {
 	}
 	if len(calls.launches) != 1 || len(calls.settles) != 1 {
 		t.Fatalf("launches %d settles %d after a second tick, want still one", len(calls.launches), len(calls.settles))
+	}
+}
+
+// A settle that fails after the successor started still drops the entry and files one item; later ticks never send to the old thread.
+func TestStalledP0SettleFailureDropsEntryOnce(t *testing.T) {
+	e, calls := stallEnv(t)
+	calls.settleErr = errors.New("settle timeout")
+	d := e.deliverer()
+	d.Call = calls.call
+	if err := d.tick(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := e.entry("p0"); found {
+		t.Fatal("p0 entry survived a started successor")
+	}
+	if len(e.files) != 1 || e.files[0].Key != "p0-sol-failed:TS-830" || !strings.Contains(e.files[0].Title, "successor succ-1 started") {
+		t.Fatalf("inbox %+v, want one p0-sol-failed item naming the successor", e.files)
+	}
+	e.setRoom(true, true)
+	for range 3 {
+		e.advance(sendTick)
+		d = e.deliverer()
+		d.Call = calls.call
+		if err := d.tick(e.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, thread := range calls.sends {
+		if thread == "p0" {
+			t.Fatal("a later tick sent to the old thread")
+		}
+	}
+	if len(e.files) != 1 {
+		t.Fatalf("%d inbox items after later ticks, want one", len(e.files))
 	}
 }
 
