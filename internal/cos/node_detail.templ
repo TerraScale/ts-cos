@@ -26,6 +26,7 @@ templ nodeDetailPage(h chatHeader, c NodeCard, window string, charts []nodeChart
 						</form>
 					</div>
 				</section>
+				@nodeRestarts(c)
 				for _, chart := range charts {
 					@nodeChartView(chart)
 				}

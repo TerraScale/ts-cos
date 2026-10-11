@@ -71,6 +71,10 @@ Synthetic e2e hosts raise info-level alerts that never reach web push.
 `/nodes` shows a live card per node with current values and last-hour sparklines.
 `/nodes/<host>` charts 1 h / 24 h / 7 d.
 
+Each node classifies its own seven-day journal (`cos.service` and `cos-e2e`) every 5 minutes
+into the replicated `cos_node_restarts` bucket as deploy, e2e, unexpected or manual restarts.
+Tiles count deploy and e2e restarts against unexpected ones; `/nodes/<host>` lists every restart.
+
 ### Sign-in and public URL
 
 `https://cos.terrascale.tech` and `http://<host>:8790` on the tailnet serve the
