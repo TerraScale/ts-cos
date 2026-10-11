@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,12 @@ func chatTestWait(t *testing.T, description string, check func() bool) {
 // chatTestCluster starts three embedded COS nodes routed together.
 func chatTestCluster(t *testing.T, ctx context.Context) ([]*Bus, []Config) {
 	t.Helper()
+	return chatTestClusterHandled(t, ctx, func(context.Context, string, []string) (any, error) { return nil, nil })
+}
+
+// chatTestClusterHandled is chatTestCluster with the operations every node answers.
+func chatTestClusterHandled(t *testing.T, ctx context.Context, handle OperationHandler) ([]*Bus, []Config) {
+	t.Helper()
 	ports := busTestPorts(t, 6)
 	hosts := []string{"delta", "beta", "mariogk-dev"}
 	nodes := make([]*Bus, 3)
@@ -51,7 +58,7 @@ func chatTestCluster(t *testing.T, ctx context.Context) ([]*Bus, []Config) {
 		nodesCfg[i] = bn
 	}
 	for i := range hosts {
-		bus, err := startBus(ctx, configs[i], nodesCfg[i], func(context.Context, string, []string) (any, error) { return nil, nil })
+		bus, err := startBus(ctx, configs[i], nodesCfg[i], handle)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -493,4 +500,78 @@ func TestChatAnswerPartial(t *testing.T) {
 			t.Fatalf("ask = %+v", e.Ask)
 		}
 	})
+}
+
+// Two answers to the last question race: the revision fence lets one write win, and only the winner reaches T3.
+func TestChatAnswerFence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	var mu sync.Mutex
+	responds := 0
+	nodes, _ := chatTestClusterHandled(t, ctx, func(_ context.Context, command string, _ []string) (any, error) {
+		if command == "respond" {
+			mu.Lock()
+			responds++
+			mu.Unlock()
+		}
+		return nil, nil
+	})
+	chat := NewChat()
+	go chat.Run(ctx, nodes[0])
+	for _, n := range nodes[1:] {
+		go NewChat().Run(ctx, n)
+	}
+	chatTestWait(t, "chat ready", chat.Ready)
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	web := NewWeb(store, nil)
+	web.Chat = chat
+	questions := []ChatQuestion{
+		{ID: "pick", Header: "Deploy", Text: "Which window?", Options: []string{"Now", "Tonight"}},
+		{ID: "scope", Header: "Scope", Text: "How much?", Options: []string{"Small", "Large"}},
+	}
+	e, err := chat.Put(ctx, ChatEntry{Role: "cos", Ask: &ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q1", Questions: questions}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatTestWait(t, "ask entry", func() bool { _, ok := chat.Entry(e.ID); return ok })
+	post := func(query string) int {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/chat/answer?"+query, nil)
+		req.RemoteAddr = "127.0.0.1:4000"
+		req.Header.Set("Datastar-Request", "true")
+		rec := httptest.NewRecorder()
+		web.routes().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post("e=" + e.ID + "&q=pick&o=1"); code != http.StatusNoContent {
+		t.Fatal("first answer:", code)
+	}
+	codes := make(chan int, 2)
+	var wg sync.WaitGroup
+	for _, o := range []string{"0", "1"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes <- post("e=" + e.ID + "&q=scope&o=" + o)
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	var got []int
+	for code := range codes {
+		got = append(got, code)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []int{http.StatusNoContent, http.StatusConflict}) {
+		t.Fatal("racing answers:", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if responds != 1 {
+		t.Fatalf("respond deliveries = %d, want 1", responds)
+	}
 }

@@ -305,6 +305,22 @@ func (e *agentTestEnv) cosEntries() []ChatEntry {
 	return out
 }
 
+// waitAsk waits for the mirror to show an ask and returns a copy of its entry.
+func (e *agentTestEnv) waitAsk() ChatEntry {
+	e.t.Helper()
+	var ask ChatEntry
+	chatTestWait(e.t, "ask in chat", func() bool {
+		for _, entry := range e.chat.Entries() {
+			if entry.Ask != nil {
+				ask, _ = e.chat.Entry(entry.ID)
+				return true
+			}
+		}
+		return false
+	})
+	return ask
+}
+
 // savePRs writes a live snapshot whose open PRs are ts-cos#<number>.
 func (e *agentTestEnv) savePRs(numbers ...int) {
 	e.t.Helper()
@@ -479,6 +495,146 @@ func TestAgent(t *testing.T) {
 		e.say("settle")
 		if n := asks(); n != 1 {
 			t.Fatalf("asks = %d, want 1", n)
+		}
+	})
+
+	t.Run("mark done keeps the answers recorded in the ask", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("pending"))
+		e.say("deploy?")
+		e.step()
+		ask := e.waitAsk()
+		ask.Ask.Answers = map[string]string{"pick": "Now"}
+		if err := e.chat.Replace(ctx, ask); err != nil {
+			t.Fatal(err)
+		}
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
+		e.say("thanks")
+		e.step()
+		chatTestWait(t, "ask marked done", func() bool {
+			entry, ok := e.chat.Entry(ask.ID)
+			return ok && entry.Ask.Done
+		})
+		if entry, _ := e.chat.Entry(ask.ID); entry.Ask.Answers["pick"] != "Now" {
+			t.Fatalf("answers = %v", entry.Ask.Answers)
+		}
+	})
+
+	t.Run("mark done does not overwrite an answer written after its read", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("pending"))
+		e.say("deploy?")
+		e.step()
+		stale := e.waitAsk()
+		answered, _ := e.chat.Entry(stale.ID)
+		answered.Ask.Answers = map[string]string{"pick": "Now"}
+		if err := e.chat.Replace(ctx, answered); err != nil {
+			t.Fatal(err)
+		}
+		// Once this message shows, the watcher has applied the answer, so rolling the cache back is the only stale copy left.
+		e.say("settle")
+		e.chat.mu.Lock()
+		e.chat.entries[stale.ID] = stale
+		e.chat.mu.Unlock()
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
+		var apiErr *jetstream.APIError
+		if err := e.a.Step(ctx); !errors.As(err, &apiErr) || apiErr.ErrorCode != jetstream.JSErrCodeStreamWrongLastSequence {
+			t.Fatal("stale mark done:", err)
+		}
+		kv, err := e.chatKV.Get(ctx, stale.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored ChatEntry
+		if err := json.Unmarshal(kv.Value(), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored.Ask.Done || stored.Ask.Answers["pick"] != "Now" {
+			t.Fatalf("stored ask = %+v", stored.Ask)
+		}
+		// The cache catches up with the stored entry, and the next step marks the ask done from it.
+		e.chat.apply(kv)
+		e.step()
+		chatTestWait(t, "ask marked done", func() bool {
+			entry, ok := e.chat.Entry(stale.ID)
+			return ok && entry.Ask.Done
+		})
+		if entry, _ := e.chat.Entry(stale.ID); entry.Ask.Answers["pick"] != "Now" {
+			t.Fatalf("answers = %v", entry.Ask.Answers)
+		}
+	})
+
+	t.Run("a question known only from its turn item becomes an ask", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		e.fake.projection = `{"runs":[{"id":"r1","status":"completed"}],"turnItems":[{"type":"user_input_request","runId":"r1","requestId":"q1","questions":[{"id":"pick","header":"Deploy","question":"Which window?","options":[{"label":"Now"},{"label":"Tonight"}]}]}],"runtimeRequests":[{"id":"q1","status":"pending","createdAt":"2026-10-11T10:00:00Z","payload":null,"request":null}],"providerTurns":[]}`
+		e.say("deploy?")
+		e.step()
+		ask := e.waitAsk()
+		if ask.Ask.RequestID != "q1" || len(ask.Ask.Questions) != 1 || !slices.Equal(ask.Ask.Questions[0].Options, []string{"Now", "Tonight"}) {
+			t.Fatalf("ask = %+v", ask.Ask)
+		}
+	})
+
+	t.Run("failover keeps the open ask until the new thread resolves it", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("pending"))
+		e.say("deploy?")
+		e.step()
+		ask := e.waitAsk()
+		e.say("are you there?") // the wake that relaunches the thread on this host
+		st := e.state()
+		st.Host = "beta"
+		e.setState(st)
+		e.step() // claim
+		e.step() // relaunch
+		e.expectLaunches(2)
+		if got := e.state().Asked["q1"]; got != ask.ID {
+			t.Fatalf("asked = %v, want q1 -> %s", e.state().Asked, ask.ID)
+		}
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
+		e.say("status?")
+		e.step()
+		chatTestWait(t, "ask marked done", func() bool {
+			entry, ok := e.chat.Entry(ask.ID)
+			return ok && entry.Ask.Done
+		})
+		if _, ok := e.state().Asked["q1"]; ok {
+			t.Fatal("asked still open after the new thread resolved it")
+		}
+	})
+
+	t.Run("restart keeps the open ask until the fresh thread resolves it", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("pending"))
+		e.say("deploy?")
+		e.step()
+		ask := e.waitAsk()
+		if _, err := e.agentKV.Put(ctx, "restart", []byte("new plan")); err != nil {
+			t.Fatal(err)
+		}
+		e.say("hi")
+		e.step()
+		e.expectLaunches(2)
+		if got := e.state().Asked["q1"]; got != ask.ID {
+			t.Fatalf("asked = %v, want q1 -> %s", e.state().Asked, ask.ID)
+		}
+		if entry, _ := e.chat.Entry(ask.ID); entry.Ask.Done {
+			t.Fatal("ask closed before the fresh thread saw the request resolve")
+		}
+		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
+		e.say("status?")
+		e.step()
+		chatTestWait(t, "ask marked done", func() bool {
+			entry, ok := e.chat.Entry(ask.ID)
+			return ok && entry.Ask.Done
+		})
+		if _, ok := e.state().Asked["q1"]; ok {
+			t.Fatal("asked still open after the fresh thread resolved it")
 		}
 	})
 
