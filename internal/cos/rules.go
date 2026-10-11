@@ -152,12 +152,16 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		}
 	}
 	if pr == nil && (e.Kind == KindTurnFailed || e.Kind == KindTurnInterrupted) {
+		// Provider failures are state: a wake would only retry into the same limit or outage.
+		switch providerFailure(e) {
+		case "limit":
+			return []Decision{d(ClassRecord, "limit-failure", "stopped on a provider limit: errors become state, no wake")}
+		case "api":
+			return []Decision{d(ClassRecord, "api-failure", "stopped on an API error: errors become state, no wake")}
+		}
 		// findThread matches subagents too: the parent owns their retries, not the rules engine.
 		if owner != nil && owner.Lineage != nil {
 			return []Decision{d(ClassRecord, "child-thread", "delegated subagent: its parent thread owns it")}
-		}
-		if transientFailure(e.Summary) {
-			return []Decision{d(ClassRecord, "transient-failure", "transient ("+e.Summary+"): no wake, T3 retries")}
 		}
 	}
 	if running, why := ticketRunning(live, paused, ticket); !running {
@@ -231,15 +235,32 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 	return append(out, d(ClassRecord, "progress", e.Summary))
 }
 
-// transientFailure: provider limits and outages clear on their own; waking the worker only adds load.
-func transientFailure(summary string) bool {
-	s := strings.ToLower(summary)
-	for _, marker := range []string{"rate limit", "overloaded", "429", "529", "timeout", "temporarily unavailable"} {
-		if strings.Contains(s, marker) {
-			return true
-		}
+// providerFailure names a failure caused by the provider: "limit" (usage or rate limit),
+// "api" (outage or transport), or "". T3 sets errorClass; the markers catch wrapped API errors.
+func providerFailure(e Event) string {
+	var data struct {
+		ErrorClass string `json:"errorClass"`
+		Error      string `json:"error"`
 	}
-	return false
+	_ = json.Unmarshal(e.Data, &data)
+	if data.ErrorClass == "usage_limit" {
+		return "limit"
+	}
+	if data.ErrorClass == "provider_error" || data.ErrorClass == "transport_error" {
+		return "api"
+	}
+	text := strings.ToLower(data.Error + " " + e.Summary)
+	if containsAny(text, "rate limit", "rate_limit", "usage limit", "usage_limit", "cooling down", "temporarily limiting", "quota", "429", "too many requests") {
+		return "limit"
+	}
+	if containsAny(text, "529", "overloaded", "api error", "timeout", "temporarily unavailable") {
+		return "api"
+	}
+	return ""
+}
+
+func containsAny(s string, markers ...string) bool {
+	return slices.ContainsFunc(markers, func(m string) bool { return strings.Contains(s, m) })
 }
 
 // ticketRunning: work runs while its key is on an open thread or an open PR, unless the ticket is paused.
@@ -482,15 +503,16 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 		}
 	}
 	for _, d := range decisions {
+		// Errors become state, not retries: a failed wake is published and the event is acked.
 		if err := r.execute(ctx, e.ID, d, pr, key, memory); err != nil {
-			return err
+			r.Publish(ctx, AutopilotEntry{Kind: "error", Event: e.ID, Ticket: d.Ticket, Target: decisionTarget(d), Action: d.Rule, Reason: d.Reason + "; wake failed: " + publicText(err)})
 		}
 	}
 	return nil
 }
 
 // execute runs one decision's action, then publishes it with its reason. A failed wake
-// returns an error instead, so the event is retried: the worker must hear it.
+// returns an error without publishing or writing wake memory: the caller records it.
 func (r *RulesEngine) execute(ctx context.Context, eventID string, d Decision, pr *PRFacts, key string, memory WakeMemory) error {
 	entry := AutopilotEntry{Kind: d.Class, Event: eventID, Ticket: d.Ticket, Target: decisionTarget(d), Action: d.Rule, Reason: d.Reason}
 	switch {
