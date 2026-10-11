@@ -34,6 +34,13 @@ func mainHead(ctx context.Context, cfg Config) (e2eMain, error) {
 	return e2eMain{branch.Commit.ID, branch.Commit.Timestamp}, nil
 }
 
+// e2eRestartAwk splits systemd's automatic restarts into deploy installs (the node logged
+// "restarting into another build" and exited for systemd to start the new build) and the
+// rest: crashes, kills, failed trials.
+const e2eRestartAwk = `/restarting into another build/ { deploy = 1 }
+/Scheduled restart job/ { if (deploy) installs++; else unexpected++; deploy = 0 }
+END { print "AutoRestarts=" unexpected + 0; print "DeployRestarts=" installs + 0 }`
+
 // e2eFacts is one ssh round trip per host: systemd state, the running binary's revision and journal counts.
 type e2eFacts map[string]string
 
@@ -41,7 +48,7 @@ const e2eFactsScript = `unit=` + e2eUnit + `
 systemctl --user show "$unit" -p LoadState -p ActiveState -p SubState -p NRestarts -p MainPID
 pid=$(systemctl --user show "$unit" -p MainPID --value)
 if [ "${pid:-0}" != 0 ]; then echo "Version=$(/proc/$pid/exe version 2>&1 | tr -d '\n ')"; fi
-echo "AutoRestarts=$(journalctl --user -u "$unit" --since -25min -o cat --no-pager 2>/dev/null | grep -c 'Scheduled restart job')"
+journalctl --user -u "$unit" --since -25min -o cat --no-pager 2>/dev/null | awk '` + e2eRestartAwk + `'
 # Errors count since the later of 17 min ago and this process's start: 17 min (not the 20 min run
 # period) leaves out transient errors from the previous run's own chaos, and the process start
 # keeps a rollback from failing on the replaced build's lines (crash loops show in AutoRestarts).
@@ -132,8 +139,8 @@ func checkVersion(ctx context.Context, e *E2EEnv, host string) (string, error) {
 	return "", errors.New(state)
 }
 
-// shortcut: counts systemd auto-restarts in the last 25 min (one e2e period plus slack); the e2e
-// leader kill adds at most one. Upgrade to per-restart attribution if leader-kill runs more often.
+// Unexpected restarts in the last 25 min (one e2e period plus slack); the e2e leader kill adds
+// at most one. Deploy installs are reported, not counted.
 const maxAutoRestarts = 2
 
 func checkRestarts(ctx context.Context, e *E2EEnv, host string) (string, error) {
@@ -145,7 +152,7 @@ func checkRestarts(ctx context.Context, e *E2EEnv, host string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("%s: cannot read journal restarts: %q", host, f["AutoRestarts"])
 	}
-	state := fmt.Sprintf("%s: %d automatic restarts in 25 min, NRestarts=%s", host, n, f["NRestarts"])
+	state := fmt.Sprintf("%s: %d automatic restarts in 25 min (plus %s deploy installs), NRestarts=%s", host, n, f["DeployRestarts"], f["NRestarts"])
 	if n > maxAutoRestarts {
 		return "", errors.New(state)
 	}

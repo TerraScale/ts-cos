@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/netip"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -20,15 +21,16 @@ const (
 
 // healthyFacts is what a host reports when every check should pass.
 var healthyFacts = map[string]string{
-	"LoadState":    "loaded",
-	"ActiveState":  "active",
-	"SubState":     "running",
-	"NRestarts":    "0",
-	"MainPID":      "123",
-	"Version":      versionJSON(testSHA, false),
-	"AutoRestarts": "0",
-	"LogErrors":    "0",
-	"LogSample":    "",
+	"LoadState":      "loaded",
+	"ActiveState":    "active",
+	"SubState":       "running",
+	"NRestarts":      "0",
+	"MainPID":        "123",
+	"Version":        versionJSON(testSHA, false),
+	"AutoRestarts":   "0",
+	"DeployRestarts": "0",
+	"LogErrors":      "0",
+	"LogSample":      "",
 }
 
 func versionJSON(rev string, modified bool) string {
@@ -292,6 +294,7 @@ func TestE2ECheckRestarts(t *testing.T) {
 		{"two automatic restarts", "pass", "2 automatic restarts", with("AutoRestarts", "2")},
 		{"three automatic restarts", "fail", "3 automatic restarts", with("AutoRestarts", "3")},
 		{"non-numeric count", "fail", "cannot read journal restarts", with("AutoRestarts", "lots")},
+		{"deploy installs are reported, not counted", "pass", "plus 6 deploy installs", with("DeployRestarts", "6")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -304,6 +307,29 @@ func TestE2ECheckRestarts(t *testing.T) {
 				t.Fatalf("evidence %q does not contain %q", ev, tc.wantEvidence)
 			}
 		})
+	}
+}
+
+// TestE2ERestartAttribution feeds beta's journal from the first live e2e failure (22:52-23:00)
+// plus a failed trial and a kill to the attribution the facts script runs on each host.
+func TestE2ERestartAttribution(t *testing.T) {
+	journal := `INFO restarting into another build action=install revision=77edc3a27f77
+cos.service: Scheduled restart job, restart counter is at 6.
+Started TerraScale COS.
+INFO restarting into another build action=install revision=d84e2d459ea0
+cos.service: Scheduled restart job, restart counter is at 7.
+INFO restarting into another build action=install revision=fe8667f253fd
+cos.service: Scheduled restart job, restart counter is at 8.
+cos.service: start operation timed out. Terminating.
+cos.service: Scheduled restart job, restart counter is at 9.
+cos.service: Main process exited, code=killed, status=9/KILL
+cos.service: Scheduled restart job, restart counter is at 10.
+`
+	cmd := exec.Command("awk", e2eRestartAwk)
+	cmd.Stdin = strings.NewReader(journal)
+	out, err := cmd.Output()
+	if err != nil || string(out) != "AutoRestarts=2\nDeployRestarts=3\n" {
+		t.Fatalf("attribution = %q, %v", out, err)
 	}
 }
 
