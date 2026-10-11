@@ -294,6 +294,26 @@ func TestClassify(t *testing.T) {
 			},
 		},
 		{
+			name:  "cancelled top-level run is recorded, never woken",
+			event: Event{ID: "t3:turn-20", Source: SourceT3, Kind: KindTurnInterrupted, Summary: "turn cancelled", Host: "beta", Thread: "t1"},
+			want:  []Decision{{Class: ClassRecord, Rule: "interrupted"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Wake != "" || got[0].Model != nil {
+					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
+				}
+			},
+		},
+		{
+			name:  "credential cooldown is a limit: record and one resume, no wake",
+			event: Event{ID: "t3:turn-21", Source: SourceT3, Kind: KindTurnFailed, Summary: "API Error: Server is temporarily limiting requests (not your usage limit) · All credentials for model claude-opus-5-5 are cooling down", Host: "beta", Thread: "t1"},
+			want:  []Decision{{Class: ClassRecord, Rule: "limit-failure"}, {Class: ClassAct, Rule: "limit-resume"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Wake != "" || got[0].Model != nil {
+					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
+				}
+			},
+		},
+		{
 			name:   "repeated top-level rate limit does not escalate the model",
 			event:  Event{ID: "t3:turn-15", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached. Try again later.", Host: "beta", Thread: "t1"},
 			memory: WakeMemory{Sig: "failed:run failed: Claude API rate limit reached. Try again later.", SHA: "t3:turn-15", Count: 1},

@@ -505,8 +505,12 @@ the replicated bucket `COS_AGENT`; the chat stays in `COS_CHAT`, never in T3.
 ```sh
 cos agent                        # thread, host, last restart reason
 cos agent restart 'new plan'     # fresh brief at the next wake
+cos agent wakes                  # last 20 wakes: reason, items, tokens, API-equivalent cost
 cos context set focus '<text>'   # change focus: COS restarts with a fresh brief now
 ```
+
+Each COS wake records its tokens and API-equivalent cost (Opus 5.5 rates) once its
+run finishes; the subscription pays the real bill. `/settings` shows the same list.
 
 ## Autopilot: heartbeat and rules engine
 
@@ -523,7 +527,7 @@ event is classified with zero tokens:
 | Class | When | What happens |
 |---|---|---|
 | ACT | READY `cos/` or `cos-hold/` PR of a running ticket | squash-merge |
-| ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed or interrupted run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
+| ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
 | ACT | the same failure after a new push | model escalation (Opus 5.5 high → xhigh) plus ESCALATE |
 | ACT | a top-level thread on any Haiku model | switch to Opus 5.5 high |
 | RECORD | paused tickets, tickets with no open thread or PR (`not-running`), progress, main changes | feed only |

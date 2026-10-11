@@ -37,7 +37,7 @@ var rulesBackoff = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second
 
 // Wake texts are behavior files (behavior/templates/wake_<rule>.tmpl), hot-reloaded
 // over NATS; a bundle missing one, or rendering more than one line, is rejected.
-var wakeRules = []string{"ci", "review", "conflict", "failed", "interrupted", "size", "slice", "budget"}
+var wakeRules = []string{"ci", "review", "conflict", "failed", "size", "slice", "budget"}
 
 type wakeData struct {
 	PR, Checks, Summary string
@@ -200,6 +200,10 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		if owner != nil && owner.Lineage != nil {
 			return []Decision{d(ClassRecord, "child-thread", "delegated subagent: its parent thread owns it")}
 		}
+		if e.Kind == KindTurnInterrupted {
+			// A cancel or interrupt is deliberate (the user, a COS stop, or a steer): waking it again is spam.
+			return []Decision{d(ClassRecord, "interrupted", "run interrupted: "+e.Summary+"; no wake")}
+		}
 	}
 	if running, why := ticketRunning(live, paused, ticket); !running {
 		rule := "not-running"
@@ -266,8 +270,6 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 	switch e.Kind {
 	case KindTurnFailed:
 		return wake("failed", "run failed: "+e.Summary, e.ID, data)
-	case KindTurnInterrupted:
-		return wake("interrupted", "run interrupted: "+e.Summary, e.ID, data)
 	}
 	return append(out, d(ClassRecord, "progress", e.Summary))
 }

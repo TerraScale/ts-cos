@@ -42,11 +42,42 @@ func TestCSSServedPublicWithCacheHeaders(t *testing.T) {
 	if rec := get("/static/missing.png"); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing png = %d", rec.Code)
 	}
+	// Not a {file} match, so it falls to the auth gate; it must never be served as a 200.
+	if rec := get("/static/css/tokens.css"); rec.Code == http.StatusOK {
+		t.Fatalf("unbundled css served = %d", rec.Code)
+	}
+	if rec := get("/static/oxanium-latin-wght-normal.woff2"); rec.Code != 200 || rec.Header().Get("Content-Type") != "font/woff2" {
+		t.Fatalf("font = %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
 	for file, typ := range map[string]string{"icon.svg": "image/svg+xml", "icon-192.png": "image/png", "badge.svg": "image/svg+xml", "badge-96.png": "image/png"} {
 		rec := get("/static/" + file)
 		if rec.Code != 200 || rec.Header().Get("Content-Type") != typ || rec.Header().Get("Cache-Control") != "public, max-age=86400" ||
 			rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 			t.Fatalf("GET %s = %d %v", file, rec.Code, rec.Header())
+		}
+	}
+}
+
+func TestCSSBundleLayersAndFiles(t *testing.T) {
+	const order = "@layer base, layout, legacy, components, features, utilities;\n"
+	if !strings.HasPrefix(string(cosCSS), order) {
+		t.Fatalf("bundle starts with %q", string(cosCSS)[:min(len(cosCSS), 80)])
+	}
+	// The first rule of each file must reach the bundle, so a missing file or wrong wrapper fails here.
+	firstRule := regexp.MustCompile(`(?m)^[^\s/*][^\n]*\{$`)
+	for _, file := range []string{"tokens.css", "base.css", "layout.css", "legacy.css"} {
+		data, err := staticFS.ReadFile("static/css/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rule := firstRule.FindString(string(data))
+		if rule == "" || !strings.Contains(string(cosCSS), rule) {
+			t.Errorf("%s: first rule %q missing from bundle", file, rule)
+		}
+	}
+	for _, wrap := range []string{"@layer base {", "@layer layout {", "@layer legacy {"} {
+		if !strings.Contains(string(cosCSS), wrap) {
+			t.Errorf("bundle lacks %q", wrap)
 		}
 	}
 }

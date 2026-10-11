@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 type Web struct {
@@ -26,6 +28,7 @@ type Web struct {
 	Chat        *Chat
 	KPI         *KPIBoard
 	Bus         *Bus
+	agentKV     jetstream.KeyValue // COS_AGENT, opened on first use
 }
 
 func NewWeb(s *Store, auth *Auth) *Web {

@@ -1,39 +1,28 @@
-/* 1. Tokens */
+/* shortcut: the pre-design-system cos.css on ts tokens, below the kit's components layer so ts-* classes win; PR 2 moves pages to the kit and deletes this file. */
 :root {
-  color-scheme: light dark;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  --t-xs: 0.75rem; --t-sm: 0.8125rem; --t-md: 0.875rem; --t-lg: 1rem; --t-xl: 1.25rem; --t-2xl: 1.5rem;
+  --font: var(--ts-font-sans);
+  --mono: var(--ts-font-mono);
+  --t-xs: var(--ts-fs-xs); --t-sm: var(--ts-fs-sm); --t-md: var(--ts-fs-md); --t-lg: var(--ts-fs-lg); --t-xl: var(--ts-fs-xl); --t-2xl: var(--ts-fs-2xl);
   --lh: 1.5; --lh-tight: 1.25;
-  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
-  --r-1: 6px; --r-2: 10px; --r-3: 14px; --r-full: 999px;
-  --tap: 44px; --control: 36px; --topbar: 52px;
-  --bg: #f7f8fa; --surface: #ffffff; --surface-2: #f1f3f6; --hover: #eceef2;
-  --border: #e2e5ea; --border-strong: #c9ced6;
-  --text: #15171c; --text-2: #555c69;
-  --accent: #4f46e5; --accent-hover: #4338ca; --on-accent: #ffffff; --accent-soft: #eef0ff;
-  --danger: #b42318; --danger-soft: #fdeceb; --warn: #8f5200; --warn-soft: #fff3df;
-  --ok: #17703f; --ok-soft: #e5f5eb;
-  --sh-1: 0 1px 2px rgb(16 18 24 / 0.06);
-  --sh-2: 0 8px 24px rgb(16 18 24 / 0.12), 0 2px 6px rgb(16 18 24 / 0.08);
-  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --s-1: var(--ts-s1); --s-2: var(--ts-s2); --s-3: var(--ts-s3); --s-4: var(--ts-s4); --s-5: var(--ts-s6); --s-6: var(--ts-s8); --s-7: var(--ts-s12);
+  --r-1: var(--ts-radius-sm); --r-2: var(--ts-radius); --r-3: var(--ts-radius-lg); --r-full: var(--ts-radius-pill);
+  --tap: 44px; --control: 36px; --topbar: 56px;
+  --bg: var(--ts-canvas); --surface: var(--ts-surface); --surface-2: var(--ts-surface-2); --hover: var(--ts-surface-3);
+  --border: var(--ts-line); --border-strong: var(--ts-line-strong);
+  --text: var(--ts-ink); --text-2: var(--ts-ink-2);
+  --accent: var(--ts-accent); --accent-hover: var(--ts-accent-fill-hover); --on-accent: var(--ts-on-accent); --accent-soft: var(--ts-accent-soft);
+  --danger: var(--ts-danger); --danger-soft: color-mix(in oklab, var(--ts-danger) 14%, transparent);
+  --warn: var(--ts-warning); --warn-soft: color-mix(in oklab, var(--ts-warning) 14%, transparent);
+  --ok: var(--ts-success); --ok-soft: color-mix(in oklab, var(--ts-success) 14%, transparent);
+  --sh-1: none;
+  --sh-2: var(--ts-shadow-overlay);
+  --ring: 0 0 0 2px var(--ts-accent);
   --ease: 160ms cubic-bezier(0.2, 0, 0, 1);
-  --c-1: #4f46e5; --c-2: #eb6834; --c-3: #1baf7a; --c-4: #eda100; --c-5: #e87ba4;
+  --c-1: var(--ts-chart-1); --c-2: var(--ts-chart-2); --c-3: var(--ts-cat-3); --c-4: var(--ts-warning); --c-5: var(--ts-severe);
   --sidebar: 15rem; --tabbar: 56px;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d0e11; --surface: #15171b; --surface-2: #1c1f24; --hover: #23262c;
-    --border: #2a2e35; --border-strong: #3b404a;
-    --text: #e9ebef; --text-2: #a2a9b5;
-    --accent: #8f90ff; --accent-hover: #a9aaff; --on-accent: #0d0e11; --accent-soft: #23244a;
-    --danger: #ff8a80; --danger-soft: #3b1d1c; --warn: #f2b45c; --warn-soft: #3a2b13;
-    --ok: #63d394; --ok-soft: #14301f;
-    --sh-1: 0 1px 2px rgb(0 0 0 / 0.4);
-    --sh-2: 0 8px 24px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.4);
-    --c-1: #7c7df5; --c-2: #d95926; --c-3: #199e70; --c-4: #c98500; --c-5: #d55181;
-  }
-}
+/* shortcut: legacy widths were laid out on a 16px root with no reserved scrollbar gutter; base.css sets 14px and stable, so this pins today's sizes until PR 2 moves pages to the kit */
+html { font-size: 16px; scrollbar-gutter: auto; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
@@ -71,8 +60,6 @@ h3 { font-size: var(--t-md); font-weight: 600; }
   padding-right: max(var(--s-4), env(safe-area-inset-right));
   display: flex; align-items: center; gap: var(--s-3);
   background: color-mix(in srgb, var(--bg) 94%, transparent);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
 }
 .brand {
@@ -205,7 +192,7 @@ button:not(:disabled):hover, .btn:not(:disabled):hover { background: var(--hover
 button:not(:disabled):active, .btn:not(:disabled):active { transform: translateY(1px); }
 button:disabled, .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary {
-  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+  background: var(--ts-accent-fill); border-color: var(--ts-accent-fill); color: var(--ts-on-accent);
 }
 .btn-primary:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-2); }
@@ -249,9 +236,8 @@ textarea { min-height: 72px; resize: vertical; line-height: var(--lh); }
 }
 .segmented button:hover { color: var(--text); }
 .segmented button[aria-pressed="true"] {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--sh-1);
+  background: var(--ts-accent-fill);
+  color: var(--ts-on-accent);
   border-color: var(--border);
 }
 .segmented button:focus-visible { box-shadow: var(--ring); }
@@ -265,7 +251,7 @@ textarea { min-height: 72px; resize: vertical; line-height: var(--lh); }
   font-size: var(--t-xs); font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.badge-accent { background: var(--accent); color: var(--on-accent); }
+.badge-accent { background: var(--ts-accent-fill); color: var(--ts-on-accent); }
 .tag {
   display: inline-flex; align-items: center;
   height: 20px;
@@ -403,9 +389,7 @@ body.auth {
   display: grid;
   place-items: center;
   padding: max(var(--s-4), env(safe-area-inset-top)) var(--s-4) max(var(--s-4), env(safe-area-inset-bottom));
-  background:
-    radial-gradient(60rem 30rem at 50% -10%, var(--accent-soft), transparent 70%),
-    var(--bg);
+  background: var(--bg);
 }
 .auth-card {
   width: 100%;
@@ -414,7 +398,6 @@ body.auth {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-3);
-  box-shadow: var(--sh-1);
   padding: var(--s-5) var(--s-4);
 }
 .auth-card h1 { font-size: var(--t-xl); }
@@ -532,8 +515,8 @@ body.chat { height: 100dvh; overflow: hidden; }
 .msg.user {
   align-self: flex-end;
   max-width: 85%;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--ts-accent-fill);
+  color: var(--ts-on-accent);
   border-radius: var(--r-3) var(--r-3) var(--r-1) var(--r-3);
   padding: var(--s-2) var(--s-3);
   white-space: pre-wrap;
@@ -680,8 +663,6 @@ body.app {
   height: calc(var(--tabbar) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
 }
 .tab {
@@ -700,12 +681,9 @@ body.app {
   min-width: 16px; height: 16px;
   padding: 0 4px;
   border-radius: var(--r-full);
-  background: var(--danger); color: #fff;
+  background: var(--danger); color: var(--bg);
   font-size: 10px; font-weight: 700; line-height: 16px;
   text-align: center;
-}
-@media (prefers-color-scheme: dark) {
-  .tab-badge { color: var(--bg); }
 }
 .app .topbar-nav .navlink { display: none; }
 @media (min-width: 960px) {
@@ -993,7 +971,7 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
   .segmented button { flex: none; }
   .settings-controls { flex-direction: row; align-items: center; }
   .settings-controls > button { width: auto; }
-  .auth-card { padding: var(--s-6) var(--s-5); box-shadow: var(--sh-2); }
+  .auth-card { padding: var(--s-6) var(--s-5); }
   .table { min-width: 0; }
 }
 @media (min-width: 960px) {
@@ -1015,13 +993,10 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
 .skeleton-bar {
   display: block; height: var(--s-3); margin-top: var(--s-2);
   border-radius: var(--r-1);
-  background: linear-gradient(90deg, var(--surface-2) 25%, var(--hover) 50%, var(--surface-2) 75%);
-  background-size: 200% 100%;
-  animation: skeleton 1.4s linear infinite;
+  background: var(--surface-2);
 }
 .skeleton-bar + .skeleton-bar { width: 75%; }
 .skeleton-bar:last-child { width: 50%; }
-@keyframes skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .app-aside .pane + .pane { margin-top: var(--s-5); }
 /* Makes the chat column the container J's §14 @container rule queries; height is untouched (inline axis only) */
 #pane-chat { container-type: inline-size; }

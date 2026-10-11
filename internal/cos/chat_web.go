@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 type chatHeader struct {
@@ -127,7 +128,38 @@ func heartbeatSub(a AutopilotState) string {
 	return "next " + clock(next)
 }
 
-// settings hosts the heartbeat presets (TS-813), token budgets (TS-826); account settings join it here.
+// agentState reads the replicated COS state from any node; without a bus there is no state yet.
+func (w *Web) agentState(ctx context.Context) (AgentState, error) {
+	var st AgentState
+	if w.Bus == nil {
+		return st, nil
+	}
+	w.mu.Lock()
+	kv := w.agentKV
+	w.mu.Unlock()
+	if kv == nil {
+		var err error
+		if kv, err = openKV(ctx, w.Bus, agentBucket); err != nil {
+			return st, err
+		}
+		w.mu.Lock()
+		w.agentKV = kv
+		w.mu.Unlock()
+	}
+	e, err := kv.Get(ctx, "state")
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return st, nil
+	}
+	if err != nil {
+		return st, err
+	}
+	return st, json.Unmarshal(e.Value(), &st)
+}
+
+// dollars formats an API-equivalent amount with n decimals.
+func dollars(usd float64, n int) string { return strconv.FormatFloat(usd, 'f', n, 64) }
+
+// settings hosts the heartbeat presets (TS-813), token budgets (TS-826) and the COS wakes; account settings join it here.
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
 	w.renderSettings(rw, r, http.StatusOK, w.budgetPanel(r.Context(), time.Now()))
 }
@@ -139,9 +171,13 @@ func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int
 		http.Error(rw, "Cannot read COS state", 500)
 		return
 	}
+	st, err := w.agentState(r.Context())
+	if err != nil {
+		slog.Error("read COS agent state", "error", err)
+	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(status)
-	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context(), pushUser(r))).Render(r.Context(), rw); err != nil {
+	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context(), pushUser(r)), st.recentWakes(20)).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render settings", err)
 	}
 }
