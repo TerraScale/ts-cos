@@ -1,0 +1,178 @@
+package ui
+
+// Shared page building blocks. Feature pages compose these instead of
+// hand-writing header, card, stat, and empty-state markup; the matching
+// styles live in web/assets/css/components.css.
+
+// PageHeader names the page for assistive technology; children render as
+// right-aligned page actions.
+templ PageHeader(title string) {
+	<h1 class="ts-sr-only">{ title }</h1>
+	<div class="ts-page-actions">
+		{ children... }
+	</div>
+}
+
+// CardProps describes a card. Actions render in the card header; Flush drops
+// the body padding so tables and lists run edge to edge. ShrinkActions lets
+// responsive header controls shrink below their intrinsic width.
+type CardProps struct {
+	ID            string
+	Title         string
+	Description   string
+	Actions       templ.Component
+	Flush         bool
+	ShrinkActions bool
+	// ActionsAlongsideTitle keeps actions on the title row and puts the description below.
+	ActionsAlongsideTitle bool
+}
+
+// Card is the one surface used for grouped content; children are its body.
+templ Card(p CardProps) {
+	<section
+		class={ "ts-card", templ.KV("ts-card-flush", p.Flush) }
+		if p.ID != "" {
+			id={ p.ID }
+		}
+		if p.ID != "" && p.Title != "" {
+			aria-labelledby={ p.ID + "-title" }
+		}
+	>
+		if p.Title != "" {
+			<header class={ "ts-card-head", templ.KV("ts-card-head-title-actions", p.ActionsAlongsideTitle) }>
+				<div class="ts-card-heading">
+					<h2
+						class="ts-card-title"
+						if p.ID != "" {
+							id={ p.ID + "-title" }
+						}
+					>{ p.Title }</h2>
+					if p.Description != "" && !p.ActionsAlongsideTitle {
+						@cardDescription(p.Description)
+					}
+				</div>
+				if p.Actions != nil {
+					<div class={ "ts-card-actions", templ.KV("ts-card-actions-shrinkable", p.ShrinkActions) }>
+						@p.Actions
+					</div>
+				}
+				if p.Description != "" && p.ActionsAlongsideTitle {
+					@cardDescription(p.Description)
+				}
+			</header>
+		}
+		<div class="ts-card-body">
+			{ children... }
+		</div>
+	</section>
+}
+
+templ cardDescription(text string) {
+	<p class="ts-card-description">{ text }</p>
+}
+
+// Stats is a row of headline numbers; children are Stat items.
+templ Stats(label string) {
+	<dl class="ts-stats" aria-label={ label }>
+		{ children... }
+	</dl>
+}
+
+// Stat is one headline number with an optional detail line.
+templ Stat(label, value, detail string) {
+	@ToneStat("", label, value, detail)
+}
+
+// ToneStat is a Stat marked with a section tone (see tokens.css), shown as a
+// colored dot before the label. An empty tone renders a plain Stat.
+templ ToneStat(tone, label, value, detail string) {
+	<div
+		class="ts-stat"
+		if tone != "" {
+			data-tone={ tone }
+		}
+	>
+		<dt class="ts-stat-label">
+			if tone != "" {
+				<span class="ts-dot" aria-hidden="true"></span>
+			}
+			{ label }
+		</dt>
+		<dd class="ts-stat-value">{ value }</dd>
+		if detail != "" {
+			<dd class="ts-stat-detail">{ detail }</dd>
+		}
+	</div>
+}
+
+// Empty is the placeholder for a list or chart with nothing to show;
+// children render below the text, typically as a call to action.
+templ Empty(title, detail string) {
+	<div class="ts-empty" role="status">
+		<p class="ts-empty-title">{ title }</p>
+		if detail != "" {
+			<p class="ts-empty-detail">{ detail }</p>
+		}
+		{ children... }
+	</div>
+}
+
+// Alert tones: info, success, warning, danger. Danger and warning interrupt
+// assistive technology; the others are polite status messages.
+templ Alert(tone, title, message string) {
+	<div class={ "ts-alert", "ts-alert-" + tone } role={ alertRole(tone) }>
+		if title != "" {
+			<p class="ts-alert-title">{ title }</p>
+		}
+		if message != "" {
+			<p class="ts-alert-body">{ message }</p>
+		}
+		{ children... }
+	</div>
+}
+
+// Badge tones: neutral, info, success, warning, danger, violet.
+templ Badge(tone, text string) {
+	<span class={ "ts-badge", "ts-badge-" + tone }>{ text }</span>
+}
+
+// StatusBadge is a badge with a leading dot, colored by a section tone
+// (see tokens.css) so states read by color as well as by text.
+templ StatusBadge(tone, text string) {
+	<span class="ts-badge ts-badge-tone" data-tone={ tone }><span class="ts-dot" aria-hidden="true"></span>{ text }</span>
+}
+
+// Tab is one link in a Tabs bar.
+type Tab struct {
+	Label  string
+	URL    string
+	Active bool
+	Count  int
+}
+
+// Tabs renders underline tabs that switch page sections via links.
+templ Tabs(label string, tabs []Tab) {
+	<nav class="ts-tabs" aria-label={ label }>
+			for _, tab := range tabs {
+				<a
+					class="ts-tab"
+					href={ templ.SafeURL(tab.URL) }
+					if tab.Active {
+						aria-current="page"
+					}
+				>
+					<span>{ tab.Label }</span>
+					if tab.Count > 0 {
+						<span class="ts-tab-count">{ tab.Count }</span>
+					}
+				</a>
+			}
+	</nav>
+}
+
+func alertRole(tone string) string {
+	if tone == "danger" || tone == "warning" {
+		return "alert"
+	}
+	return "status"
+}
