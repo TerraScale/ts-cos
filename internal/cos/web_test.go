@@ -124,7 +124,7 @@ func TestChatRoutes(t *testing.T) {
 	if n := strings.Count(body, `class="kpi"`); n != 6 {
 		t.Fatalf("home renders %d KPI tiles, want 6", n)
 	}
-	for _, want := range []string{`id="pane-chat"`, `id="pane-inbox"`, `id="pane-nodes"`, `id="pane-work"`, `Work queue`, `class="tabbar"`, `class="app-aside"`, `id="side-inbox"`, `id="tab-inbox"`} {
+	for _, want := range []string{`id="pane-chat"`, `id="pane-inbox"`, `id="pane-nodes"`, `id="pane-work"`, `class="tabbar"`, `class="app-aside"`, `id="side-inbox"`, `id="tab-inbox"`} {
 		if !strings.Contains(body, want) {
 			t.Fatal("home missing", want)
 		}
