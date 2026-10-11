@@ -30,7 +30,7 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	}
 	command, args := args[0], args[1:]
 	if command == "help" || command == "--help" || command == "-h" {
-		commands := []string{"fleet", "prs", "merge <repo> <number> (COS_FULL_SEND=1, COS_ADOPTED=1)", "ku <tool> ['<json>']", "status [--brief]", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]"}
+		commands := []string{"fleet", "prs", "merge <repo> <number> (COS_FULL_SEND=1, COS_ADOPTED=1)", "ku <tool> ['<json>']", "status [--brief]", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
 		for _, k := range sortedCommandNames() {
 			commands = append(commands, localCommands[k].Usage)
 		}
@@ -91,6 +91,21 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 			return taskCommand(ctx, s, args, w)
 		}
 		return noteCommand(ctx, s, args, w)
+	}
+	if command == "cluster" {
+		if len(args) != 0 {
+			return errors.New("usage: cos cluster")
+		}
+		bus, err := ConnectBus(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		defer bus.Close()
+		leader, err := bus.Leader(ctx)
+		if err != nil {
+			return err
+		}
+		return output(w, map[string]string{"host": cfg.LocalHost, "leader": leader, "version": Version})
 	}
 	if command == "fleet" || command == "asks" {
 		if len(args) != 0 {

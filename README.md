@@ -15,34 +15,55 @@ Node runtime, or cgo. Commit both `.templ` and generated `_templ.go` files.
 
 ## Run a host
 
-Each host runs `cos serve --port 8790`. It embeds a dedicated COS NATS server
-with JetStream and exposes local T3 operations as NATS micro services. The page
-binds `0.0.0.0:8790`. This slice is read-only in the browser.
+Every COS host (delta, beta, mariogk-dev) runs the same user service with no
+configuration file:
 
-The zero-configuration contract admits hosts through private NetBird network
-membership and discovers peers automatically. OCI Vault creates and delivers
-transport, dashboard and integration credentials. Manual configuration-file and
-secret-copy procedures are retired; the existing implementation's remaining
-switches and credential-file inputs are tracked in TS-795 for removal.
+```sh
+deploy/install.sh   # builds this checkout into ~/.local/bin/cos and (re)starts cos.service
+```
+
+`deploy/cos.service` runs `cos serve` (dashboard on `0.0.0.0:8790`), restarts on
+any exit and starts at boot (user lingering is on for mariogk on all hosts).
+
+On start a node:
+
+1. Reads the `cos-master` secret from the dedicated COS OCI Vault with the host's
+   `~/.oci/config` API key. The first node to boot creates it with random
+   content. NATS route and client passwords are derived from it (HKDF), so every
+   node agrees without copying secrets.
+2. Embeds NATS with JetStream: clients on `127.0.0.1:7790`, routes on the
+   host's Tailscale IPv4 port `7791`, cluster name `COS`, storage in
+   `~/.local/share/cos/nats`.
+3. Discovers peers every 15 seconds from the Tailscale LocalAPI: online Linux
+   devices of the same tailnet owner. Membership is admission. A peer gets the
+   route password only after its listener answers with a COS route `INFO`.
+   NATS gossip completes the mesh and reconnects restarted peers, which catch
+   up from JetStream.
+4. Writes the local client credential to `/run/user/<uid>/cos/nats.json`
+   (tmpfs, 0600). CLI commands read it; they need the local service running.
+
+The dedicated vault and key (compartment `TerraScale`, `sa-saopaulo-1`) are fixed
+in `internal/cos/vault.go`. Production cell vaults are never used. COS uses its
+own NATS cluster, never production NATS.
+
+### Leader
+
+Exactly one node runs singleton work (heartbeat, agent driver) through
+`Bus.Lead`. Leadership is a three-replica JetStream KV lease (`cos_leader`) with
+a 15-second TTL refreshed every 5 seconds. A stopping leader releases it at
+once; a crashed or partitioned leader steps down when a refresh fails, and
+another node takes over within about 20 seconds. Two of three nodes keep the
+cluster working. `cos cluster` prints the local host, the leader and the build
+revision; every node also advertises its revision in its micro metadata.
 
 Every HTTP route, including `/status` and `/events`, requires authentication.
-Automatic provisioning must retain that boundary.
 
 The CLI connects to **its local** NATS node. Calls to `cos.<host>.<command>` route
 through that cluster; remote T3 HTTP connections and SSH tunnels are not used.
 Client cancellation is sent to the remote operation; it cannot undo a mutation
 already dispatched. Unconfirmed remote cancellation is reported explicitly.
-`nats micro ls` discovers each host service when the NATS CLI has matching
-credentials. `fleet` scatters `shell` requests and sorts healthy hosts by load;
-an unavailable node is reported without blocking healthy nodes.
-
-`nats.conf` uses standard NATS server syntax. JetStream is enabled and its
-storage defaults to `~/.local/share/cos/nats`. The cluster name must be `COS`
-or `COS-*`, with authenticated routes between COS nodes over Tailscale. Client
-authentication supports one plaintext user/password stored in this private file,
-or authorized user nkeys with a private `~/.config/cos/nats.seed` (also 0600).
-COS rejects anonymous access, production cluster names, and gateway/leaf bridges.
-Its NATS cluster is independent of production ts-orchestrator NATS.
+`fleet` scatters `shell` requests and sorts healthy hosts by load; an
+unavailable node is reported without blocking healthy nodes.
 
 Legacy credential locations below are implementation debt; OCI Vault must deliver credentials automatically:
 
@@ -51,7 +72,6 @@ Legacy credential locations below are implementation debt; OCI Vault must delive
 | Local T3 | `~/.config/cos/tokens/<local hostname>` |
 | Ku MCP | `~/.config/cos/ku-token` |
 | Forgejo | `~/.local/share/forgejo-cli/keys.json`, host `git.terrascale.tech` |
-| COS transport | `~/.config/cos/nats.conf` (and `nats.seed` for nkeys) |
 | Dashboard | `~/.config/cos/dashboard-token` (generated, 0600) |
 
 ## Commands
@@ -63,6 +83,7 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | Command | Purpose |
 |---|---|
 | `cos fleet` / `cos shell <host>` | Open threads and active load |
+| `cos cluster` | Local host, current leader and build revision |
 | `cos prs` | Every open PR authored by mariogk, with CI/review/merge gates |
 | `cos status [--brief]` | Refresh all sources; `--brief` is at most 40 lines |
 | `cos projects <host>` | T3 project IDs, titles, and roots |

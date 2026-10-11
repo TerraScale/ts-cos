@@ -1,13 +1,19 @@
 package cos
 
 import (
+	"bufio"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"maps"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,7 +25,6 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/micro"
-	"github.com/nats-io/nkeys"
 )
 
 type OperationHandler func(context.Context, string, []string) (any, error)
@@ -61,120 +66,209 @@ type Bus struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	once    sync.Once
-	key     nkeys.KeyPair
+	host    string
 
 	mu      sync.Mutex
 	closing bool
 	calls   sync.WaitGroup
+	tasks   sync.WaitGroup // discovery and election use the connection until Close
 	active  map[string]context.CancelFunc
 	pending map[string]*time.Timer
+
+	leading     context.Context // non-nil while this node holds the cluster lease
+	leadChanged chan struct{}   // closed whenever leading changes
+	resign      chan struct{}   // closed by Resign
+	resignOnce  sync.Once
+	elected     chan struct{} // closed when elect returns
 }
 
-func privateBusFile(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("COS %s is missing or unreadable", filepath.Base(path))
+// Fixed COS node settings; the ports stay clear of dev dashboards near 8790 and NATS defaults.
+const (
+	busClusterName = "COS"
+	busClientPort  = 7790
+	busRoutePort   = 7791
+	busClientUser  = "cos"
+	busRouteUser   = "cos-route"
+	busDiscovery   = 15 * time.Second
+)
+
+// busNode is what a node needs beyond Config; StartBus fills it from OCI Vault and Tailscale.
+type busNode struct {
+	master     []byte
+	clientPort int
+	routeHost  string
+	routePort  int
+	peers      func(context.Context) ([]string, error)
+}
+
+type busCredential struct {
+	Port     int    `json:"port"`
+	Password string `json:"password"`
+}
+
+func busRoute(password, address string) *url.URL {
+	return &url.URL{Scheme: "nats-route", User: url.UserPassword(busRouteUser, password), Host: address}
+}
+
+func busOptions(cfg Config, node busNode) *server.Options {
+	routePassword := derive(node.master, "nats route")
+	return &server.Options{
+		ServerName: cfg.LocalHost, Host: "127.0.0.1", Port: node.clientPort,
+		Username: busClientUser, Password: derive(node.master, "nats client"),
+		JetStream: true, StoreDir: filepath.Join(cfg.Home, ".local/share/cos/nats"),
+		JetStreamMaxMemory: 256 << 20, JetStreamMaxStore: 1 << 30,
+		Cluster: server.ClusterOpts{
+			Name: busClusterName, Host: node.routeHost, Port: node.routePort,
+			Username: busRouteUser, Password: routePassword, PoolSize: -1, // one route connection per peer
+		},
+		// Clustered JetStream needs a configured route before peers are found; NATS ignores a route to itself.
+		Routes: []*url.URL{busRoute(routePassword, net.JoinHostPort(node.routeHost, strconv.Itoa(node.routePort)))},
+		NoLog:  true, NoSigs: true,
 	}
-	if !info.Mode().IsRegular() || info.Mode() != 0600 {
-		return fmt.Errorf("COS %s must be a regular file with mode 0600", filepath.Base(path))
+}
+
+func busCredentialPath(cfg Config) string {
+	return filepath.Join(cfg.Runtime, "cos", "nats.json")
+}
+
+// writeBusCredential hands the local client password to CLI processes of the same user.
+func writeBusCredential(cfg Config, credential busCredential) error {
+	path := busCredentialPath(cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return errors.New("COS runtime directory unavailable")
+	}
+	data, _ := json.Marshal(credential)
+	f, err := os.CreateTemp(filepath.Dir(path), ".nats-*")
+	if err != nil {
+		return errors.New("COS runtime credential could not be written")
+	}
+	defer os.Remove(f.Name())
+	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
+	if err != nil {
+		return errors.New("COS runtime credential could not be written")
 	}
 	return nil
 }
 
-func loadBusConfig(cfg Config) (*server.Options, nats.Option, nkeys.KeyPair, error) {
-	path := filepath.Join(cfg.Home, ".config/cos/nats.conf")
-	if err := privateBusFile(path); err != nil {
-		return nil, nil, nil, err
+func readBusCredential(cfg Config) (busCredential, error) {
+	var credential busCredential
+	path := busCredentialPath(cfg)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return credential, errors.New("COS service is not running on this host; start it with systemctl --user start cos")
 	}
-	opts, err := server.ProcessConfigFile(path)
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &credential) != nil || credential.Port < 1 || credential.Password == "" {
+		return credential, errors.New("COS runtime credential is unreadable")
+	}
+	return credential, nil
+}
+
+type tailnetPeer struct {
+	UserID       int64
+	OS           string
+	Online       bool
+	TailscaleIPs []string
+}
+
+// tailnet returns this host's Tailscale IPv4 and the IPv4 of every online Linux
+// device of the same owner: tailnet membership is COS admission (zero config).
+func tailnet(ctx context.Context) (string, []string, error) {
+	client := http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", "/run/tailscale/tailscaled.sock")
+		},
+	}}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://local-tailscaled.sock/localapi/v0/status", nil)
+	resp, err := client.Do(req)
 	if err != nil {
-		// NATS parser errors can quote configuration values, including passwords.
-		return nil, nil, nil, errors.New("invalid COS nats.conf; check NATS configuration syntax")
+		return "", nil, errors.New("Tailscale is unavailable; COS discovers peers on the tailnet")
 	}
-	if !opts.JetStream {
-		return nil, nil, nil, errors.New("COS nats.conf must enable JetStream")
+	defer resp.Body.Close()
+	var status struct {
+		Self tailnetPeer
+		Peer map[string]tailnetPeer
 	}
-	name := strings.ToUpper(opts.Cluster.Name)
-	if (name != "COS" && !strings.HasPrefix(name, "COS-")) || strings.Contains(name, "PROD") {
-		return nil, nil, nil, errors.New("COS requires a dedicated COS cluster; production clusters are forbidden")
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&status) != nil {
+		return "", nil, errors.New("Tailscale status is unreadable")
 	}
-	if opts.Cluster.Port == 0 || opts.Cluster.Username == "" || opts.Cluster.Password == "" {
-		return nil, nil, nil, errors.New("COS cluster requires a route listener and user/password authentication")
-	}
-	if len(opts.Gateway.Gateways) != 0 || opts.Gateway.Port != 0 || len(opts.LeafNode.Remotes) != 0 || opts.LeafNode.Port != 0 {
-		return nil, nil, nil, errors.New("COS cluster must not bridge to gateways or leaf nodes")
-	}
-	for _, route := range opts.Routes {
-		if route.Scheme != "nats-route" || !cosRouteHost(route.Hostname()) {
-			return nil, nil, nil, errors.New("COS routes must use COS hosts over Tailscale or loopback")
+	self, peers := tailnetIPv4(status.Self), []string{}
+	for _, peer := range status.Peer {
+		if ip := tailnetIPv4(peer); ip != "" && peer.Online && peer.OS == "linux" && peer.UserID == status.Self.UserID {
+			peers = append(peers, ip)
 		}
 	}
-	if opts.Port == 0 {
-		opts.Port = nats.DefaultPort
+	if self == "" {
+		return "", nil, errors.New("Tailscale has no IPv4 address for this host")
 	}
-	if opts.Port < 1 || opts.Port > 65535 {
-		return nil, nil, nil, errors.New("COS client listener requires a fixed port between 1 and 65535")
+	slices.Sort(peers)
+	return self, peers, nil
+}
+
+func tailnetIPv4(peer tailnetPeer) string {
+	for _, raw := range peer.TailscaleIPs {
+		if ip, err := netip.ParseAddr(raw); err == nil && ip.Is4() {
+			return ip.String()
+		}
 	}
-	if opts.NoAuthUser != "" || opts.Authorization != "" || len(opts.Accounts) != 0 || opts.AuthCallout != nil || len(opts.TrustedOperators) != 0 {
-		return nil, nil, nil, errors.New("COS requires user/password or nkey authentication without anonymous access")
-	}
-	if opts.StoreDir == "" {
-		opts.StoreDir = filepath.Join(cfg.Home, ".local/share/cos/nats")
-	}
-	opts.NoLog, opts.NoSigs = true, true
-	opts.Debug, opts.Trace, opts.TraceVerbose = false, false, false
-	if opts.ServerName == "" {
-		opts.ServerName = cfg.LocalHost
-	}
-	username, password := opts.Username, opts.Password
-	if len(opts.Users) == 1 {
-		username, password = opts.Users[0].Username, opts.Users[0].Password
-	}
-	if len(opts.Nkeys) == 0 && len(opts.Users) <= 1 && username != "" && password != "" && !strings.HasPrefix(password, "$2") {
-		return opts, nats.UserInfo(username, password), nil, nil
-	}
-	if len(opts.Nkeys) == 0 || len(opts.Users) != 0 || username != "" || password != "" {
-		return nil, nil, nil, errors.New("COS requires one plaintext user/password or nkey users with a local nats.seed")
-	}
-	seedPath := filepath.Join(cfg.Home, ".config/cos/nats.seed")
-	if err := privateBusFile(seedPath); err != nil {
-		return nil, nil, nil, err
-	}
-	seed, err := os.ReadFile(seedPath)
+	return ""
+}
+
+// cosRoute reports whether address is a COS route listener. NATS sends INFO
+// before credentials, so route passwords only ever reach COS nodes.
+func cosRoute(ctx context.Context, address string) bool {
+	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
-		return nil, nil, nil, errors.New("COS nats.seed is unreadable")
+		return false
 	}
-	key, err := nkeys.FromSeed([]byte(strings.TrimSpace(string(seed))))
-	clear(seed)
-	if err != nil {
-		return nil, nil, nil, errors.New("invalid COS nats.seed")
-	}
-	public, err := key.PublicKey()
-	if err == nil && nkeys.IsValidPublicUserKey(public) {
-		for _, user := range opts.Nkeys {
-			if user.Nkey == public {
-				return opts, nats.Nkey(public, key.Sign), key, nil
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	line, err := bufio.NewReader(io.LimitReader(conn, 64<<10)).ReadString('\n')
+	info, ok := strings.CutPrefix(line, "INFO ")
+	var fields struct{ Cluster string }
+	return err == nil && ok && json.Unmarshal([]byte(info), &fields) == nil && fields.Cluster == busClusterName
+}
+
+// discover adds a route to every COS node found; NATS gossip completes the mesh
+// and retries configured routes while a peer restarts.
+func (b *Bus) discover(ctx context.Context, opts *server.Options, peers func(context.Context) ([]string, error)) {
+	routed := map[string]bool{}
+	for {
+		candidates, _ := peers(ctx)
+		added := false
+		for _, peer := range candidates {
+			if !routed[peer] && cosRoute(ctx, peer) {
+				routed[peer], added = true, true
 			}
 		}
+		if added {
+			next := opts.Clone()
+			next.Routes = next.Routes[:1]
+			for _, peer := range slices.Sorted(maps.Keys(routed)) {
+				next.Routes = append(next.Routes, busRoute(opts.Cluster.Password, peer))
+			}
+			if err := b.server.ReloadOptions(next); err != nil {
+				slog.Error("COS route update failed", "error", err)
+				clear(routed)
+			} else {
+				opts = next
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(busDiscovery):
+		}
 	}
-	key.Wipe()
-	return nil, nil, nil, errors.New("COS nats.seed must match an authorized user nkey")
 }
 
-func cosRouteHost(host string) bool {
-	host = strings.ToLower(host)
-	if host == "localhost" || host == "delta" || host == "beta" || host == "mariogk-dev" {
-		return true
-	}
-	if strings.HasSuffix(host, ".ts.net") {
-		first, _, _ := strings.Cut(host, ".")
-		return first == "delta" || first == "beta" || first == "mariogk-dev"
-	}
-	ip, err := netip.ParseAddr(host)
-	return err == nil && (ip.IsLoopback() || netip.MustParsePrefix("100.64.0.0/10").Contains(ip) || netip.MustParsePrefix("fd7a:115c:a1e0::/48").Contains(ip))
-}
-
-func connectBus(ctx context.Context, opts *server.Options, auth nats.Option) (*nats.Conn, error) {
+func connectBus(ctx context.Context, credential busCredential) (*nats.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -182,8 +276,8 @@ func connectBus(ctx context.Context, opts *server.Options, auth nats.Option) (*n
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = min(timeout, time.Until(deadline))
 	}
-	address := "nats://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port))
-	conn, err := nats.Connect(address, auth, nats.Name("cos"), nats.Timeout(timeout),
+	address := "nats://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(credential.Port))
+	conn, err := nats.Connect(address, nats.UserInfo(busClientUser, credential.Password), nats.Name("cos"), nats.Timeout(timeout),
 		nats.MaxReconnects(-1), nats.ReconnectWait(500*time.Millisecond),
 		nats.PingInterval(15*time.Second), nats.MaxPingsOutstanding(2),
 		nats.ReconnectBufSize(-1), nats.IgnoreDiscoveredServers(),
@@ -208,15 +302,15 @@ func (b *Bus) watch(ctx context.Context) {
 	}()
 }
 
-// ConnectBus connects only to the local node configured in ~/.config/cos/nats.conf.
+// ConnectBus connects only to the local node, with the credential its service wrote.
 func ConnectBus(ctx context.Context, cfg Config) (*Bus, error) {
-	opts, auth, key, err := loadBusConfig(cfg)
+	credential, err := readBusCredential(cfg)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	b := &Bus{ctx: ctx, cancel: cancel, done: make(chan struct{}), key: key}
-	b.conn, err = connectBus(ctx, opts, auth)
+	b := &Bus{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	b.conn, err = connectBus(ctx, credential)
 	if err != nil {
 		b.Close()
 		return nil, err
@@ -225,18 +319,44 @@ func ConnectBus(ctx context.Context, cfg Config) (*Bus, error) {
 	return b, nil
 }
 
-// StartBus embeds the COS JetStream node and registers its host-specific micro endpoints.
+// StartBus embeds the COS JetStream node, joins every COS node on the tailnet
+// with credentials derived from the OCI Vault master secret, and registers
+// its host-specific micro endpoints.
 func StartBus(ctx context.Context, cfg Config, handler OperationHandler) (*Bus, error) {
-	if !validHost(cfg.LocalHost) || handler == nil {
-		return nil, errors.New("COS bus requires a valid local host and operation handler")
-	}
-	opts, auth, key, err := loadBusConfig(cfg)
+	api, err := newOCIVault()
 	if err != nil {
 		return nil, err
 	}
+	master, err := vaultMaster(ctx, api)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(master)
+	self, _, err := tailnet(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return startBus(ctx, cfg, busNode{master: master, clientPort: busClientPort, routeHost: self, routePort: busRoutePort,
+		peers: func(ctx context.Context) ([]string, error) {
+			_, peers, err := tailnet(ctx)
+			for i, peer := range peers {
+				peers[i] = net.JoinHostPort(peer, strconv.Itoa(busRoutePort))
+			}
+			return peers, err
+		}}, handler)
+}
+
+func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHandler) (*Bus, error) {
+	if !validHost(cfg.LocalHost) || handler == nil {
+		return nil, errors.New("COS bus requires a valid local host and operation handler")
+	}
+	opts := busOptions(cfg, node)
+	credential := busCredential{Port: node.clientPort, Password: opts.Password}
 	ctx, cancel := context.WithCancel(ctx)
-	b := &Bus{ctx: ctx, cancel: cancel, done: make(chan struct{}), key: key,
-		active: make(map[string]context.CancelFunc), pending: make(map[string]*time.Timer)}
+	b := &Bus{ctx: ctx, cancel: cancel, done: make(chan struct{}), host: cfg.LocalHost,
+		active: make(map[string]context.CancelFunc), pending: make(map[string]*time.Timer),
+		resign: make(chan struct{}), elected: make(chan struct{})}
+	var err error
 	b.server, err = server.NewServer(opts)
 	if err != nil {
 		b.Close()
@@ -251,13 +371,13 @@ func StartBus(ctx context.Context, cfg Config, handler OperationHandler) (*Bus, 
 			return nil, fmt.Errorf("COS embedded NATS did not become ready: %w", err)
 		}
 	}
-	b.conn, err = connectBus(ctx, opts, auth)
+	b.conn, err = connectBus(ctx, credential)
 	if err != nil {
 		b.Close()
 		return nil, err
 	}
 	b.service, err = micro.AddService(b.conn, micro.Config{
-		Name: "cos", Version: "0.1.0", Metadata: map[string]string{"host": cfg.LocalHost},
+		Name: "cos", Version: "0.1.0", Metadata: map[string]string{"host": cfg.LocalHost, "version": Version},
 		Description: "COS host operations", QueueGroup: "cos-" + cfg.LocalHost,
 	})
 	if err == nil {
@@ -281,6 +401,13 @@ func StartBus(ctx context.Context, cfg Config, handler OperationHandler) (*Bus, 
 		b.Close()
 		return nil, errors.New("COS micro service registration failed")
 	}
+	if err := writeBusCredential(cfg, credential); err != nil {
+		b.Close()
+		return nil, err
+	}
+	next := opts.Clone()
+	b.tasks.Go(func() { b.discover(ctx, next, node.peers) })
+	b.tasks.Go(func() { b.elect(ctx) })
 	b.watch(ctx)
 	return b, nil
 }
@@ -405,6 +532,7 @@ func (b *Bus) Close() {
 		b.cancel()
 		// Keep NATS available until callers have attempted cancellation acknowledgement.
 		b.calls.Wait()
+		b.tasks.Wait()
 		if b.service != nil {
 			_ = b.service.Stop()
 		}
@@ -414,9 +542,6 @@ func (b *Bus) Close() {
 		if b.server != nil {
 			b.server.Shutdown()
 			b.server.WaitForShutdown()
-		}
-		if b.key != nil {
-			b.key.Wipe()
 		}
 		b.mu.Lock()
 		for id, timer := range b.pending {

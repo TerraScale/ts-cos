@@ -7,14 +7,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	Home, LocalHost, ForgejoURL, KuURL string
-	HTTP                               *http.Client
-	SkipReviewer                       bool
+	// Runtime is the per-user tmpfs (/run/user/<uid>) where the service leaves the local NATS credential.
+	Home, Runtime, LocalHost, ForgejoURL, KuURL string
+	HTTP                                        *http.Client
+	SkipReviewer                                bool
 }
 
 func DefaultConfig() (Config, error) {
@@ -26,7 +28,7 @@ func DefaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Config{Home: home, LocalHost: host, ForgejoURL: "https://git.terrascale.tech/api/v1", KuURL: "https://ku.mariogk.com/mcp", HTTP: &http.Client{Timeout: 60 * time.Second}}, nil
+	return Config{Home: home, Runtime: fmt.Sprintf("/run/user/%d", os.Getuid()), LocalHost: host, ForgejoURL: "https://git.terrascale.tech/api/v1", KuURL: "https://ku.mariogk.com/mcp", HTTP: &http.Client{Timeout: 60 * time.Second}}, nil
 }
 
 func validHost(host string) bool {
@@ -70,3 +72,25 @@ func active(status string) bool {
 	}
 	return false
 }
+
+// Version is the VCS revision Go stamped into this binary ("-dirty" for
+// uncommitted changes); every node advertises it in its micro metadata.
+var Version = func() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	revision, dirty := "unknown", false
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value == "true"
+		}
+	}
+	if dirty {
+		return revision + "-dirty"
+	}
+	return revision
+}()

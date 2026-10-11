@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,7 +17,6 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/micro"
-	"github.com/nats-io/nkeys"
 )
 
 func busTestPorts(t *testing.T, count int) []int {
@@ -40,42 +39,17 @@ func busTestPorts(t *testing.T, count int) []int {
 	return ports
 }
 
-func busTestConfig(t *testing.T, host string, port, routePort int, peers []int) (Config, string) {
-	t.Helper()
-	cfg := Config{Home: t.TempDir(), LocalHost: host}
-	var routes []string
-	for _, peer := range peers {
-		routes = append(routes, fmt.Sprintf("nats-route://cos-route:route-test-secret@127.0.0.1:%d", peer))
-	}
-	text := fmt.Sprintf(`server_name: %q
-listen: "127.0.0.1:%d"
-authorization { user: cos-client, password: client-test-secret }
-jetstream {
-  store_dir: %q
-  max_memory_store: 32MB
-  max_file_store: 32MB
-}
-cluster {
-  name: COS
-  listen: "127.0.0.1:%d"
-  pool_size: -1
-  authorization { user: cos-route, password: route-test-secret }
-  routes: [%s]
-}
-`, host, port, filepath.Join(cfg.Home, "jetstream"), routePort, strings.Join(routes, ", "))
-	busTestWriteConfig(t, cfg, text)
-	return cfg, text
-}
+var busTestMaster = []byte("0123456789abcdef0123456789abcdef")
 
-func busTestWriteConfig(t *testing.T, cfg Config, text string) {
+func busTestConfig(t *testing.T, host string, port, routePort int, peers []int) (Config, busNode) {
 	t.Helper()
-	dir := filepath.Join(cfg.Home, ".config/cos")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		t.Fatal(err)
+	cfg := Config{Home: t.TempDir(), Runtime: t.TempDir(), LocalHost: host}
+	var addresses []string
+	for _, peer := range peers {
+		addresses = append(addresses, "127.0.0.1:"+strconv.Itoa(peer))
 	}
-	if err := os.WriteFile(filepath.Join(dir, "nats.conf"), []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
+	return cfg, busNode{master: busTestMaster, clientPort: port, routeHost: "127.0.0.1", routePort: routePort,
+		peers: func(context.Context) ([]string, error) { return addresses, nil }}
 }
 
 func busTestReady(t *testing.T, description string, check func() bool) {
@@ -110,6 +84,7 @@ func TestBusCluster(t *testing.T) {
 	hosts := []string{"delta", "beta", "mariogk-dev"}
 	nodes := make([]*Bus, 3)
 	configs := make([]Config, 3)
+	busNodes := make([]busNode, 3)
 	handlers := make([]OperationHandler, 3)
 	accepted := make(chan context.Context, 1)
 	finished := make(chan struct{}, 1)
@@ -121,8 +96,8 @@ func TestBusCluster(t *testing.T) {
 				peers = append(peers, ports[j+3])
 			}
 		}
-		cfg, _ := busTestConfig(t, host, ports[i], ports[i+3], peers)
-		configs[i] = cfg
+		cfg, node := busTestConfig(t, host, ports[i], ports[i+3], peers)
+		configs[i], busNodes[i] = cfg, node
 		handlers[i] = func(ctx context.Context, command string, args []string) (any, error) {
 			if len(args) > 0 {
 				switch args[0] {
@@ -153,12 +128,12 @@ func TestBusCluster(t *testing.T) {
 			}
 			return busTestResult{host, command, args}, nil
 		}
-		node, err := StartBus(ctx, cfg, handlers[i])
+		bus, err := startBus(ctx, cfg, busNodes[i], handlers[i])
 		if err != nil {
 			t.Fatal(err)
 		}
-		nodes[i] = node
-		t.Cleanup(node.Close)
+		nodes[i] = bus
+		t.Cleanup(bus.Close)
 	}
 	busTestReady(t, "full mesh of authenticated routes", func() bool {
 		return nodes[0].server.NumRoutes() == 2 && nodes[1].server.NumRoutes() == 2 && nodes[2].server.NumRoutes() == 2
@@ -542,7 +517,7 @@ func TestBusCluster(t *testing.T) {
 
 	t.Run("client reconnects only to its restarted local node", func(t *testing.T) {
 		nodes[1].Close()
-		restarted, err := StartBus(ctx, configs[1], handlers[1])
+		restarted, err := startBus(ctx, configs[1], busNodes[1], handlers[1])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -594,128 +569,123 @@ func TestBusCluster(t *testing.T) {
 	})
 }
 
-func TestBusConfigValidation(t *testing.T) {
-	cases := []struct {
-		name string
-		edit func(string) string
-		mode os.FileMode
-	}{
-		{"public config", nil, 0644},
-		{"read-only config", nil, 0400},
-		{"missing authentication", func(s string) string {
-			return strings.ReplaceAll(s, "authorization { user: cos-client, password: client-test-secret }", "")
-		}, 0600},
-		{"empty password", func(s string) string { return strings.ReplaceAll(s, "password: client-test-secret", `password: ""`) }, 0600},
-		{"anonymous fallback", func(s string) string { return s + "\nno_auth_user: cos-client\n" }, 0600},
-		{"JetStream disabled", func(s string) string {
-			start := strings.Index(s, "jetstream {")
-			end := strings.Index(s[start:], "}")
-			return s[:start] + "jetstream: false" + s[start+end+1:]
-		}, 0600},
-		{"production cluster", func(s string) string { return strings.ReplaceAll(s, "name: COS", "name: production") }, 0600},
-		{"production COS cluster", func(s string) string { return strings.ReplaceAll(s, "name: COS", "name: COS-production") }, 0600},
-		{"missing route auth", func(s string) string {
-			return strings.ReplaceAll(s, "authorization { user: cos-route, password: route-test-secret }", "")
-		}, 0600},
-		{"public route", func(s string) string {
-			return strings.ReplaceAll(s, "routes: []", "routes: [nats-route://cos-route:route-test-secret@production.example.com:6222]")
-		}, 0600},
-		{"invalid syntax containing secret", func(s string) string { return s + "\nunknown-secret-setting: PRIVATE-T3-TOKEN\n" }, 0600},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			cfg, text := busTestConfig(t, "test-node", 4223, 6223, nil)
-			if test.edit != nil {
-				busTestWriteConfig(t, cfg, test.edit(text))
-			}
-			if err := os.Chmod(filepath.Join(cfg.Home, ".config/cos/nats.conf"), test.mode); err != nil {
+func TestBusAdmission(t *testing.T) {
+	t.Run("probe sends nothing and accepts only COS route listeners", func(t *testing.T) {
+		for banner, want := range map[string]bool{
+			"INFO {\"cluster\":\"COS\",\"name\":\"beta\"}\r\n": true,
+			"INFO {\"cluster\":\"production\"}\r\n":            false,
+			"-ERR 'not nats'\r\n":                              false,
+			"":                                                 false,
+		} {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
 				t.Fatal(err)
 			}
-			for _, start := range []bool{false, true} {
-				var bus *Bus
-				var err error
-				if start {
-					bus, err = StartBus(context.Background(), cfg, func(context.Context, string, []string) (any, error) { return nil, nil })
-				} else {
-					bus, err = ConnectBus(context.Background(), cfg)
+			received := make(chan int, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					received <- -1
+					return
 				}
-				if bus != nil {
-					bus.Close()
-				}
-				if err == nil || strings.Contains(err.Error(), "test-secret") || strings.Contains(err.Error(), "PRIVATE-T3-TOKEN") {
-					t.Fatalf("unsafe or missing configuration error: %v", err)
-				}
+				_, _ = conn.Write([]byte(banner))
+				_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+				n, _ := io.Copy(io.Discard, conn)
+				conn.Close()
+				received <- int(n)
+			}()
+			if banner == "" {
+				go func() { time.Sleep(100 * time.Millisecond); listener.Close() }()
 			}
-		})
-	}
-	t.Run("symlink is not a private regular config", func(t *testing.T) {
-		cfg := Config{Home: t.TempDir(), LocalHost: "test-node"}
-		dir := filepath.Join(cfg.Home, ".config/cos")
-		if err := os.MkdirAll(dir, 0700); err != nil {
+			if got := cosRoute(context.Background(), listener.Addr().String()); got != want {
+				t.Fatalf("banner %q accepted = %v", banner, got)
+			}
+			if n := <-received; n > 0 {
+				t.Fatalf("probe sent %d bytes to %q", n, banner)
+			}
+			listener.Close()
+		}
+	})
+
+	t.Run("nodes with another master secret never join", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ports := busTestPorts(t, 4)
+		handler := func(context.Context, string, []string) (any, error) { return nil, nil }
+		cfg, node := busTestConfig(t, "delta", ports[0], ports[1], nil)
+		first, err := startBus(ctx, cfg, node, handler)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "target"), []byte("PRIVATE-T3-TOKEN"), 0600); err != nil {
+		defer first.Close()
+		cfg, node = busTestConfig(t, "beta", ports[2], ports[3], []int{ports[1]})
+		node.master = []byte("another-master-secret-0123456789")
+		second, err := startBus(ctx, cfg, node, handler)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink("target", filepath.Join(dir, "nats.conf")); err != nil {
+		defer second.Close()
+		time.Sleep(time.Second)
+		if first.server.NumRoutes() != 0 || second.server.NumRoutes() != 0 {
+			t.Fatal("a node with another master secret joined the cluster")
+		}
+	})
+
+	t.Run("CLI requires the service credential", func(t *testing.T) {
+		cfg := Config{Home: t.TempDir(), Runtime: t.TempDir(), LocalHost: "delta"}
+		if _, err := ConnectBus(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "not running") {
+			t.Fatalf("missing credential: %v", err)
+		}
+		if err := writeBusCredential(cfg, busCredential{Port: 1, Password: "PRIVATE-T3-TOKEN"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ConnectBus(context.Background(), cfg); err == nil {
-			t.Fatal("symlink accepted")
+		if err := os.Chmod(busCredentialPath(cfg), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ConnectBus(context.Background(), cfg); err == nil || strings.Contains(err.Error(), "PRIVATE") {
+			t.Fatalf("public credential accepted or leaked: %v", err)
 		}
 	})
 }
 
-func TestBusNkeyAndContextCleanup(t *testing.T) {
+func TestTailnetPeers(t *testing.T) {
+	peer := tailnetPeer{TailscaleIPs: []string{"fd7a:115c:a1e0::1", "100.64.0.9"}}
+	if tailnetIPv4(peer) != "100.64.0.9" || tailnetIPv4(tailnetPeer{TailscaleIPs: []string{"fd7a::1"}}) != "" {
+		t.Fatal("tailnet IPv4 selection")
+	}
+}
+
+func TestBusContextCleanup(t *testing.T) {
 	ports := busTestPorts(t, 3)
-	cfg, text := busTestConfig(t, "nkey-node", ports[0], ports[1], ports[2:])
-	key, err := nkeys.CreateUser()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer key.Wipe()
-	public, err := key.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seed, err := key.Seed()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedPath := filepath.Join(cfg.Home, ".config/cos/nats.seed")
-	if err := os.WriteFile(seedPath, seed, 0600); err != nil {
-		t.Fatal(err)
-	}
-	text = strings.ReplaceAll(text, "authorization { user: cos-client, password: client-test-secret }", fmt.Sprintf("authorization { users: [{nkey: %q}] }", public))
-	busTestWriteConfig(t, cfg, text)
+	cfg, node := busTestConfig(t, "solo-node", ports[0], ports[1], ports[2:])
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	node, err := StartBus(ctx, cfg, func(ctx context.Context, command string, args []string) (any, error) {
+	bus, err := startBus(ctx, cfg, node, func(ctx context.Context, command string, args []string) (any, error) {
 		if command == "handoff" || command == "send" {
 			deadline, _ := ctx.Deadline()
 			return deadline, nil
 		}
-		return "nkey-authenticated", nil
+		return "authenticated", nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer node.Close()
+	defer bus.Close()
 	client, err := ConnectBus(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 	var out string
-	if err := client.Call(ctx, "nkey-node", "projects", nil, &out); err != nil || out != "nkey-authenticated" {
-		t.Fatalf("nkey call: %q, %v", out, err)
+	if err := client.Call(ctx, "solo-node", "projects", nil, &out); err != nil || out != "authenticated" {
+		t.Fatalf("call: %q, %v", out, err)
 	}
 	for _, test := range []struct {
 		command string
 		limit   time.Duration
 	}{{"send", time.Minute}, {"handoff", 40 * time.Minute}} {
 		var deadline time.Time
-		if err := client.Call(ctx, "nkey-node", test.command, nil, &deadline); err != nil {
+		if err := client.Call(ctx, "solo-node", test.command, nil, &deadline); err != nil {
 			t.Fatal(err)
 		}
 		remaining := time.Until(deadline)
@@ -726,7 +696,7 @@ func TestBusNkeyAndContextCleanup(t *testing.T) {
 	short, stopShort := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer stopShort()
 	var deadline time.Time
-	if err := client.Call(short, "nkey-node", "handoff", nil, &deadline); err != nil {
+	if err := client.Call(short, "solo-node", "handoff", nil, &deadline); err != nil {
 		t.Fatal(err)
 	}
 	callerDeadline, _ := short.Deadline()
@@ -734,40 +704,18 @@ func TestBusNkeyAndContextCleanup(t *testing.T) {
 		t.Fatalf("caller deadline lost: %s != %s", deadline, callerDeadline)
 	}
 	hosts, err := client.Hosts(ctx)
-	if err != nil || !slices.Equal(hosts, []string{"beta", "delta", "mariogk-dev", "nkey-node"}) {
+	if err != nil || !slices.Equal(hosts, []string{"beta", "delta", "mariogk-dev", "solo-node"}) {
 		t.Fatalf("offline expected nodes lost: %v, %v", hosts, err)
 	}
-	if err := os.Chmod(seedPath, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ConnectBus(ctx, cfg); err == nil || strings.Contains(err.Error(), string(seed)) {
-		t.Fatalf("unsafe seed permissions accepted or leaked: %v", err)
-	}
 	cancel()
-	for _, bus := range []*Bus{client, node} {
+	for _, b := range []*Bus{client, bus} {
 		select {
-		case <-bus.done:
-		case <-time.After(3 * time.Second):
+		case <-b.done:
+		case <-time.After(5 * time.Second):
 			t.Fatal("context cancellation did not close bus")
 		}
 	}
-	if node.server.Running() || !client.conn.IsClosed() {
+	if bus.server.Running() || !client.conn.IsClosed() {
 		t.Fatal("context cancellation left bus running")
-	}
-}
-
-func TestBusExampleConfig(t *testing.T) {
-	text, err := os.ReadFile("../../examples/nats.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := Config{Home: t.TempDir(), LocalHost: "delta"}
-	busTestWriteConfig(t, cfg, string(text))
-	opts, _, _, err := loadBusConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.StoreDir != filepath.Join(cfg.Home, ".local/share/cos/nats") || len(opts.Routes) != 2 {
-		t.Fatal("example lost durable storage or COS peer routes")
 	}
 }
