@@ -371,7 +371,8 @@ func (a *Agent) agentHeld(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	model, _ := agentModel["model"].(string)
+	pol := CurrentBehavior().Models
+	model, _ := pol.Advisor(pol.Leader, false)["model"].(string)
 	ok, _, _ := s.Headroom(model, time.Now())
 	return !ok, nil
 }
