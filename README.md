@@ -455,6 +455,12 @@ State lives in the replicated `COS_INBOX` JetStream KV bucket (3 replicas). Ever
 node mirrors it into SQLite, so any node shows and answers the same Inbox.
 Answering emits a `user.answer` event on `cos.events.>`.
 
+## Token saving (TS-828)
+
+- `cos memory`: typed entries. Recall returns pinned entries, then BM25/FTS5
+  matches, then recent ones, under a 1,500-token cap. Shared context files are
+  read as entries.
+
 ## TS-769 slices
 
 1. **This PR:** CLI parity, derived SQLite state, read-only live dashboard,

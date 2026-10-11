@@ -99,6 +99,9 @@ func NewChat() *Chat {
 func (c *Chat) Run(ctx context.Context, b *Bus) {
 	for {
 		_, err := openKV(ctx, b, contextBucket)
+		if err == nil {
+			_, err = openKV(ctx, b, memoryBucket)
+		}
 		var kv jetstream.KeyValue
 		if err == nil {
 			kv, err = openKV(ctx, b, chatBucket)
