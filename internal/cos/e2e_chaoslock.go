@@ -60,6 +60,7 @@ func (l *chaosLockRun) take(ctx context.Context) error {
 			return !errors.As(l.err, &held)
 		})
 		l.env.waited += waited
+		l.env.chaosWaited += waited
 		if errors.As(l.err, &held) {
 			l.err = e2eSkip(fmt.Sprintf("%s, after waiting %s", held, waited.Round(time.Second)))
 		}

@@ -115,9 +115,9 @@ type E2EEnv struct {
 	// chaosLock takes the cluster-wide chaos lock; nil takes the real one. Replaceable in tests.
 	chaosLock func(ctx context.Context) (func(), error)
 
-	// waited is the time the current chaos check spent waiting for the lock or a rollout. rolloutWaited is
-	// the rollout wait all chaos checks of this run share (TS-816).
-	waited, rolloutWaited time.Duration
+	// waited is the time the current chaos check spent waiting for the lock or a rollout. chaosWaited is
+	// the lock and rollout wait all chaos checks of this run share (TS-816).
+	waited, chaosWaited time.Duration
 
 	// newUser creates the run's shared user and returns its cleanup; nil uses the bus. Replaceable in tests.
 	newUser func(ctx context.Context) (*e2eUser, func(), error)
@@ -264,7 +264,19 @@ func smokeChecks(checks []E2ECheck, host string) []E2ECheck {
 func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) E2EReport {
 	smoke := slices.Contains(args, "--smoke")
 	filter := slices.DeleteFunc(slices.Clone(args), func(a string) bool { return a == "--smoke" })
-	deadline := e2eDeadline
+	// Chaos perturbs the cluster and may wait for the lock, so it runs after the checks that need a quiet cluster and a full deadline.
+	checks = slices.Clone(checks)
+	slices.SortStableFunc(checks, func(a, b E2ECheck) int {
+		switch {
+		case a.Chaos == b.Chaos:
+			return 0
+		case a.Chaos:
+			return 1
+		}
+		return -1
+	})
+	// Chaos may wait up to e2eChaosWait for the lock or a rollout; the checks themselves still fit e2eDeadline.
+	deadline := e2eDeadline + e2eChaosWait
 	if smoke {
 		deadline = e2eSmokeDeadline
 	}

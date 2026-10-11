@@ -465,8 +465,8 @@ func waitRollout(ctx context.Context, budget, poll time.Duration, look func() (R
 // within the budget the run shares, and skips only when that runs out (TS-816).
 func (e *E2EEnv) waitNoRollout(ctx context.Context, bus *Bus) error {
 	look := func() (Rollout, error) { return rolloutGuard(ctx, bus) }
-	r, waited, err := waitRollout(ctx, e2eChaosWait-e.rolloutWaited, e2eChaosPoll, look, time.Now)
-	e.rolloutWaited += waited
+	r, waited, err := waitRollout(ctx, e2eChaosWait-e.chaosWaited, e2eChaosPoll, look, time.Now)
+	e.chaosWaited += waited
 	e.waited += waited
 	if err != nil {
 		return err

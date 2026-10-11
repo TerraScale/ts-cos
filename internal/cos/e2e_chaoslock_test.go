@@ -3,6 +3,7 @@ package cos
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,40 @@ func TestChaosLockWaitsForFreedLock(t *testing.T) {
 	}
 	if calls != 3 || env.waited == 0 {
 		t.Fatalf("calls=%d waited=%s, want 3 tries and a recorded wait", calls, env.waited)
+	}
+}
+
+func TestChaosChecksRunLastInOrder(t *testing.T) {
+	var order []string
+	check := func(id string, chaos bool) E2ECheck {
+		return E2ECheck{ID: id, Stream: "TS-816", Chaos: chaos, Run: func(context.Context, *E2EEnv) (string, error) {
+			order = append(order, id)
+			return "ok", nil
+		}}
+	}
+	env := &E2EEnv{chaosLock: func(context.Context) (func(), error) { return func() {}, nil }}
+	checks := []E2ECheck{check("cluster.restart", true), check("plain.b", false), check("cluster.leader-freeze", true), check("plain.d", false)}
+	runE2E(t.Context(), env, checks, nil)
+	if want := []string{"plain.b", "plain.d", "cluster.restart", "cluster.leader-freeze"}; !slices.Equal(order, want) {
+		t.Fatalf("run order = %v, want %v", order, want)
+	}
+}
+
+func TestChaosLockWaitCountsAgainstChaosBudget(t *testing.T) {
+	calls := 0
+	env := &E2EEnv{chaosLock: func(context.Context) (func(), error) {
+		calls++
+		if calls < 3 {
+			return nil, chaosHeld("holder")
+		}
+		return func() {}, nil
+	}}
+	l := &chaosLockRun{env: env, budget: time.Second, poll: time.Millisecond}
+	if err := l.take(t.Context()); err != nil {
+		t.Fatalf("take = %v, want the lock once the holder let go", err)
+	}
+	if env.waited == 0 || env.chaosWaited < env.waited {
+		t.Fatalf("waited=%s chaosWaited=%s, want the lock wait counted in the chaos budget", env.waited, env.chaosWaited)
 	}
 }
 
