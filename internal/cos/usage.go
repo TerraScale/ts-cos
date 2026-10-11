@@ -39,6 +39,8 @@ const (
 // usageBackoff spaces the retries of one KV call. A var so tests can shorten it.
 var usageBackoff = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
 
+var usageBucketConfig = jetstream.KeyValueConfig{Bucket: usageBucket, History: 1, TTL: (usageKeepDays + 4) * 24 * time.Hour}
+
 // UsageRow is one day's usage for one session and model on one host.
 type UsageRow struct {
 	Day          string    `json:"day"`
@@ -279,14 +281,18 @@ func (s *usageScanner) Scan(root, host string, now time.Time) ([]UsageRow, error
 
 // usageKey is the KV key for one row. Keys allow only [-/_=.a-zA-Z0-9].
 func usageKey(r UsageRow) string {
-	host := strings.Map(func(c rune) rune {
+	sum := sha256.Sum256([]byte(r.Project + "\x00" + r.Session + "\x00" + r.Model))
+	return strings.ReplaceAll(r.Day, "-", "") + "." + usageHostKey(r.Host) + "." + hex.EncodeToString(sum[:8])
+}
+
+// usageHostKey is a host name made safe for a KV key.
+func usageHostKey(host string) string {
+	return strings.Map(func(c rune) rune {
 		if strings.ContainsRune("-/_=.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", c) {
 			return c
 		}
 		return '_'
-	}, r.Host)
-	sum := sha256.Sum256([]byte(r.Project + "\x00" + r.Session + "\x00" + r.Model))
-	return strings.ReplaceAll(r.Day, "-", "") + "." + host + "." + hex.EncodeToString(sum[:8])
+	}, host)
 }
 
 // RunUsage publishes this node's transcript usage into COS_USAGE and mirrors every
@@ -302,7 +308,7 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 	var kv jetstream.KeyValue
 	for {
 		attempt, stop := context.WithTimeout(ctx, 5*time.Second)
-		kv, err = openKVConfig(attempt, bus, jetstream.KeyValueConfig{Bucket: usageBucket, History: 1, TTL: (usageKeepDays + 4) * 24 * time.Hour})
+		kv, err = openKVConfig(attempt, bus, usageBucketConfig)
 		stop()
 		if err == nil {
 			break

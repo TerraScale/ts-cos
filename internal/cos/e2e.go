@@ -297,6 +297,7 @@ func e2eChecks() []E2ECheck {
 	}
 	for _, h := range e2eHosts {
 		checks = append(checks, E2ECheck{ID: "nodes.data." + h, Stream: "TS-825", Run: checkNodeData(h)})
+		checks = append(checks, E2ECheck{ID: "tokens.accounting." + h, Stream: "TS-826", Run: checkTokenAccounting(h)})
 	}
 	checks = append(checks,
 		E2ECheck{ID: "nodes.downsampling", Stream: "TS-825", Run: checkNodeDownsampling},

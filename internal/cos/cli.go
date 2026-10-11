@@ -278,7 +278,11 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	defer s.Close()
-	bus, err := StartBus(ctx, cfg, func(ctx context.Context, cmd string, args []string) (any, error) {
+	var bus *Bus
+	bus, err = StartBus(ctx, cfg, func(ctx context.Context, cmd string, args []string) (any, error) {
+		if cmd == "usage-verify" {
+			return usageVerify(ctx, bus, s, cfg.LocalHost, args)
+		}
 		return LocalCommand(ctx, cfg, cmd, args)
 	})
 	if err != nil {
