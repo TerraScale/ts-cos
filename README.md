@@ -248,6 +248,7 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos prs` | Every open PR authored by mariogk, with CI/review/merge gates |
 | `cos status [--brief]` | Refresh all sources; `--brief` is at most 40 lines |
 | `cos context list\|get\|set\|rm` | Shared context files for the COS agent |
+| `cos agent [restart '<reason>']` | COS thread state, or a fresh brief at the next wake |
 | `cos projects <host>` | T3 project IDs, titles, and roots |
 | `cos launch <host> '<json>'` | Same launch fields as the old CLI; `projectTitle` can replace `projectId` |
 | `cos thread <host> <id>` / `cos ctx <host> <id>` | Thread summary or context usage |
@@ -430,6 +431,34 @@ cos context rm user-decisions
 ```
 
 Only the JetStream meta leader creates buckets; other nodes bind once it exists.
+
+### COS agent
+
+The cluster leader (`Bus.Lead`) drives the COS agent: one T3 thread on its own
+host (Opus 5.5, project `cos-agent` at `~/.local/share/cos/agent`). ts-cos writes
+the operating rules there as `CLAUDE.md` (`behavior/brief.md` + `rules.md`, through
+the hot-reloaded behavior loader) plus a `./cos` wrapper, so COS's only tool is this
+CLI. The first message of every thread renders `behavior/templates/brief.tmpl`. The thread's state lives in
+the replicated bucket `COS_AGENT`; the chat stays in `COS_CHAT`, never in T3.
+
+- Every user chat message is sent to the thread (queued behind a running turn).
+  The leader mirrors each turn into one chat entry: text and collapsed tool calls.
+- A fresh thread starts with a brief (the `focus` context file first, then every
+  shared context file up to 48 KiB, the last chat exchanges, `cos status --brief`)
+  when: the `focus` file or the FULL SEND set changes, a PR leaves the open set (merged or closed),
+  COS was idle for 4 hours, a new behavior version arrived, context passed 120k
+  tokens while idle, after a
+  failover, or COS ran `cos agent restart '<reason>'`. Past 120k tokens during a
+  running turn, it queues `/compact` instead. Restarts wait for the next wake,
+  except focus changes and an unanswered message after a failover.
+- On failover the new leader claims the thread state first, starts its own
+  thread, and deletes the old one on the previous host once it answers.
+
+```sh
+cos agent                        # thread, host, last restart reason
+cos agent restart 'new plan'     # fresh brief at the next wake
+cos context set focus '<text>'   # change focus: COS restarts with a fresh brief now
+```
 
 ## Autopilot: heartbeat and rules engine
 

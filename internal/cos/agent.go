@@ -1,0 +1,490 @@
+package cos
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+const (
+	agentBucket = "COS_AGENT"
+	// Fresh brief when idle past this context size; compact instead while a run is active.
+	agentRestartTokens = 120_000
+	agentIdleRestart   = 4 * time.Hour
+	agentContextBytes  = 48 << 10
+	agentRecentBytes   = 6 << 10
+	agentWorkspace     = ".local/share/cos/agent"
+)
+
+var agentModel = modelOpusHigh
+
+// AgentState is the replicated record of the one COS thread, so a new leader can take over.
+type AgentState struct {
+	Host      string        `json:"host"`
+	ThreadID  string        `json:"threadId"`
+	Started   time.Time     `json:"started"`
+	Reason    string        `json:"reason"`
+	Behavior  string        `json:"behavior"`
+	Focus     string        `json:"focus"`
+	OpenPRs   []string      `json:"openPRs"`
+	LastWake  time.Time     `json:"lastWake"`
+	Delivered string        `json:"delivered"`
+	Restart   string        `json:"restart,omitempty"`
+	Run       string        `json:"run,omitempty"`
+	Reply     string        `json:"reply,omitempty"`
+	Compacted string        `json:"compacted,omitempty"`
+	Orphans   []AgentThread `json:"orphans,omitempty"`
+}
+
+// addReason keeps every pending restart reason, so a failover is never hidden by a later trigger.
+func (st *AgentState) addReason(r string) {
+	if st.Restart != "" {
+		r = st.Restart + "; " + r
+	}
+	st.Restart = r
+}
+
+type AgentThread struct {
+	Host     string `json:"host"`
+	ThreadID string `json:"threadId"`
+}
+
+type agentT3 interface {
+	Projects(context.Context) ([]Project, error)
+	HTTP(ctx context.Context, method, path string, input, output any) error
+	Launch(context.Context, map[string]any) (any, error)
+	Send(context.Context, string, string, SendMode) (SendResult, error)
+	CloseTree(context.Context, string, bool) (TreeResult, error)
+	RPC(context.Context, string, any, any) error
+}
+
+// Agent drives the COS thread on the cluster leader. Every other node only reads its chat output.
+type Agent struct {
+	Host, Home, Exe string
+	Chat            *Chat
+	Store           *Store
+	KV, Context     jetstream.KeyValue
+	T3              func(context.Context) (agentT3, error)
+	Remote          func(ctx context.Context, host, command string, args []string, out any) error
+	project         string
+	shown           map[string]string
+	orphanCheck     time.Time
+	hot, nextPoll   time.Time
+	saved           string
+}
+
+// The agent runs on every node as a serve worker; only the cluster leader drives COS (Run uses Bus.Lead).
+func init() {
+	serveWorkers = append(serveWorkers, func(ctx context.Context, cfg Config, bus *Bus) {
+		store, err := stateStore(cfg)
+		if err != nil {
+			slog.Error("COS agent state", "error", err)
+			return
+		}
+		defer store.Close()
+		chat := NewChat()
+		go chat.Run(ctx, bus)
+		NewAgent(cfg, chat, store, bus).Run(ctx, bus)
+	})
+}
+
+func NewAgent(cfg Config, chat *Chat, store *Store, bus *Bus) *Agent {
+	exe, _ := os.Executable()
+	return &Agent{Host: cfg.LocalHost, Home: cfg.Home, Exe: exe, Chat: chat, Store: store,
+		T3:     func(ctx context.Context) (agentT3, error) { return OpenT3(ctx, cfg, cfg.LocalHost) },
+		Remote: bus.Call}
+}
+
+// Run drives COS while this node holds the cluster lease (Bus.Lead) and idles otherwise.
+func (a *Agent) Run(ctx context.Context, bus *Bus) {
+	for a.KV == nil {
+		kv, err := openKV(ctx, bus, agentBucket)
+		if err == nil {
+			a.Context, err = openKV(ctx, bus, contextBucket)
+		}
+		if err == nil {
+			a.KV = kv
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+	bus.Lead(ctx, func(ctx context.Context) {
+		for {
+			if a.Chat.Ready() {
+				if err := a.Step(ctx); err != nil && ctx.Err() == nil {
+					slog.Warn("COS agent step", "error", err)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	})
+}
+
+func (a *Agent) load(ctx context.Context) (AgentState, uint64, error) {
+	var st AgentState
+	e, err := a.KV.Get(ctx, "state")
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return st, 0, nil
+	}
+	if err != nil {
+		return st, 0, err
+	}
+	a.saved = string(e.Value())
+	return st, e.Revision(), json.Unmarshal(e.Value(), &st)
+}
+
+func (a *Agent) save(ctx context.Context, st AgentState, rev uint64) error {
+	data, err := json.Marshal(st)
+	if err != nil || string(data) == a.saved {
+		return err
+	}
+	if rev == 0 {
+		_, err = a.KV.Create(ctx, "state", data)
+	} else {
+		_, err = a.KV.Update(ctx, "state", data, rev)
+	}
+	return err
+}
+
+// Step reconciles the COS thread with the chat and live state; it is idempotent.
+func (a *Agent) Step(ctx context.Context) error {
+	st, rev, err := a.load(ctx)
+	if err != nil {
+		return fmt.Errorf("load COS state: %w", err)
+	}
+	now := time.Now().UTC()
+	if st.Host != a.Host {
+		if st.ThreadID != "" {
+			st.Orphans = append(st.Orphans, AgentThread{st.Host, st.ThreadID})
+			if e, ok := a.Chat.Entry(st.Reply); ok && e.Streaming {
+				e.Streaming = false
+				e.Text += "\n\n_Interrupted: the COS host failed over._"
+				if _, err := a.Chat.Put(ctx, e); err != nil {
+					return err
+				}
+			}
+			st.ThreadID, st.Run, st.Reply, st.Compacted = "", "", "", ""
+			st.addReason("failover from " + st.Host)
+		}
+		st.Host = a.Host
+		// Claim before acting: a node that loses this race must not launch a second COS thread.
+		if err := a.save(ctx, st, rev); err != nil {
+			return fmt.Errorf("claim COS: %w", err)
+		}
+		return nil
+	}
+	c, err := a.T3(ctx)
+	if err != nil {
+		return fmt.Errorf("open T3: %w", err)
+	}
+	v, err := View(ctx, a.Store)
+	if err != nil {
+		return fmt.Errorf("read COS view: %w", err)
+	}
+	failover := st.ThreadID == "" && strings.Contains(st.Restart, "failover from")
+	if b := CurrentBehavior(); b.Hash != st.Behavior {
+		if st.ThreadID != "" {
+			st.addReason("behavior updated to " + b.Version)
+		}
+		st.Behavior = b.Hash
+	}
+	if e, err := a.KV.Get(ctx, "restart"); err == nil {
+		st.addReason("COS asked: " + string(e.Value()))
+		// Fenced: a newer request written meanwhile survives for the next step.
+		if err := a.KV.Delete(ctx, "restart", jetstream.LastRevision(e.Revision())); err != nil {
+			return err
+		}
+	}
+	wake := []string{}
+	if failover && unanswered(a.Chat.Entries()) {
+		wake = append(wake, "The previous COS host failed over. The last user message in Recent chat has no reply yet: answer it.")
+	}
+	focusText := ""
+	if e, err := a.Context.Get(ctx, "focus"); err == nil {
+		focusText = string(e.Value())
+	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return err
+	}
+	if focus := focusOf(focusText, v); focus != st.Focus {
+		if st.ThreadID != "" {
+			st.addReason("focus changed")
+			wake = append(wake, "Focus changed: "+focusText+". Re-plan around it.")
+		}
+		st.Focus = focus
+	}
+	// A unit of work finishes when one of the user's PRs leaves the open set (merged or closed).
+	if v.Live.Errors["prs"] == "" && v.Live.At != "" {
+		open := openPRs(v)
+		if done := missingFrom(st.OpenPRs, open); st.OpenPRs != nil && len(done) > 0 {
+			st.addReason("finished " + strings.Join(done, ", "))
+		}
+		st.OpenPRs = open
+	}
+	if !st.LastWake.IsZero() && now.Sub(st.LastWake) > agentIdleRestart && st.Restart == "" {
+		st.addReason("idle for 4 hours")
+	}
+	messages := []ChatEntry{}
+	for _, e := range a.Chat.Entries() {
+		if e.Role == "user" && e.ID > st.Delivered {
+			messages = append(messages, e)
+		}
+	}
+	for _, m := range messages {
+		wake = append(wake, "User: "+m.Text)
+		st.Delivered = m.ID
+	}
+	busy := false
+	// Poll T3 every second while COS works or a wake is due, otherwise every 30 seconds.
+	if st.ThreadID != "" && (len(wake) > 0 || now.Before(a.hot) || !now.Before(a.nextPoll)) {
+		a.nextPoll = now.Add(30 * time.Second)
+		var p agentProjection
+		var gone *T3Error
+		err := c.RPC(ctx, "orchestration.getThreadProjection", map[string]any{"threadId": st.ThreadID}, &p)
+		if errors.As(err, &gone) && gone.NotFound() {
+			// The thread vanished (deleted, T3 data reset): forget it so the next wake relaunches.
+			st.ThreadID, st.Run, st.Reply, st.Compacted = "", "", "", ""
+			st.addReason("COS thread vanished")
+		} else if err != nil {
+			return fmt.Errorf("read COS thread: %w", err)
+		} else if err := a.mirror(ctx, &st, p); err != nil {
+			return fmt.Errorf("mirror COS thread: %w", err)
+		}
+		run, status := p.latest()
+		busy = active(status)
+		if busy {
+			a.hot = now.Add(2 * time.Minute)
+		}
+		if used := p.usedTokens(); used > agentRestartTokens {
+			if busy && st.Compacted != run {
+				compact := "/compact Keep only: the user's open requests, decisions made, threads and PRs you are driving and their state, and the exact next step. Drop tool output and resolved discussion."
+				if _, err := c.Send(ctx, st.ThreadID, compact, SendQueue); err != nil {
+					return err
+				}
+				st.Compacted = run
+			} else if !busy && !strings.Contains(st.Restart, "context reached") {
+				st.addReason(fmt.Sprintf("context reached %d tokens", used))
+			}
+		}
+	}
+	if len(wake) > 0 {
+		text := strings.Join(wake, "\n\n")
+		if st.ThreadID == "" || (st.Restart != "" && !busy) {
+			if err := a.restart(ctx, c, &st, v, text, now); err != nil {
+				return fmt.Errorf("start COS thread: %w", err)
+			}
+		} else if _, err := c.Send(ctx, st.ThreadID, text, SendQueue); err != nil {
+			return fmt.Errorf("wake COS: %w", err)
+		}
+		st.LastWake = now
+		a.hot = now.Add(2 * time.Minute)
+	}
+	if len(st.Orphans) > 0 && now.Sub(a.orphanCheck) > time.Minute {
+		a.orphanCheck = now
+		st.Orphans = slices.DeleteFunc(st.Orphans, func(o AgentThread) bool {
+			var out TreeResult
+			return a.Remote(ctx, o.Host, "delete", []string{o.ThreadID}, &out) == nil && len(out.Skipped) == 0
+		})
+	}
+	if err := a.save(ctx, st, rev); err != nil {
+		return fmt.Errorf("save COS state: %w", err)
+	}
+	return nil
+}
+
+// restart replaces the COS thread with a fresh one whose first message is a new brief.
+func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashboard, wake string, now time.Time) error {
+	project, err := a.ensureProject(ctx, c)
+	if err != nil {
+		return err
+	}
+	reason := st.Restart
+	if reason == "" {
+		reason = "first start"
+	}
+	brief, err := a.brief(ctx, v, reason, wake)
+	if err != nil {
+		return err
+	}
+	out, err := c.Launch(ctx, map[string]any{"projectId": project, "title": "COS", "modelSelection": agentModel, "message": brief})
+	var missing *T3Error
+	if errors.As(err, &missing) && missing.NotFound() {
+		a.project = "" // the project was deleted (T3 reset): find or recreate it next time
+	}
+	if err != nil {
+		return err
+	}
+	id, _ := out.(map[string]any)["threadId"].(string)
+	if id == "" {
+		return errors.New("T3 launch returned no COS thread")
+	}
+	if st.ThreadID != "" {
+		// A thread that could not be deleted (still running, T3 error) is retried with the orphans.
+		if res, err := c.CloseTree(ctx, st.ThreadID, true); err != nil || len(res.Skipped) > 0 {
+			st.Orphans = append(st.Orphans, AgentThread{a.Host, st.ThreadID})
+		}
+	}
+	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans}
+	// The launch already happened: a failed notice must not make the next step launch again.
+	if _, err := a.Chat.Put(ctx, ChatEntry{Role: "system", Text: "COS started a fresh thread on " + a.Host + ": " + reason + "."}); err != nil {
+		slog.Warn("post COS restart notice", "error", err)
+	}
+	return nil
+}
+
+// ensureProject keeps the COS workspace: rules as CLAUDE.md and a ./cos wrapper bound to this node.
+func (a *Agent) ensureProject(ctx context.Context, c agentT3) (string, error) {
+	dir := filepath.Join(a.Home, agentWorkspace)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(CurrentBehavior().AgentBrief()), 0600); err != nil {
+		return "", err
+	}
+	wrapper := fmt.Sprintf("#!/bin/sh\nHOME=%s exec %s \"$@\"\n", shellQuote(a.Home), shellQuote(a.Exe))
+	if err := os.WriteFile(filepath.Join(dir, "cos"), []byte(wrapper), 0700); err != nil {
+		return "", err
+	}
+	if a.project != "" {
+		return a.project, nil
+	}
+	projects, err := c.Projects(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range projects {
+		if p.Root == dir {
+			a.project = p.ID
+			return p.ID, nil
+		}
+	}
+	id := uuid()
+	var out any
+	if err := c.HTTP(ctx, "POST", "/api/projects/mutate", map[string]any{"type": "project.create", "commandId": uuid(), "projectId": id, "title": "cos-agent", "workspaceRoot": dir, "createWorkspaceRootIfMissing": true}, &out); err != nil {
+		return "", err
+	}
+	a.project = id
+	return id, nil
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// AgentBriefData feeds behavior/templates/brief.tmpl, the first message of every COS thread.
+type AgentBriefData struct {
+	At            time.Time
+	Reason, Now   string
+	Context       []ContextFile
+	Omitted, Live string
+	Recent        []string
+}
+
+// brief renders the first message of every COS thread: shared context, recent chat and live state.
+func (a *Agent) brief(ctx context.Context, v Dashboard, reason, wake string) (string, error) {
+	files, err := contextFiles(ctx, a.Context, true)
+	if err != nil {
+		return "", err
+	}
+	// The focus file leads, so a size cap never drops it.
+	slices.SortStableFunc(files, func(x, y ContextFile) int {
+		return cmpBool(y.Name == "focus", x.Name == "focus")
+	})
+	data := AgentBriefData{At: time.Now().UTC(), Reason: reason, Now: wake, Live: Brief(v), Context: []ContextFile{}, Recent: []string{}}
+	used := 0
+	for _, f := range files {
+		if used+len(f.Text) > agentContextBytes {
+			data.Omitted = f.Name
+			break
+		}
+		used += len(f.Text)
+		data.Context = append(data.Context, f)
+	}
+	size := 0
+	for _, e := range slices.Backward(a.Chat.Entries()) {
+		if e.Role != "user" && e.Role != "cos" {
+			continue
+		}
+		line := e.Role + ": " + truncate(e.Text, 800)
+		if size += len(line); size > agentRecentBytes {
+			break
+		}
+		data.Recent = append(data.Recent, line)
+	}
+	slices.Reverse(data.Recent)
+	return CurrentBehavior().Render("brief", data)
+}
+
+func init() {
+	cliCommands["agent"] = cliCommand{Usage: "agent [restart '<reason>']", Run: agentCommand}
+}
+
+// agentCommand shows the COS thread state or asks the leader for a fresh brief.
+func agentCommand(ctx context.Context, cfg Config, args []string, w io.Writer) error {
+	if len(args) > 2 || (len(args) > 0 && args[0] != "restart") || (len(args) == 1) {
+		return errors.New("usage: cos agent [restart '<reason>']")
+	}
+	bus, err := ConnectBus(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer bus.Close()
+	kv, err := openKV(ctx, bus, agentBucket)
+	if err != nil {
+		return err
+	}
+	if len(args) == 2 {
+		reason := strings.TrimSpace(args[1])
+		if reason == "" {
+			return errors.New("restart needs a reason")
+		}
+		if _, err := kv.Put(ctx, "restart", []byte(truncate(reason, 200))); err != nil {
+			return err
+		}
+		return output(w, map[string]any{"restart": reason, "note": "the leader starts a fresh COS thread at the next wake"})
+	}
+	e, err := kv.Get(ctx, "state")
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return output(w, AgentState{})
+	}
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(e.Value(), '\n'))
+	return err
+}
+
+// unanswered reports whether the newest user or COS chat entry is from the user.
+func unanswered(entries []ChatEntry) bool {
+	for _, e := range slices.Backward(entries) {
+		if e.Role == "user" || e.Role == "cos" {
+			return e.Role == "user"
+		}
+	}
+	return false
+}
+
+func cmpBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return 1
+	}
+	return -1
+}

@@ -28,6 +28,7 @@ Run it as `./cos` from this directory. Output is JSON. `./cos help` lists every 
 ./cos close|delete <host> <threadId>
 ./cos merge <repo> <number>   # ready cos/ or cos-hold/ PRs only
 ./cos context list|get|set|rm # shared context files (durable user decisions, preferences, learnings)
+./cos context set focus '<text>' # the current focus; changing it restarts you with a fresh brief
 ./cos agent restart '<reason>' # ask ts-cos for a fresh thread with a new brief
 ./cos behavior                # which behavior version (this brief, rules, wake budget, templates) each node runs
 ```
