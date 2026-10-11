@@ -119,3 +119,29 @@ func TestSavingsConcurrentIncrementsKeepEveryEvent(t *testing.T) {
 		t.Fatalf("counter after 100 writes: %+v", c)
 	}
 }
+
+func TestSavingsReportSeesJustRecordedCounter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	kv := memoryTestBuckets(t, ctx, savingsBucket)[0]
+	base := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+
+	// Each iteration pairs a kind with a day, so the 20 writes cover every kind and day mix in turn.
+	events := map[string]int{}
+	for i := range 20 {
+		kind := savingKinds[i%len(savingKinds)]
+		day := i % 4
+		now := base.AddDate(0, 0, -day)
+		if err := RecordSaving(ctx, kv, kind, i+1, 0, now); err != nil {
+			t.Fatal(err)
+		}
+		events[now.Format("2006-01-02")+"."+kind]++
+		report, err := SavingsReport(ctx, kv, 4, base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := report[day].Kinds[kind].Events, events[now.Format("2006-01-02")+"."+kind]; got != want {
+			t.Fatalf("iteration %d: %s on %s has %d events, want %d", i, kind, report[day].Day, got, want)
+		}
+	}
+}

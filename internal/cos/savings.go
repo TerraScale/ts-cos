@@ -9,7 +9,6 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -143,46 +142,28 @@ func SavingsReport(ctx context.Context, kv jetstream.KeyValue, days int, now tim
 		return nil, fmt.Errorf("savings days must be 1 to %d", savingsMaxDays)
 	}
 	out := make([]SavingsDay, 0, days)
-	index := make(map[string]int, days)
 	for i := range days {
 		day := now.UTC().AddDate(0, 0, -i).Format("2006-01-02")
-		index[day] = i
 		out = append(out, SavingsDay{Day: day, Kinds: map[string]SavingCounter{}})
 	}
-	lister, err := kv.ListKeys(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer lister.Stop()
-	// ListKeys can repeat a key while writers are active, so collect into a set before reading.
-	wanted := map[string]bool{}
-	for key := range lister.Keys() {
-		day, kind, _ := strings.Cut(key, ".")
-		if _, ok := index[day]; ok && slices.Contains(savingKinds, kind) {
-			wanted[key] = true
+	// Keys are deterministic, so direct Gets see a counter as soon as its write is acknowledged; a ListKeys watcher can miss one written moments before.
+	for i := range out {
+		for _, kind := range savingKinds {
+			e, err := kv.Get(ctx, out[i].Day+"."+kind)
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			var c SavingCounter
+			if err := json.Unmarshal(e.Value(), &c); err != nil {
+				return nil, err
+			}
+			out[i].Kinds[kind] = c
+			out[i].WallSeconds += c.WallSeconds
+			out[i].Avoided += c.Tokens
 		}
-	}
-	// The key channel closes silently when ctx ends, so a short listing must fail here.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	for key := range wanted {
-		e, err := kv.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		var c SavingCounter
-		if err := json.Unmarshal(e.Value(), &c); err != nil {
-			return nil, err
-		}
-		day, kind, _ := strings.Cut(key, ".")
-		d := &out[index[day]]
-		d.Kinds[kind] = c
-		d.WallSeconds += c.WallSeconds
-		d.Avoided += c.Tokens
 	}
 	return out, nil
 }
