@@ -51,7 +51,7 @@ func (w *Web) nodeDetail(rw http.ResponseWriter, r *http.Request) {
 	}
 	charts := nodeCharts(series, now.Add(-span), now, window)
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := nodeDetailPage(card, window, charts).Render(ctx, rw); err != nil {
+	if err := nodeDetailPage(w.header(ctx), card, window, charts).Render(ctx, rw); err != nil {
 		slog.Error("render node", "error", err)
 	}
 }

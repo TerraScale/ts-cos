@@ -1,0 +1,188 @@
+/* Top bar shell: one bar on every page, desktop and phone. Copied from
+   ts-dashboard: .ts-nav-link, .ts-nav-count, .ts-main. */
+.ts-app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--ts-canvas);
+}
+
+.ts-nav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--ts-s3);
+  min-height: 36px;
+  padding: var(--ts-s1) var(--ts-s2);
+  border-radius: var(--ts-radius);
+  color: var(--ts-ink-2);
+  font-weight: 500;
+  transition: background-color var(--ts-fast) var(--ts-ease), color var(--ts-fast) var(--ts-ease);
+}
+
+.ts-nav-link:hover {
+  background: var(--ts-surface-2);
+  color: var(--ts-ink);
+  text-decoration: none;
+}
+
+.ts-nav-link[aria-current="page"] {
+  background: var(--ts-accent-soft);
+  color: var(--ts-ink);
+  font-weight: 600;
+}
+
+.ts-nav-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: var(--ts-radius-pill);
+  background: color-mix(in oklab, var(--tone) 18%, transparent);
+  color: color-mix(in oklab, var(--tone) 60%, var(--ts-ink));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* Containment also scopes fixed descendants. */
+.ts-main {
+  flex: 1;
+  container: page / inline-size;
+  outline: none;
+}
+
+.ts-topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--ts-z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--ts-s4);
+  min-height: 56px;
+  padding: env(safe-area-inset-top) max(var(--ts-s6), env(safe-area-inset-right)) 0 max(var(--ts-s6), env(safe-area-inset-left));
+  border-bottom: 1px solid var(--ts-line);
+  background: var(--ts-canvas);
+}
+
+.ts-topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ts-s2);
+  color: var(--ts-ink);
+  font-weight: 600;
+  font-size: var(--ts-fs-lg);
+}
+
+.ts-topbar-brand:hover {
+  text-decoration: none;
+}
+
+.ts-topbar-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.ts-topbar-stat {
+  padding: 2px var(--ts-s2);
+  border: 1px solid var(--ts-line-strong);
+  border-radius: var(--ts-radius-pill);
+  color: var(--ts-ink-2);
+  font-size: var(--ts-fs-xs);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-topbar-stat:empty {
+  display: none;
+}
+
+.ts-topbar-stat a {
+  color: inherit;
+}
+
+.ts-topnav {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-s1);
+  margin-inline-start: auto;
+}
+
+.ts-topbar .ts-nav-link {
+  min-height: 32px;
+  padding: 0 var(--ts-s3);
+}
+
+.ts-topbar .ts-topbar-inbox-toggle {
+  display: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ts-topbar-inbox-toggle[aria-pressed="true"] {
+  background: var(--ts-accent-soft);
+  color: var(--ts-ink);
+  font-weight: 600;
+}
+
+/* Below 64rem the status strip is hidden; the nav stays. */
+@media (max-width: 63.99rem) {
+  .ts-topbar-stats {
+    display: none;
+  }
+}
+
+/* Below 60rem the chat page hides its Inbox column, so its toggle replaces the Inbox link. */
+@media (max-width: 59.99rem) {
+  .ts-topbar:has(.ts-topbar-inbox-toggle) .ts-topbar-inbox {
+    display: none;
+  }
+
+  .ts-topbar .ts-topbar-inbox-toggle {
+    display: inline-flex;
+  }
+}
+
+/* Phones: the brand and Inbox share row one, the nav scrolls on row two. */
+@media (max-width: 47.99rem) {
+  .ts-topbar {
+    flex-wrap: wrap;
+    row-gap: 0;
+    column-gap: var(--ts-s2);
+    padding-inline: var(--ts-s4);
+  }
+
+  .ts-topbar-inbox,
+  .ts-topbar-inbox-toggle {
+    order: 1;
+    margin-inline-start: auto;
+  }
+
+  .ts-topnav {
+    order: 2;
+    flex-basis: 100%;
+    margin-inline-start: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: var(--ts-s1);
+  }
+
+  .ts-topnav .ts-nav-link {
+    flex: none;
+    padding: 0 var(--ts-s2);
+    font-size: var(--ts-fs-sm);
+  }
+}
+
+/* Touch targets: 44px tall on coarse pointers. */
+@media (pointer: coarse) {
+  .ts-topbar .ts-nav-link {
+    min-height: 44px;
+  }
+}

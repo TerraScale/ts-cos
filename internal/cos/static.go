@@ -28,7 +28,8 @@ func buildCSS() []byte {
 		{"base", []string{"base.css"}},
 		{"layout", []string{"layout.css"}},
 		{"legacy", []string{"legacy.css"}},
-		{"components", []string{"controls.css", "surfaces.css", "data.css"}},
+		{"components", []string{"shell.css", "controls.css", "surfaces.css", "data.css", "overlays.css", "auth.css"}},
+		{"features", []string{"cos.css"}},
 	} {
 		for _, file := range layer.files {
 			b.WriteString("@layer " + layer.name + " {\n")

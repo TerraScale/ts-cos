@@ -96,7 +96,7 @@ const (
 
 	// Published by the leader's node watcher. Data: {"type": "disk|mem|missing", ...}.
 	KindNodeAlert EventKind = "node.alert"
-	// Published by the home.kpis.live e2e check; folded only into #kpis[data-probe].
+	// Published by the metrics.kpis.live e2e check; folded only into #kpis[data-probe].
 	KindKPIProbe EventKind = "kpi.probe"
 	// Published by the leader's CLIProxyAPI poller when a credential or model state changes. Data: limitsEventData.
 	KindLimitsChanged EventKind = "limits.changed"

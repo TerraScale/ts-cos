@@ -248,20 +248,6 @@ func TestChatSSEPatches(t *testing.T) {
 	if header := readEvent(); !strings.Contains(header, `<header id="chat-head"`) {
 		t.Fatal(header)
 	}
-	if tiles := readEvent(); !strings.Contains(tiles, `id="kpis"`) {
-		t.Fatal(tiles)
-	}
-	for _, badge := range []string{`id="side-inbox"`, `id="tab-inbox"`} {
-		if event := readEvent(); !strings.Contains(event, badge) {
-			t.Fatal(event)
-		}
-	}
-	if nodes := readEvent(); !strings.Contains(nodes, `id="pane-nodes"`) {
-		t.Fatal(nodes)
-	}
-	if work := readEvent(); !strings.Contains(work, `id="pane-work"`) {
-		t.Fatal(work)
-	}
 	if inboxPane := readEvent(); !strings.Contains(inboxPane, `id="inbox"`) {
 		t.Fatal(inboxPane)
 	}

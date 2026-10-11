@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -164,7 +165,7 @@ func TestNodeDetailRender(t *testing.T) {
 	}
 	card := nodeFixtureCards(now)[0]
 	var buf bytes.Buffer
-	if err := nodeDetailPage(card, "24h", nodeCharts(series, now.Add(-24*time.Hour), now, "24h")).Render(context.Background(), &buf); err != nil {
+	if err := nodeDetailPage(chatHeader{}, card, "24h", nodeCharts(series, now.Add(-24*time.Hour), now, "24h")).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	html := buf.String()
@@ -181,7 +182,12 @@ func TestNodeDetailRender(t *testing.T) {
 }
 
 func TestNodeDetailRoutesWithoutBus(t *testing.T) {
-	w := &Web{}
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	w := NewWeb(store, nil)
 	mux := http.NewServeMux()
 	w.nodeDetailRoutes(mux)
 	get := func(path string) *httptest.ResponseRecorder {
@@ -215,7 +221,7 @@ func TestNodeDetailShowsT3Error(t *testing.T) {
 	sample.T3 = NodeT3{OK: false, Error: "connection refused"}
 	card := NodeCard{Host: "mariogk-dev", State: "down", Sample: sample}
 	var buf bytes.Buffer
-	if err := nodeDetailPage(card, "1h", nil).Render(context.Background(), &buf); err != nil {
+	if err := nodeDetailPage(chatHeader{}, card, "1h", nil).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "T3 down: connection refused") {

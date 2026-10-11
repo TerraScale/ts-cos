@@ -4,8 +4,8 @@ templ workPage(h chatHeader, b workBoard) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Work · COS")
-		<body class="shell" data-init={ "@get('/work/events" + workQuery(b.Stage) + "', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" }>
-			@chatHead(h)
+		<body class="ts-app" data-init={ "@get('/work/events" + workQuery(b.Stage) + "', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" }>
+			@chatHead(h, "work")
 			<main class="page">
 				@workPanel(b)
 			</main>
@@ -40,12 +40,12 @@ templ workPanel(b workBoard) {
 							<th scope="col">Stage</th>
 							<th scope="col">Blocker</th>
 							<th scope="col">Threads</th>
-							<th scope="col" class="hide-sm">Model</th>
-							<th scope="col" class="num hide-sm">Haiku</th>
+							<th scope="col">Model</th>
+							<th scope="col" class="num">Haiku</th>
 							<th scope="col">PRs</th>
-							<th scope="col" class="hide-sm">Deployed</th>
+							<th scope="col">Deployed</th>
 							<th scope="col" class="num">Age</th>
-							<th scope="col" class="hide-sm">Last event</th>
+							<th scope="col">Last event</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -60,8 +60,8 @@ templ workPanel(b workBoard) {
 									}
 								</td>
 								<td>{ threadsText(l.Row.Threads) }</td>
-								<td class="hide-sm">{ orDash(l.Usage.Model) }</td>
-								<td class="num hide-sm">{ haikuText(l.Usage) }</td>
+								<td>{ orDash(l.Usage.Model) }</td>
+								<td class="num">{ haikuText(l.Usage) }</td>
 								<td>
 									for _, p := range l.Row.PRs {
 										<span class="row">
@@ -76,9 +76,9 @@ templ workPanel(b workBoard) {
 										</span>
 									}
 								</td>
-								<td class="hide-sm">{ agoText(l.Row.Deployed) }</td>
+								<td>{ agoText(l.Row.Deployed) }</td>
 								<td class="num">{ ageText(l.Row.Since) }</td>
-								<td class="hide-sm"><span class="sub">{ orDash(clip(l.Row.LastEvent, workLastEvent)) }</span></td>
+								<td><span class="sub">{ orDash(clip(l.Row.LastEvent, workLastEvent)) }</span></td>
 							</tr>
 						}
 					</tbody>
@@ -92,8 +92,8 @@ templ workTicketPage(h chatHeader, t workTimeline) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead(t.Ticket + " · Work · COS")
-		<body class="shell">
-			@chatHead(h)
+		<body class="ts-app">
+			@chatHead(h, "work")
 			<main class="page page-narrow">
 				@workTicketPanel(t)
 			</main>

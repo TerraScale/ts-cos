@@ -106,7 +106,7 @@ func TestNodesPageClusterRender(t *testing.T) {
 	cards := nodeFixtureCards(now)
 	cards[1].Sample.Build.Revision = "fedcba9876543210ffff" // differs from the COS leader, delta
 	var buf bytes.Buffer
-	if err := nodesPage(clusterFixture(), cards).Render(context.Background(), &buf); err != nil {
+	if err := nodesPage(chatHeader{}, clusterFixture(), cards).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	html := buf.String()
@@ -126,7 +126,7 @@ func TestNodesPageClusterRender(t *testing.T) {
 	assertCleanMarkup(t, html)
 
 	buf.Reset()
-	if err := nodesPage(ClusterView{}, cards).Render(context.Background(), &buf); err != nil {
+	if err := nodesPage(chatHeader{}, ClusterView{}, cards).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "cluster unknown") || !strings.Contains(buf.String(), `id="delta"`) {

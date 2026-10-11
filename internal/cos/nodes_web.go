@@ -20,7 +20,7 @@ func (w *Web) nodesPage(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := nodesPage(clusterOrEmpty(r.Context(), w.Bus), cards).Render(r.Context(), rw); err != nil {
+	if err := nodesPage(w.header(r.Context()), clusterOrEmpty(r.Context(), w.Bus), cards).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render nodes", err)
 	}
 }

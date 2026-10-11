@@ -50,18 +50,7 @@ select:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
 h1 { font-size: var(--t-2xl); font-weight: 650; letter-spacing: -0.01em; line-height: var(--lh-tight); }
 h3 { font-size: var(--t-md); font-weight: 600; }
 
-/* 3. Layout: shell, topbar, page */
-.shell { display: flex; flex-direction: column; min-height: 100dvh; }
-.topbar {
-  position: sticky; top: 0; z-index: 10;
-  height: var(--topbar);
-  padding-top: env(safe-area-inset-top);
-  padding-left: max(var(--s-4), env(safe-area-inset-left));
-  padding-right: max(var(--s-4), env(safe-area-inset-right));
-  display: flex; align-items: center; gap: var(--s-3);
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
-  border-bottom: 1px solid var(--border);
-}
+/* 3. Layout: page */
 .brand {
   display: flex; align-items: center; gap: var(--s-2);
   font-weight: 600; font-size: var(--t-lg); color: var(--text);
@@ -76,41 +65,14 @@ h3 { font-size: var(--t-md); font-weight: 600; }
   background: var(--accent); color: var(--on-accent);
   font-size: 13px; font-weight: 700;
 }
-.topbar-stats {
-  display: none;
-  list-style: none; padding: 0;
-  gap: var(--s-2);
-  margin-left: var(--s-3);
-}
-.stat {
-  font-size: var(--t-sm); color: var(--text-2);
-  padding: 2px var(--s-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  white-space: nowrap;
-}
-.stat a { color: inherit; }
-.stat:empty { display: none; }
-.topbar-nav { margin-left: auto; display: flex; align-items: center; gap: var(--s-1); }
-.navlink {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: var(--control);
-  padding: 0 var(--s-3);
-  border-radius: var(--r-1);
-  color: var(--text-2);
-  font-weight: 500;
-  text-decoration: none;
-}
-.navlink:hover { background: var(--hover); color: var(--text); text-decoration: none; }
-.navlink[aria-current="page"] { color: var(--text); background: var(--hover); }
 .inline-form { display: contents; }
-@media (max-width: 639.98px) { .hide-sm { display: none; } }
 .page {
   width: 100%; max-width: 80rem; min-width: 0; margin: 0 auto;
   padding: var(--s-4) max(var(--s-4), env(safe-area-inset-right)) calc(var(--s-7) + env(safe-area-inset-bottom)) max(var(--s-4), env(safe-area-inset-left));
   display: flex; flex-direction: column; gap: var(--s-4);
 }
 .page-narrow { max-width: 48rem; }
+.page { container-type: inline-size; }
 .grid-2 { display: grid; gap: var(--s-4); }
 .stack { display: flex; flex-direction: column; gap: var(--s-3); }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
@@ -496,7 +458,6 @@ body.auth {
 .settings-controls > button { width: 100%; }
 
 /* 10. Chat (chat page only; PR #8 lands the markup) */
-body.chat { height: 100dvh; overflow: hidden; }
 .chat-log {
   flex: 1;
   min-height: 0;
@@ -581,115 +542,6 @@ body.chat { height: 100dvh; overflow: hidden; }
   border-radius: var(--r-3);
 }
 .composer button { min-height: var(--tap); border-radius: var(--r-3); }
-
-/* 12. App layout: sidebar, main, aside */
-body.app {
-  display: flex; flex-direction: column;
-  height: 100dvh; overflow: hidden;
-}
-.app-body {
-  flex: 1; min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-}
-.app-main {
-  min-height: 0; overflow-y: auto;
-  display: flex; flex-direction: column;
-}
-.sidebar, .app-aside { display: none; }
-.side-title {
-  font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-2); font-weight: 600;
-  padding: 0 var(--s-2); margin-bottom: var(--s-1);
-}
-.side-link {
-  display: flex; align-items: center; gap: var(--s-2);
-  min-height: 32px;
-  padding: 0 var(--s-2);
-  border-radius: var(--r-1);
-  color: var(--text-2); font-weight: 500;
-  text-decoration: none;
-}
-.side-link:hover { background: var(--hover); color: var(--text); text-decoration: none; }
-.side-link[aria-current="page"] { background: var(--accent-soft); color: var(--text); }
-.side-link .badge { margin-left: auto; }
-.icon {
-  width: 16px; height: 16px; flex: none;
-  stroke: currentColor; fill: none; stroke-width: 1.75;
-}
-.icon-lg { width: 20px; height: 20px; }
-@media (min-width: 960px) {
-  .app-body { grid-template-columns: var(--sidebar) minmax(0, 1fr); }
-  .app-body:has(> .app-aside) { grid-template-columns: var(--sidebar) minmax(0, 1fr) 20rem; }
-  .sidebar {
-    display: flex; flex-direction: column; gap: var(--s-4);
-    overflow-y: auto;
-    padding: var(--s-3);
-    border-right: 1px solid var(--border);
-    background: var(--surface);
-  }
-  .app-aside {
-    display: block; overflow-y: auto;
-    container-type: inline-size;
-    border-left: 1px solid var(--border);
-    padding: var(--s-4);
-    background: var(--surface);
-  }
-}
-/* Tablets and small laptops: the sidebar is an icon rail so main and the aside sit side by side. */
-@media (min-width: 960px) and (max-width: 1279.98px) {
-  .app-body { --sidebar: 4rem; }
-  .sidebar { padding: var(--s-3) var(--s-2); }
-  .side-section + .side-section { border-top: 1px solid var(--border); padding-top: var(--s-4); }
-  .side-title, .side-link > span:not(.badge):not(.dot) {
-    position: absolute; width: 1px; height: 1px; overflow: hidden;
-    clip-path: inset(50%); white-space: nowrap;
-  }
-  .side-link { position: relative; justify-content: center; min-height: 40px; padding: 0; }
-  .side-link .badge {
-    position: absolute; top: 2px; right: 2px; margin: 0;
-    min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px;
-  }
-}
-@media (min-width: 1280px) {
-  .app-body:has(> .app-aside) { grid-template-columns: var(--sidebar) minmax(0, 1fr) 22rem; }
-}
-
-/* 13. Mobile bottom tab bar (phones only) */
-.tabbar {
-  flex: none;
-  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
-  height: calc(var(--tabbar) + env(safe-area-inset-bottom));
-  padding-bottom: env(safe-area-inset-bottom);
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
-  border-top: 1px solid var(--border);
-}
-.tab {
-  position: relative;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px;
-  min-height: var(--tap);
-  font-size: var(--t-xs); font-weight: 500;
-  color: var(--text-2);
-  text-decoration: none;
-}
-.tab:hover { text-decoration: none; }
-.tab[aria-current="page"] { color: var(--accent); }
-.tab-badge {
-  position: absolute; top: 6px; left: calc(50% + 6px);
-  min-width: 16px; height: 16px;
-  padding: 0 4px;
-  border-radius: var(--r-full);
-  background: var(--danger); color: var(--bg);
-  font-size: 10px; font-weight: 700; line-height: 16px;
-  text-align: center;
-}
-.app .topbar-nav .navlink { display: none; }
-@media (min-width: 960px) {
-  .tabbar { display: none; }
-  .app .topbar-nav .navlink { display: inline-flex; }
-}
 
 /* 14. KPI tiles */
 .kpi {
@@ -923,7 +775,6 @@ th[aria-sort="descending"]::after { content: " ↓"; }
   gap: var(--s-2);
   pointer-events: none;
 }
-body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset-bottom)); }
 .toasts .toast {
   position: static; transform: none; max-width: none;
   pointer-events: auto;
@@ -959,7 +810,6 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
 }
 @media (min-width: 960px) {
   .toasts { left: auto; right: var(--s-5); bottom: auto; top: calc(var(--topbar) + var(--s-3)); width: 22rem; }
-  body.app .toasts { bottom: auto; }
 }
 @media (pointer: coarse) {
   .toast-action { display: flex; align-items: center; min-height: var(--tap); }
@@ -990,7 +840,6 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 
-/* 21. Home pane switching (TS-824): >=960px shows chat + aside (icon rail below 1280px); below 960px the tab bar picks one pane */
 .skeleton-bar {
   display: block; height: var(--s-3); margin-top: var(--s-2);
   border-radius: var(--r-1);
@@ -998,20 +847,3 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
 }
 .skeleton-bar + .skeleton-bar { width: 75%; }
 .skeleton-bar:last-child { width: 50%; }
-.app-aside .pane + .pane { margin-top: var(--s-5); }
-/* Makes the chat column the container J's §14 @container rule queries; height is untouched (inline axis only) */
-#pane-chat { container-type: inline-size; }
-/* auto-fit gives 4+2 in an 830px chat column; a fixed 3 columns gives 3x2 from 40rem up */
-@container (min-width: 40rem) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.app-main > .kpis { padding: var(--s-3) var(--s-4) 0; }
-@media (max-width: 959px) {
-  .app-aside .pane { display: none; }
-  body[data-tab=inbox] .app-main, body[data-tab=nodes] .app-main, body[data-tab=work] .app-main { display: none; }
-  body[data-tab=inbox] .app-aside, body[data-tab=nodes] .app-aside, body[data-tab=work] .app-aside { display: block; overflow-y: auto; padding: var(--s-4); }
-  body[data-tab=inbox] #pane-inbox, body[data-tab=nodes] #pane-nodes, body[data-tab=work] #pane-work { display: block; }
-}
-/* Phones: one row of tiles that scrolls sideways, so the chat keeps its height */
-@media (max-width: 959px) {
-  .kpis { display: flex; overflow-x: auto; flex: none; }
-  .kpis .kpi { flex: 0 0 9rem; }
-}

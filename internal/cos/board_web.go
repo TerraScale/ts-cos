@@ -297,7 +297,7 @@ func (w *Web) workEvents(rw http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := patchElements(ctx, rw, chatHead(w.header(ctx))); err != nil {
+		if err := patchElements(ctx, rw, chatHead(w.header(ctx), "work")); err != nil {
 			return err
 		}
 		if err := patchElements(ctx, rw, workPanel(newWorkBoard(data, stage))); err != nil {

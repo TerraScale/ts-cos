@@ -37,7 +37,7 @@ func inboxPage(h chatHeader, v Dashboard) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<body class=\"shell\" data-init=\"@get('/inbox/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<body class=\"ts-app\" data-init=\"@get('/inbox/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -45,7 +45,7 @@ func inboxPage(h chatHeader, v Dashboard) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = chatHead(h).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = chatHead(h, "inbox").Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

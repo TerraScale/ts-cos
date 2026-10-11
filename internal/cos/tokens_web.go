@@ -102,7 +102,7 @@ func (w *Web) tokensEvents(rw http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := patchElements(ctx, rw, chatHead(w.header(ctx))); err != nil {
+		if err := patchElements(ctx, rw, chatHead(w.header(ctx), "tokens")); err != nil {
 			return err
 		}
 		if err := patchElements(ctx, rw, tokens(d)); err != nil {
