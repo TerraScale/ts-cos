@@ -498,6 +498,93 @@ func TestNewestDeployableMainSkipsRedAndFailed(t *testing.T) {
 	}
 }
 
+// A merge train rolls out only once main has been quiet for mainQuiet.
+func TestMainSettlesBeforeRollingOut(t *testing.T) {
+	tip, deployed := testRevision(2), testRevision(1)
+	var tipAt time.Time
+	f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/commits") {
+			fmt.Fprintf(w, `[{"sha":%q,"commit":{"committer":{"date":%q}}},{"sha":%q,"commit":{"committer":{"date":"2026-10-11T01:00:00Z"}}}]`, tip, tipAt.Format(time.RFC3339), deployed)
+			return
+		}
+		fmt.Fprint(w, `{"state":"pending","total_count":1}`)
+	})
+	ctx, failed, now := context.Background(), func(string) bool { return false }, time.Now()
+	tipAt = now.Add(-10 * time.Second)
+	var settling mainSettling
+	if _, err := newestDeployableMain(ctx, f.Config, deployed, time.Time{}, failed); !errors.As(err, &settling) || time.Duration(settling) < 45*time.Second || time.Duration(settling) > 60*time.Second {
+		t.Fatalf("err = %v; want mainSettling with 45 to 60 s left", err)
+	}
+	tipAt = now.Add(-2 * time.Minute)
+	if got, err := newestDeployableMain(ctx, f.Config, deployed, time.Time{}, failed); err != nil || got != tip {
+		t.Fatalf("quiet main: got %.12s, %v; want the tip", got, err)
+	}
+	tipAt = now.Add(-10 * time.Second)
+	if got, err := newestDeployableMain(ctx, f.Config, tip, time.Time{}, failed); err != nil || got != tip {
+		t.Fatalf("cluster already runs the tip: got %.12s, %v; want no wait", got, err)
+	}
+}
+
+// Main moving during a rollout stops it after the host it is on, and the next rollout skips the intermediate build.
+func TestRolloutCoalescesWhenMainMoves(t *testing.T) {
+	a, b := testRevision(2), testRevision(3)
+	f := newFakeFleet(t, testRevision(1))
+	now := time.Now()
+	plan, err := planRollout(context.Background(), f, []string{"delta", "beta", "mariogk-dev"}, "delta", a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRollout(a, "A", plan, now)
+	r.Main = true
+	copied := r
+	if coalesce(&copied, a, nil, now) || coalesce(&copied, "", errors.New("forgejo down"), now) {
+		t.Fatal("coalesced while main was still at the rollout's build, or unknown")
+	}
+	for i := 0; ; i++ {
+		if i > 500 {
+			t.Fatal("rollout never updated a host")
+		}
+		event, err := step(context.Background(), f, &r, "delta", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(rolloutTick)
+		if event != nil {
+			if event.Kind != KindNodeUpdated {
+				t.Fatalf("event = %s", kinds([]rolloutEvent{*event}))
+			}
+			break
+		}
+	}
+	if !coalesce(&r, b, nil, now) {
+		t.Fatal("main moved on but the rollout was not superseded")
+	}
+	if r.Phase != phaseSuperseded || r.Active() || r.Step != 1 || strings.Join(f.installs, ",") != "beta" {
+		t.Fatalf("phase %s, step %d, installs %v", r.Phase, r.Step, f.installs)
+	}
+	settling := newRollout(a, "A", plan, now)
+	if !coalesce(&settling, a, mainSettling(time.Second), now) {
+		t.Fatal("a settling main did not supersede")
+	}
+	plan2, err := planRollout(context.Background(), f, []string{"delta", "beta", "mariogk-dev"}, "delta", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2 := newRollout(b, "B", plan2, now)
+	drive(t, f, &r2, "delta", &now)
+	if r2.Phase != phaseCompleted {
+		t.Fatalf("phase = %s (%s)", r2.Phase, r2.Failure)
+	}
+	for name, h := range f.hosts {
+		if h.revision != b {
+			t.Fatalf("%s runs %.12s, want %.12s", name, h.revision, b)
+		}
+	}
+	if got := strings.Join(f.installs, ","); got != "beta,beta,mariogk-dev,delta" {
+		t.Fatalf("installs = %s; mariogk-dev and delta must not get the intermediate build", got)
+	}
+}
+
 // A gate that timed out (a busy cluster) is retried with backoff; a broken build never is.
 func TestRolloutRetriesAfterAGateTimeout(t *testing.T) {
 	now := time.Now()

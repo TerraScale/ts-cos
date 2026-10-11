@@ -176,6 +176,8 @@ cos deploy status     # the current or last rollout
 cos deploy why        # what the leader's last main check found and why it is (not) rolling
 ```
 
+Main rolls out once it has been unchanged for 60 s, and when main moves during a rollout the rollout stops after the current host and the newest build rolls out instead.
+
 Every step is an event on `cos.events.deploy.>`: `deploy.started`,
 `node.updated`, `gate.failed`, `deploy.rolled_back`, `deploy.completed`, with
 `{"rollout","to","change","hosts","from","reason"}` data.

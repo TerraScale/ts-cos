@@ -24,6 +24,9 @@ const (
 	gateTimeout    = 2 * time.Minute // the watchdog's 60 s, a restart and the smoke checks
 	rolloutTick    = 5 * time.Second
 	mainCheckEvery = time.Minute
+	// mainQuiet is how long main must stay unchanged before its newest build rolls out, so a
+	// merge train lands as one rolling restart instead of one per merge.
+	mainQuiet = time.Minute
 )
 
 const (
@@ -32,6 +35,7 @@ const (
 	phaseRollback   = "rollback" // Pending hosts go back to From, last updated first
 	phaseCompleted  = "completed"
 	phaseRolledBack = "rolled_back"
+	phaseSuperseded = "superseded" // main moved on: Hosts[:Step] run To, and the newest main build rolls out next
 )
 
 type Rollout struct {
@@ -45,6 +49,7 @@ type Rollout struct {
 	Pending []string          `json:"pending,omitempty"` // hosts on To, or still to restore while rolling back
 	Failure string            `json:"failure,omitempty"`
 	Broken  bool              `json:"broken,omitempty"` // the build itself failed (the watchdog reverted it), not the cluster
+	Main    bool              `json:"main,omitempty"`   // a rollout of main; a newer main build supersedes it between hosts
 	Last    string            `json:"last,omitempty"`   // latest gate observation, for the failure reason
 	Healthy time.Time         `json:"healthy,omitzero"` // first of two healthy gate readings
 	Started time.Time         `json:"started"`

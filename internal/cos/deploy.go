@@ -247,7 +247,7 @@ func pruneBuildStore(ctx context.Context, store jetstream.ObjectStore) {
 // PR's CI plus build, vet and test of the exact merge into main) and the canary gates the
 // running build, so waiting for main's own push CI only delays deploys: during a merge
 // train that CI queued for over 20 minutes. The walk never goes past the build the
-// cluster runs.
+// cluster runs. It waits until main has been unchanged for mainQuiet.
 func newestDeployableMain(ctx context.Context, cfg Config, current string, notBefore time.Time, failed func(string) bool) (string, error) {
 	f := Forgejo{Config: cfg}
 	var commits []struct {
@@ -260,6 +260,12 @@ func newestDeployableMain(ctx context.Context, cfg Config, current string, notBe
 	}
 	if _, err := f.request(ctx, http.MethodGet, "/repos/"+forgejoOrg+"/ts-cos/commits?sha=main&limit=30&stat=false&verification=false&files=false", nil, &commits); err != nil {
 		return "", err
+	}
+	// A change still settling holds the rollout, so the merges that follow within mainQuiet roll out together.
+	if len(commits) > 0 && commits[0].SHA != current {
+		if age := time.Since(commits[0].Commit.Committer.Date); age < mainQuiet {
+			return "", mainSettling(mainQuiet - age)
+		}
 	}
 	for _, c := range commits {
 		if c.SHA == current {
@@ -292,7 +298,8 @@ func newRollout(revision, change string, hosts []string, now time.Time) Rollout 
 }
 
 // beginRollout plans, builds and records a rollout of ref to every host not on it yet.
-func beginRollout(ctx context.Context, cfg Config, bus *Bus, kv jetstream.KeyValue, ref, leader string) (Rollout, error) {
+// main marks a rollout of main, which a newer main build may supersede.
+func beginRollout(ctx context.Context, cfg Config, bus *Bus, kv jetstream.KeyValue, ref, leader string, main bool) (Rollout, error) {
 	js, err := bus.JetStream()
 	if err != nil {
 		return Rollout{}, err
@@ -324,6 +331,7 @@ func beginRollout(ctx context.Context, cfg Config, bus *Bus, kv jetstream.KeyVal
 		return Rollout{}, buildError{err}
 	}
 	r := newRollout(revision, change, plan, time.Now().UTC())
+	r.Main = main
 	if err := startRollout(ctx, kv, r); err != nil {
 		return Rollout{}, err
 	}
@@ -415,6 +423,24 @@ type buildError struct{ error }
 
 func (e buildError) Unwrap() error { return e.error }
 
+// mainSettling: main changed less than mainQuiet ago; the value is the time left until it is quiet.
+type mainSettling time.Duration
+
+func (m mainSettling) Error() string {
+	return fmt.Sprintf("waiting: main changed less than %s ago; its newest build rolls out in %s", mainQuiet, time.Duration(m).Round(time.Second))
+}
+
+// coalesce stops a main rollout at a host boundary once main has moved past it (a newer deployable
+// build, or a change still settling), so the next rollout goes straight to the newest build instead
+// of finishing an intermediate one on the remaining hosts.
+func coalesce(r *Rollout, newest string, err error, now time.Time) bool {
+	if errors.As(err, new(mainSettling)) || (err == nil && newest != r.To) {
+		r.Phase, r.Since, r.Last = phaseSuperseded, now, "main moved on; its newest build rolls out next"
+		return true
+	}
+	return false
+}
+
 // RunRollouts is the leader's deploy loop (run it through Bus.Lead): it drives the
 // active rollout and starts one when main has a new green build.
 func RunRollouts(ctx context.Context, cfg Config, bus *Bus) {
@@ -456,6 +482,10 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 	if err != nil {
 		return err
 	}
+	failed := func(revision string) bool {
+		e, err := kv.Get(ctx, failedKey(revision))
+		return err == nil && failedBlocks(e.Value(), time.Now())
+	}
 	if !r.Active() {
 		if time.Since(*checked) < mainCheckEvery {
 			return nil
@@ -469,11 +499,13 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 		if t, err := time.Parse(time.RFC3339, CurrentBuild(cfg).Time); err == nil {
 			notBefore = t
 		}
-		head, err := newestDeployableMain(ctx, cfg, current, notBefore, func(revision string) bool {
-			e, err := kv.Get(ctx, failedKey(revision))
-			return err == nil && failedBlocks(e.Value(), time.Now())
-		})
+		head, err := newestDeployableMain(ctx, cfg, current, notBefore, failed)
 		if err != nil {
+			var settling mainSettling
+			if errors.As(err, &settling) {
+				// Look again as soon as main is quiet, not a whole check later.
+				*checked = time.Now().Add(time.Duration(settling) - mainCheckEvery)
+			}
 			recordPoll(ctx, kv, cfg.LocalHost, "", err.Error())
 			return nil
 		}
@@ -494,7 +526,7 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 			recordPoll(ctx, kv, cfg.LocalHost, head, "every host already runs it")
 			return nil
 		}
-		started, err := beginRollout(ctx, cfg, bus, kv, head, cfg.LocalHost)
+		started, err := beginRollout(ctx, cfg, bus, kv, head, cfg.LocalHost, true)
 		if errors.As(err, new(buildError)) {
 			// A build that does not compile or start is never retried by itself either.
 			value, _ := json.Marshal(failedRevision{Reason: err.Error(), Attempts: 1, Permanent: true})
@@ -504,13 +536,24 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 			recordPoll(ctx, kv, cfg.LocalHost, head, "not started: "+err.Error())
 			return err
 		}
-		recordPoll(ctx, kv, cfg.LocalHost, head, "rolling out (rollout "+started.ID+")")
+		note := "rolling out (rollout " + started.ID + ")"
+		if r.Phase == phaseSuperseded {
+			note += fmt.Sprintf(", superseding rollout %s of %.12s after %s", r.ID, r.To, strings.Join(r.Hosts[:r.Step], ", "))
+		}
+		recordPoll(ctx, kv, cfg.LocalHost, head, note)
 		slog.Info("rollout started", "id", started.ID, "revision", started.To, "hosts", started.Hosts)
 		return nil
 	}
-	event, err := step(ctx, busOps{bus, cfg}, &r, cfg.LocalHost, time.Now().UTC())
+	now := time.Now().UTC()
+	event, err := step(ctx, busOps{bus, cfg}, &r, cfg.LocalHost, now)
 	if err != nil {
 		return err
+	}
+	if event != nil && event.Kind == KindNodeUpdated && r.Phase == phaseInstall && r.Main {
+		newest, err := newestDeployableMain(ctx, cfg, r.To, time.Time{}, failed)
+		if coalesce(&r, newest, err, now) {
+			*checked = time.Time{} // straight to the newest build
+		}
 	}
 	if _, err := saveRollout(ctx, kv, r, revision); err != nil {
 		return fmt.Errorf("rollout record changed underneath; reloading: %w", err)
@@ -526,6 +569,8 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 			slog.Warn("release not recorded", "error", err)
 		}
 		publishDeploy(ctx, js, r, rolloutEvent{Kind: KindDeployCompleted})
+	case phaseSuperseded:
+		slog.Info("rollout superseded by a newer main build", "id", r.ID, "revision", r.To, "updated", r.Hosts[:r.Step])
 	case phaseRolledBack:
 		var prev failedRevision
 		if e, err := kv.Get(ctx, failedKey(r.To)); err == nil {
@@ -597,7 +642,7 @@ func deployCommand(ctx context.Context, cfg Config, args []string, w io.Writer) 
 	if err != nil {
 		return err
 	}
-	r, err := beginRollout(ctx, cfg, bus, kv, ref, leader)
+	r, err := beginRollout(ctx, cfg, bus, kv, ref, leader, ref == "main")
 	if err != nil {
 		return err
 	}

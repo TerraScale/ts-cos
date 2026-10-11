@@ -415,7 +415,7 @@ func rolloutHold(r Rollout, now time.Time) string {
 		return ""
 	}
 	age := now.Sub(r.Since).Round(time.Second)
-	terminal := r.Phase == phaseCompleted || r.Phase == phaseRolledBack
+	terminal := r.Phase == phaseCompleted || r.Phase == phaseRolledBack || r.Phase == phaseSuperseded
 	if terminal && age >= rolloutSettle {
 		return ""
 	}
