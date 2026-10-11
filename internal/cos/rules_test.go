@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"git.terrascale.tech/TerraScale/ts-cos/behavior"
+	"github.com/TerraScale/ts-cos/behavior"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 const (
-	rulesPRURL = "https://git.terrascale.tech/TerraScale/ts-cos/pulls/7"
+	rulesPRURL = "https://github.com/TerraScale/ts-cos/pulls/7"
 	rulesCISig = "ci:ts-cos#7 CI failed: build"
 )
 
@@ -230,7 +230,7 @@ func TestClassify(t *testing.T) {
 			name:  "PR no thread owns escalates as orphan",
 			event: rulesPREvent(KindCIStatus, 99),
 			pr: rulesPR(func(p *PRFacts) {
-				p.Number, p.URL, p.Branch = 99, "https://git.terrascale.tech/TerraScale/ts-cos/pulls/99", "cos/ts-1-other"
+				p.Number, p.URL, p.Branch = 99, "https://github.com/TerraScale/ts-cos/pulls/99", "cos/ts-1-other"
 				ciFail(p)
 			}),
 			want: []Decision{{Class: ClassEscalate, Rule: "orphan"}},

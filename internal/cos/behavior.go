@@ -20,7 +20,7 @@ import (
 	"text/template"
 	"time"
 
-	"git.terrascale.tech/TerraScale/ts-cos/behavior"
+	"github.com/TerraScale/ts-cos/behavior"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )

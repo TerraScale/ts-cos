@@ -184,15 +184,15 @@ func TestContextOf(t *testing.T) {
 }
 
 func TestJoinStatusMatchesCosMjs(t *testing.T) {
-	ready := PR{Repo: "ts-cos", Number: 15, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/15", Branch: "cos/ts-812-a", Cos: true, CI: "success", Mergeable: true, BotApproved: true, Ready: true, Failing: []string{}}
+	ready := PR{Repo: "ts-cos", Number: 15, URL: "https://github.com/TerraScale/ts-cos/pulls/15", Branch: "cos/ts-812-a", Cos: true, CI: "success", Mergeable: true, BotApproved: true, Ready: true, Failing: []string{}}
 	failing := PR{Repo: "Tools/ku", Number: 3, URL: "https://git.terrascale.tech/Tools/ku/pulls/3", Branch: "cos/ts-9-b", Cos: true, CI: "failure", Failing: []string{"test", "vet"}, ChangesRequested: true}
 	orphan := PR{Repo: "ts-go", Number: 7, URL: "https://git.terrascale.tech/TerraScale/ts-go/pulls/7", Branch: "cos/ts-1-c", Cos: true, CI: "pending"}
 	human := PR{Repo: "ts-go", Number: 8, URL: "https://git.terrascale.tech/TerraScale/ts-go/pulls/8", Branch: "feature/x", CI: "pending"}
 	perHost := [][]StatusThread{
 		{{Host: "delta", ThreadID: "a", Key: "TS-812", PRs: []ThreadPR{
-			{URL: "https://git.terrascale.tech/terrascale/ts-cos/pulls/15", State: "open"},
-			{URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/9", State: "merged"},
-			{URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/4", State: "closed"},
+			{URL: "https://github.com/TerraScale/ts-cos/pulls/15", State: "open"},
+			{URL: "https://github.com/TerraScale/ts-cos/pulls/9", State: "merged"},
+			{URL: "https://github.com/TerraScale/ts-cos/pulls/4", State: "closed"},
 		}}},
 		{{Host: "beta", Error: "COS node unavailable"}},
 		{{Host: "mariogk-dev", ThreadID: "b", Key: "TS-9", PRs: []ThreadPR{{URL: failing.URL, State: "open"}}}},
