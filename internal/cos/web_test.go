@@ -144,7 +144,7 @@ func TestDerivedTasksAndBrief(t *testing.T) {
 	if _, err := store.SetTask(ctx, map[string]any{"ticket": "TS-770", "status": "fake"}); err == nil {
 		t.Fatal("accepted manually maintained status")
 	}
-	live := Live{At: "2026-10-09T12:00:00Z", Errors: map[string]string{}, Issues: []Issue{{Identifier: "TS-768", Title: "Normal urgent work", Priority: 1, Status: "In Progress"}, {Identifier: "TS-769", Title: "FULL SEND · COS app", Priority: 2, Status: "Todo"}, {Identifier: "TS-770", Title: "Finished work", StatusType: "completed"}}, Fleet: []HostFleet{{Host: "delta", Active: 1, Threads: []FleetThread{{Title: "TS-769 · ts-cos", Project: "ts-cos", Status: "running", Model: "gpt-6.1-sol"}}}}, PRs: []PR{{Repo: "ts-cos", Number: 1, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/1", Issues: []string{"TS-769"}, Ready: true, CI: "success", Mergeable: true}}}
+	live := Live{At: "2026-10-09T12:00:00Z", Errors: map[string]string{}, Fleet: []HostFleet{{Host: "delta", Active: 1, Threads: []FleetThread{{Title: "FULL SEND · TS-769 · COS app", Project: "ts-cos", Status: "running", Model: "gpt-6.1-sol"}, {Title: "TS-768 · Normal urgent work", Status: "idle"}}}}, PRs: []PR{{Repo: "ts-cos", Number: 1, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/1", Issues: []string{"TS-769"}, Ready: true, CI: "success", Mergeable: true}}}
 	if err := store.SaveLive(ctx, live); err != nil {
 		t.Fatal(err)
 	}

@@ -32,7 +32,7 @@ func TestPartialThreadAskFailureKeepsOnlyItsCachedQuestions(t *testing.T) {
 
 func TestTaskThreadSelectionPrefersFreshHosts(t *testing.T) {
 	fresh := HostFleet{Host: "beta", Threads: []FleetThread{{Title: "TS-769", Model: "gpt-6-sol", Status: "idle", Project: "current-repo", NeedsInput: true}}}
-	stale := HostFleet{Host: "delta", Stale: true, Error: "offline", Threads: []FleetThread{{Title: "FULL SEND TS-769", Model: "old-model", Status: "running", Project: "old-repo", LastError: "old failure"}}}
+	stale := HostFleet{Host: "delta", Stale: true, Error: "offline", Threads: []FleetThread{{Title: "TS-769 old", Model: "old-model", Status: "running", Project: "old-repo", LastError: "old failure"}}}
 	for _, tc := range []struct {
 		name  string
 		hosts []HostFleet
@@ -47,7 +47,7 @@ func TestTaskThreadSelectionPrefersFreshHosts(t *testing.T) {
 			}
 			defer store.Close()
 			ctx := context.Background()
-			if err := store.SaveLive(ctx, Live{Issues: []Issue{{Identifier: "TS-769", Title: "Build COS", Priority: 1}}, Fleet: tc.hosts}); err != nil {
+			if err := store.SaveLive(ctx, Live{Fleet: tc.hosts}); err != nil {
 				t.Fatal(err)
 			}
 			view, err := View(ctx, store)
@@ -58,9 +58,42 @@ func TestTaskThreadSelectionPrefersFreshHosts(t *testing.T) {
 				t.Fatal(view.Tasks)
 			}
 			task := view.Tasks[0]
-			if task.Host != "beta" || task.Stale || task.Model != "gpt-6-sol" || task.Status != "idle" || task.Repo != "current-repo" || task.Priority != "P0" || task.Next != "Answer the pending request" {
+			if task.Host != "beta" || task.Stale || task.Model != "gpt-6-sol" || task.Status != "idle" || task.Repo != "current-repo" || task.Priority != "P2" || task.Next != "Answer the pending request" {
 				t.Fatalf("stale active worker displaced fresh idle worker: %+v", task)
 			}
 		})
+	}
+}
+
+func TestViewTasksComeFromOpenThreadsAndTSPRs(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	live := Live{
+		Fleet: []HostFleet{{Host: "beta", Threads: []FleetThread{{Title: "TS-812 · ts-cos: parity", Branch: "cos/ts-812-parity", Project: "ts-cos", Status: "running", Model: "claude-opus-5-5"}}}},
+		PRs: []PR{
+			{Repo: "ts-cos", Number: 12, URL: "https://example.test/pulls/12", Title: "TS-9 and TS-812 parity", Issues: []string{"TS-812", "TS-9"}, CI: "success", Mergeable: true, Ready: true},
+			{Repo: "ops", Number: 13, URL: "https://example.test/pulls/13", Title: "Fix CI image", Issues: []string{"OPS-4"}, CI: "failure", Mergeable: true, Failing: []string{"build"}},
+		},
+	}
+	if err := store.SaveLive(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	view, err := View(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Tasks) != 2 {
+		t.Fatal(view.Tasks)
+	}
+	ticket, pr := view.Tasks[0], view.Tasks[1]
+	if ticket.Ticket != "TS-812" || ticket.Outcome != "TS-812 · ts-cos: parity" || ticket.Priority != "P2" || ticket.Status != "ready" || ticket.Host != "beta" || ticket.Model != "claude-opus-5-5" || ticket.PR != "https://example.test/pulls/12" || ticket.Next != "Merge the ready PR" {
+		t.Fatalf("thread task = %+v", ticket)
+	}
+	if pr.Ticket != "TS-9" || pr.Outcome != "TS-9 and TS-812 parity" || pr.Priority != "P2" || pr.Status != "ready" || pr.Repo != "ts-cos" || pr.PR != "https://example.test/pulls/12" || pr.Next != "Merge the ready PR" {
+		t.Fatalf("PR task = %+v", pr)
 	}
 }

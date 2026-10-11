@@ -14,9 +14,9 @@ import (
 
 type Config struct {
 	// Runtime is the per-user tmpfs (/run/user/<uid>) where the service leaves the local NATS credential.
-	Home, Runtime, LocalHost, ForgejoURL, KuURL string
-	HTTP                                        *http.Client
-	SkipReviewer                                bool
+	Home, Runtime, LocalHost, ForgejoURL string
+	HTTP                                 *http.Client
+	SkipReviewer                         bool
 }
 
 func DefaultConfig() (Config, error) {
@@ -28,7 +28,7 @@ func DefaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Config{Home: home, Runtime: fmt.Sprintf("/run/user/%d", os.Getuid()), LocalHost: host, ForgejoURL: "https://git.terrascale.tech/api/v1", KuURL: "https://ku.mariogk.com/mcp", HTTP: &http.Client{Timeout: 60 * time.Second}}, nil
+	return Config{Home: home, Runtime: fmt.Sprintf("/run/user/%d", os.Getuid()), LocalHost: host, ForgejoURL: "https://git.terrascale.tech/api/v1", HTTP: &http.Client{Timeout: 60 * time.Second}}, nil
 }
 
 func validHost(host string) bool {

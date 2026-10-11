@@ -21,6 +21,7 @@ type Dashboard struct {
 }
 
 var ticketPattern = regexp.MustCompile(`(?i)\b[a-z]{1,10}-\d+\b`)
+var tsKeyPattern = regexp.MustCompile(`(?i)\bTS-\d+\b`)
 
 func ticketIn(text, ticket string) bool {
 	for _, key := range ticketPattern.FindAllString(text, -1) {
@@ -29,6 +30,29 @@ func ticketIn(text, ticket string) bool {
 		}
 	}
 	return false
+}
+
+// liveTickets maps each TS-<n> key of an open thread (title or branch) or open PR to its outcome title: ts-cos's own work items.
+func liveTickets(live Live) map[string]string {
+	out := map[string]string{}
+	for _, h := range live.Fleet {
+		for _, thread := range h.Threads {
+			for _, key := range tsKeyPattern.FindAllString(thread.Title+" "+thread.Branch, -1) {
+				if _, ok := out[strings.ToUpper(key)]; !ok {
+					out[strings.ToUpper(key)] = thread.Title
+				}
+			}
+		}
+	}
+	for _, p := range live.PRs {
+		for _, issue := range p.Issues {
+			key := strings.ToUpper(issue)
+			if _, ok := out[key]; !ok && strings.HasPrefix(key, "TS-") {
+				out[key] = p.Title
+			}
+		}
+	}
+	return out
 }
 
 func View(ctx context.Context, store *Store) (Dashboard, error) {
@@ -66,18 +90,12 @@ func View(ctx context.Context, store *Store) (Dashboard, error) {
 			v.Failing++
 		}
 	}
-	for _, i := range live.Issues {
-		if completed(i.Status) || completed(i.StatusType) {
-			continue
-		}
-		priority := "P3"
-		if i.Priority >= 1 && i.Priority <= 4 {
-			priority = fmt.Sprintf("P%d", i.Priority-1)
-		}
-		if fullSendTitle(i.Title) {
+	for ticket, outcome := range liveTickets(live) {
+		priority := "P2"
+		if fullSendTitle(outcome) {
 			priority = "FULL SEND"
 		}
-		t := Task{Ticket: i.Identifier, Priority: priority, Outcome: i.Title, Status: i.Status, Next: "Choose the next step"}
+		t := Task{Ticket: ticket, Priority: priority, Outcome: outcome, Status: "open", Next: "Choose the next step"}
 		for _, h := range live.Fleet {
 			for _, thread := range h.Threads {
 				if ticketIn(thread.Title+" "+thread.Branch, t.Ticket) {
@@ -160,13 +178,11 @@ func Refresh(ctx context.Context, cfg Config, bus *Bus, old Live) Live {
 	defer cancel()
 	var fleet []HostFleet
 	var prs []PR
-	var issues []Issue
 	var asks []Ask
-	var fleetErr, prsErr, kuErr, asksErr error
+	var fleetErr, prsErr, asksErr error
 	var wg sync.WaitGroup
 	wg.Go(func() { fleet, fleetErr = Fleet(ctx, bus) })
 	wg.Go(func() { prs, prsErr = (Forgejo{Config: cfg}).PRs(ctx) })
-	wg.Go(func() { issues, kuErr = (Ku{Config: cfg}).Issues(ctx) })
 	wg.Go(func() { asks, asksErr = AllAsks(ctx, bus) })
 	wg.Wait()
 	old.Errors = map[string]string{}
@@ -183,11 +199,6 @@ func Refresh(ctx context.Context, cfg Config, bus *Bus, old Live) Live {
 		old.Errors["prs"] = prsErr.Error()
 	} else {
 		old.PRs = prs
-	}
-	if kuErr != nil {
-		old.Errors["ku"] = kuErr.Error()
-	} else {
-		old.Issues = issues
 	}
 	if asksErr != nil {
 		old.Errors["asks"] = asksErr.Error()

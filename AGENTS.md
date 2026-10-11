@@ -15,8 +15,8 @@ nice -n 19 go test ./...
 
 Commit generated templ Go alongside its source. No JS/CSS build step.
 OCI Vault creates and delivers credentials automatically; never log tokens.
-Re-bootstrap from live Ku issues assigned to mariogk@terrascale.tech, T3 hosts,
-and PRs authored by mariogk. Never import the old backlog, ledger, or story.
+Re-bootstrap from T3 hosts and PRs authored by mariogk. Never import the old
+backlog, ledger, or story.
 
 TS-769 ships in four reviewed PRs: CLI + state + read-only dashboard + embedded
 NATS/micro transport; dashboard commands + plugins; rollout; deterministic

@@ -42,7 +42,6 @@ type Live struct {
 	At     string            `json:"at"`
 	Fleet  []HostFleet       `json:"fleet"`
 	PRs    []PR              `json:"prs"`
-	Issues []Issue           `json:"issues"`
 	Asks   []Ask             `json:"asks"`
 	Errors map[string]string `json:"errors"`
 }
@@ -310,7 +309,7 @@ func (s *Store) TaskPatches(ctx context.Context) (map[string]map[string]any, err
 	return out, rows.Err()
 }
 func (s *Store) Live(ctx context.Context) (Live, error) {
-	out := Live{Fleet: []HostFleet{}, PRs: []PR{}, Issues: []Issue{}, Asks: []Ask{}, Errors: map[string]string{}}
+	out := Live{Fleet: []HostFleet{}, PRs: []PR{}, Asks: []Ask{}, Errors: map[string]string{}}
 	var raw string
 	err := s.DB.QueryRowContext(ctx, `SELECT payload FROM live WHERE id=1`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -332,14 +331,11 @@ func (s *Store) SaveLive(ctx context.Context, live Live) error {
 		return err
 	}
 	return s.change(ctx, func(tx *sql.Tx) error {
-		if live.Errors["ku"] == "" {
-			current := map[string]bool{}
-			for _, i := range live.Issues {
-				current[i.Identifier] = true
-			}
-			for _, i := range old.Issues {
-				if !current[i.Identifier] {
-					if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE ticket=?`, i.Identifier); err != nil {
+		if live.Errors["fleet"] == "" && live.Errors["prs"] == "" {
+			current := liveTickets(live)
+			for ticket := range liveTickets(old) {
+				if _, ok := current[ticket]; !ok {
+					if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE ticket=?`, ticket); err != nil {
 						return err
 					}
 				}

@@ -95,14 +95,13 @@ exists; the file is never rewritten and the hash is never logged.
 
 ### Webhook ingress
 
-Forgejo and Ku POST to `https://cos.terrascale.tech/hooks/forgejo` and
-`/hooks/ku` (also served on every tailnet URL), outside the login:
+Forgejo POSTs to `https://cos.terrascale.tech/hooks/forgejo` (also served on
+every tailnet URL), outside the login:
 
-- Forgejo signs with `X-Forgejo-Signature` (hex HMAC-SHA256 of the body), Ku with
-  `X-Webhook-Signature: sha256=<hex>`. The secret per source is derived from the
-  Vault master on every node (`Bus.HookSecret(source)`); TS-814 registers it with
-  the senders. It is never printed.
-- A verified body is stored unchanged on `cos.ingest.forgejo` / `cos.ingest.ku`
+- Forgejo signs with `X-Forgejo-Signature` (hex HMAC-SHA256 of the body). The
+  secret is derived from the Vault master on every node (`Bus.HookSecret(source)`);
+  TS-814 registers it with the sender. It is never printed.
+- A verified body is stored unchanged on `cos.ingest.forgejo`
   (stream `COS_INGEST`, created on start) with the request headers (except
   `Cookie` and `Authorization`) and `Nats-Msg-Id` = Forgejo's delivery UUID or
   the body's SHA-256, so redeliveries are stored once. The sender gets `202`
@@ -185,7 +184,6 @@ Legacy credential locations below are implementation debt; OCI Vault must delive
 | Source | Path |
 |---|---|
 | Local T3 | `~/.config/cos/tokens/<local hostname>` |
-| Ku MCP | `~/.config/cos/ku-token` |
 | Forgejo | `~/.local/share/forgejo-cli/keys.json`, host `git.terrascale.tech` |
 
 ## Commands
@@ -221,7 +219,6 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos close <host> <id>` / `cos delete <host> <id>` | Settle a subtree; delete also removes it. Active threads are skipped |
 | `cos tidy <host>` | Settle inactive orphaned subagents/forks |
 | `cos dispatch <host> '<command json>'` | Send another T3 orchestration command |
-| `cos ku <tool> ['<arguments json>']` | Call a Ku MCP tool |
 | `cos merge <repo> <number>` | Squash a ready COS PR at the checked head SHA |
 | `cos version` | Git revision the running binary was built from |
 | `cos e2e [--smoke] [prefix...]` | Live checks against the deployed cluster (see below) |
@@ -336,11 +333,11 @@ State uses `~/.local/share/cos/cos.db` with WAL and a 5-second busy timeout.
 SQLite is the user-approved exception to TerraScale's TerraBase storage rule.
 There is no import of the old backlog, ledger, or `state.json`.
 
-On startup and every 60 seconds, the daemon derives work from **only** Ku issues
-assigned to mariogk@terrascale.tech (shared assignments count), T3 open threads
-on every COS host, and mariogk-authored Forgejo PRs. Completed/cancelled/archived
-issues and settled/archived/deleted threads are excluded. FULL SEND work sorts
-first. Source failures are visible and preserve the last successful snapshot.
+On startup and every 60 seconds, the daemon derives work from **only** T3 open
+threads on every COS host and mariogk-authored Forgejo PRs. Tasks are the
+`TS-<n>` keys found in those threads' titles and branches and in those PRs.
+Settled/archived/deleted threads are excluded. FULL SEND work sorts first.
+Source failures are visible and preserve the last successful snapshot.
 `task list` reads that snapshot; `status` refreshes it first.
 
 Only annotations and story are edited by hand:
@@ -360,8 +357,8 @@ cos note missing --clear
 
 `task set` merges `why`, `modelWhy`, and `next` annotations. It rejects manual
 status, host, model, priority, outcome, repo, and PR fields; these belong to live
-sources. `task rm` removes annotations, not a Ku issue. When a previously open
-issue disappears after a successful Ku refresh, its annotations are removed.
+sources. `task rm` removes annotations only. When a key disappears from every open thread
+and PR after a successful refresh, its annotations are removed.
 Direction replaces the current direction; other notes append and return an ID.
 
 The dashboard home is one chat with the COS agent: message list, composer,
@@ -401,14 +398,15 @@ event is classified with zero tokens:
 | ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed or interrupted run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
 | ACT | the same failure after a new push | model escalation (Haiku 5.5 → Opus 5.5 high → xhigh) plus ESCALATE |
 | ACT | a thread on Haiku 4.5 | switch to Haiku 5.5 |
-| RECORD | paused tickets, progress, main changes | feed only |
+| RECORD | paused tickets, tickets with no open thread or PR (`not-running`), progress, main changes | feed only |
 | ESCALATE | worker question or pending request, orphan PR, same failure twice | `cos.autopilot.log.escalate` for the COS inbox |
 
 Wake texts are behavior files (`behavior/templates/wake_<rule>.tmpl`): a change
 merged to main reaches every node over NATS without a rebuild, and a bundle missing
-one or rendering more than one line is rejected. Every keyed thread runs unless
-its ticket is paused: `cos pause TS-<n>` / `cos resume TS-<n>` edit the replicated
-paused set; rules record events of paused tickets and never wake them. Wake
+one or rendering more than one line is rejected. A ticket runs while an open
+thread or open PR carries its key and it is not paused: `cos pause TS-<n>` /
+`cos resume TS-<n>` edit the replicated paused set; rules record events of paused
+tickets and never wake them. Wake
 memory lives in KV, so a new leader does not repeat a wake. Every decision is
 published with its reason to the 3-replica `COS_AUTOPILOT_LOG` stream
 (`cos.autopilot.log.<class>`); each node mirrors the stream and the KV state into

@@ -127,8 +127,12 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 			return []Decision{d(ClassRecord, "state", e.Summary)}
 		}
 	}
-	if running, why := ticketRunning(paused, ticket); !running {
-		return []Decision{d(ClassRecord, "paused", why)}
+	if running, why := ticketRunning(live, paused, ticket); !running {
+		rule := "not-running"
+		if paused[ticket] {
+			rule = "paused"
+		}
+		return []Decision{d(ClassRecord, rule, why)}
 	}
 	out := []Decision{}
 	if owner != nil && strings.Contains(owner.Model, "haiku-4-5") {
@@ -193,15 +197,27 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 	return append(out, d(ClassRecord, "progress", e.Summary))
 }
 
-// ticketRunning: every keyed thread runs unless its ticket is in the paused set.
-func ticketRunning(paused map[string]bool, ticket string) (bool, string) {
+// ticketRunning: work runs while its key is on an open thread or an open PR, unless the ticket is paused.
+func ticketRunning(live Live, paused map[string]bool, ticket string) (bool, string) {
 	if ticket == "" {
 		return false, "no ticket key; not COS work"
 	}
 	if paused[ticket] {
 		return false, ticket + " is paused (cos resume " + ticket + ")"
 	}
-	return true, ""
+	for _, h := range live.Fleet {
+		for _, t := range h.Threads {
+			if ticketIn(t.Title+" "+t.Branch, ticket) {
+				return true, ""
+			}
+		}
+	}
+	for _, pr := range live.PRs {
+		if slices.ContainsFunc(pr.Issues, func(key string) bool { return strings.EqualFold(key, ticket) }) {
+			return true, ""
+		}
+	}
+	return false, ticket + " has no open thread or PR"
 }
 
 func findThread(live Live, host, id string) *FleetThread {

@@ -92,6 +92,22 @@ func TestClassify(t *testing.T) {
 			},
 		},
 		{
+			name:  "ticket with no open thread or PR records instead of merging",
+			event: Event{ID: "forgejo:1", Source: SourceForgejo, Kind: KindCIStatus, Summary: "PR update", Repo: "TerraScale/ts-cos", PR: 7, Ticket: "TS-9"},
+			pr: rulesPR(func(p *PRFacts) {
+				p.Ready, p.CI, p.BotApproved = true, "success", true
+			}),
+			want: []Decision{{Class: ClassRecord, Rule: "not-running"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Merge != nil {
+					t.Errorf("Merge = %+v, want nil", got[0].Merge)
+				}
+				if !strings.Contains(got[0].Reason, "has no open thread or PR") {
+					t.Errorf("reason = %q, want it to contain %q", got[0].Reason, "has no open thread or PR")
+				}
+			},
+		},
+		{
 			name:  "paused ticket records instead of merging",
 			event: Event{ID: "forgejo:1", Source: SourceForgejo, Kind: KindCIStatus, Summary: "PR update", Repo: "TerraScale/ts-cos", PR: 7, Ticket: "TS-2"},
 			pr: rulesPR(func(p *PRFacts) {
@@ -266,17 +282,21 @@ func TestRulesTicketRunning(t *testing.T) {
 	tests := []struct {
 		name    string
 		ticket  string
+		prs     []PR
 		running bool
 		reason  string
 	}{
 		{name: "empty ticket is not COS work", ticket: "", running: false, reason: "no ticket key"},
-		{name: "unpaused ticket runs", ticket: "TS-1", running: true},
+		{name: "open thread runs", ticket: "TS-1", running: true},
+		{name: "open PR runs", ticket: "TS-3", prs: []PR{{Repo: "ts-cos", Number: 9, Issues: []string{"TS-3"}}}, running: true},
 		{name: "paused ticket is paused", ticket: "TS-2", running: false, reason: "paused"},
-		{name: "unknown ticket runs now", ticket: "TS-9", running: true},
+		{name: "no open thread or PR does not run", ticket: "TS-9", running: false, reason: "has no open thread or PR"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			running, reason := ticketRunning(rulesPaused, tt.ticket)
+			live := rulesLive()
+			live.PRs = tt.prs
+			running, reason := ticketRunning(live, rulesPaused, tt.ticket)
 			if running != tt.running {
 				t.Errorf("running = %t, want %t", running, tt.running)
 			}

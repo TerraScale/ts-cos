@@ -274,7 +274,7 @@ func TestStoreRestartPersistence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	live := Live{At: "2026-10-09T12:00:00Z", Issues: []Issue{{Identifier: "TS-769"}}, Errors: map[string]string{"host": "offline"}}
+	live := Live{At: "2026-10-09T12:00:00Z", Fleet: liveWithThreads("TS-769"), Errors: map[string]string{"host": "offline"}}
 	if err := s.SaveLive(t.Context(), live); err != nil {
 		t.Fatal(err)
 	}
@@ -313,26 +313,35 @@ func TestStoreRestartPersistence(t *testing.T) {
 	}
 }
 
-func TestSaveLivePrunesOnlyDisappearedOwnIssuesAfterSuccessfulKuPoll(t *testing.T) {
+func liveWithThreads(tickets ...string) []HostFleet {
+	threads := []FleetThread{}
+	for _, ticket := range tickets {
+		threads = append(threads, FleetThread{Title: ticket + " work"})
+	}
+	return []HostFleet{{Host: "beta", Threads: threads}}
+}
+
+func TestSaveLivePrunesOnlyDisappearedTicketsAfterSuccessfulPoll(t *testing.T) {
 	tests := []struct {
 		name        string
 		polls       []Live
 		wantRemoved bool
 	}{
-		{"successful poll removes disappeared override", []Live{{Issues: []Issue{{Identifier: "TS-770"}}}}, true},
-		{"successful poll keeps still assigned issue", []Live{{Issues: []Issue{{Identifier: "TS-769"}, {Identifier: "TS-770"}}}}, false},
-		{"failed Ku poll preserves overrides", []Live{{Errors: map[string]string{"ku": "unavailable"}}}, false},
-		{"other source error does not block Ku cleanup", []Live{{Issues: []Issue{{Identifier: "TS-770"}}, Errors: map[string]string{"forgejo": "unavailable"}}}, true},
-		// RefreshLive retains the last successful issue list when Ku is unavailable.
-		{"successful recovery after failed Ku poll still removes disappeared override", []Live{
-			{Issues: []Issue{{Identifier: "TS-769"}, {Identifier: "TS-770"}}, Errors: map[string]string{"ku": "unavailable"}},
-			{Issues: []Issue{{Identifier: "TS-770"}}},
+		{"successful poll removes disappeared override", []Live{{Fleet: liveWithThreads("TS-770")}}, true},
+		{"successful poll keeps still live ticket", []Live{{Fleet: liveWithThreads("TS-769", "TS-770")}}, false},
+		{"failed fleet poll preserves overrides", []Live{{Errors: map[string]string{"fleet": "unavailable"}}}, false},
+		{"failed PR poll preserves overrides", []Live{{Fleet: liveWithThreads("TS-770"), Errors: map[string]string{"prs": "unavailable"}}}, false},
+		{"other source error does not block cleanup", []Live{{Fleet: liveWithThreads("TS-770"), Errors: map[string]string{"forgejo": "unavailable"}}}, true},
+		// RefreshLive retains the last successful fleet when the fleet poll is unavailable.
+		{"successful recovery after failed fleet poll still removes disappeared override", []Live{
+			{Fleet: liveWithThreads("TS-769", "TS-770"), Errors: map[string]string{"fleet": "unavailable"}},
+			{Fleet: liveWithThreads("TS-770")},
 		}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := openTestStore(t)
-			if err := s.SaveLive(t.Context(), Live{Issues: []Issue{{Identifier: "TS-769"}, {Identifier: "TS-770"}}}); err != nil {
+			if err := s.SaveLive(t.Context(), Live{Fleet: liveWithThreads("TS-769", "TS-770")}); err != nil {
 				t.Fatal(err)
 			}
 			for _, ticket := range []string{"TS-769", "TS-770", "LOCAL-1"} {

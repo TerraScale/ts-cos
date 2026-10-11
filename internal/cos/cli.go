@@ -32,7 +32,7 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	}
 	command, args := args[0], args[1:]
 	if command == "help" || command == "--help" || command == "-h" {
-		commands := []string{"fleet", "prs", "merge <repo> <number> (COS_FULL_SEND=1, COS_ADOPTED=1)", "ku <tool> ['<json>']", "status [--brief]", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
+		commands := []string{"fleet", "prs", "merge <repo> <number> (COS_FULL_SEND=1, COS_ADOPTED=1)", "status [--brief]", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
 		for _, k := range sortedCommandNames() {
 			commands = append(commands, localCommands[k].Usage)
 		}
@@ -63,24 +63,6 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 			return errors.New("PR number must be positive")
 		}
 		v, err := (Forgejo{Config: cfg}).Merge(ctx, args[0], n)
-		if err != nil {
-			return err
-		}
-		return output(w, v)
-	}
-	if command == "ku" {
-		if len(args) < 1 || len(args) > 2 {
-			return errors.New("usage: cos ku <tool> ['<json>']")
-		}
-		input := map[string]any{}
-		if len(args) == 2 {
-			var err error
-			input, err = objectJSON(args[1])
-			if err != nil {
-				return err
-			}
-		}
-		v, err := (Ku{Config: cfg}).Call(ctx, args[0], input)
 		if err != nil {
 			return err
 		}
