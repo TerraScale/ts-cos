@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-// savedShare matches the savings card's summary row; the target is checked separately.
-var savedShare = regexp.MustCompile(`Saved (\d+)% of spend`)
+// haikuShare matches the Haiku share KPI on the Tokens page.
+var haikuShare = regexp.MustCompile(`Haiku share</span>\s*<span class="kpi-value">(\d+)%`)
 
-// checkTokensSavings uses the run's session on base and checks the Tokens page shows the savings card, and that host's savings ledger has today's row.
+// checkTokensSavings uses the run's session on base and checks the Tokens page shows the Haiku share, and that host's savings ledger has today's row.
 func checkTokensSavings(ctx context.Context, e *E2EEnv, host, base string) (string, error) {
 	cookie, err := e.session(ctx, base)
 	if err != nil {
@@ -29,7 +29,7 @@ func checkTokensSavings(ctx context.Context, e *E2EEnv, host, base string) (stri
 	if status != http.StatusOK {
 		return "", fmt.Errorf("GET %s/tokens?w=7d: HTTP %d", base, status)
 	}
-	pct, err := tokensSavingsPage(body)
+	pct, err := tokensHaikuShare(body)
 	if err != nil {
 		return "", fmt.Errorf("GET %s/tokens?w=7d: %w", base, err)
 	}
@@ -42,23 +42,15 @@ func checkTokensSavings(ctx context.Context, e *E2EEnv, host, base string) (stri
 	if err != nil {
 		return "", fmt.Errorf("cos savings on %s: %w", host, err)
 	}
-	return fmt.Sprintf("/tokens on %s: saved %d%% of spend vs target %d%%; ledger today: %d tokens avoided across %d kinds",
-		host, pct, savingsTargetPercent, avoided, kinds), nil
+	return fmt.Sprintf("/tokens on %s: Haiku share %d%%; ledger today: %d tokens avoided across %d kinds",
+		host, pct, avoided, kinds), nil
 }
 
-// tokensSavingsPage reads the saved share from a rendered /tokens page and checks the savings card has its rows and target.
-func tokensSavingsPage(body string) (int, error) {
-	for _, row := range []string{"Memory retrieval", "Fresh-brief restarts"} {
-		if !strings.Contains(body, row) {
-			return 0, fmt.Errorf("savings card has no %q row", row)
-		}
-	}
-	m := savedShare.FindStringSubmatch(body)
+// tokensHaikuShare reads the Haiku share KPI from a rendered /tokens page.
+func tokensHaikuShare(body string) (int, error) {
+	m := haikuShare.FindStringSubmatch(body)
 	if m == nil {
-		return 0, errors.New(`savings card has no "Saved N% of spend" row`)
-	}
-	if target := fmt.Sprintf("target %d%%", savingsTargetPercent); !strings.Contains(body, target) {
-		return 0, fmt.Errorf("savings card has no %q", target)
+		return 0, errors.New(`Tokens page has no "Haiku share" KPI`)
 	}
 	return strconv.Atoi(m[1])
 }

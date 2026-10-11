@@ -16,9 +16,6 @@ import (
 
 const savingsBucket = "COS_SAVINGS"
 
-// savingsTargetPercent is the daily share of spend avoided that COS aims for.
-const savingsTargetPercent = 30
-
 // savingsRetries bounds CAS conflicts per recorded increment before the write gives up.
 const savingsRetries = 50
 

@@ -13,25 +13,6 @@ import (
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
-func TestTokenSavings(t *testing.T) {
-	rows := []UsageRow{
-		// Haiku: 1M in at $0.10 and 1M out at $0.50 cost $0.60; at Opus prices $4 + $20.
-		{Model: "claude-haiku-5-5", Input: 1e6, Output: 1e6, Messages: 1},
-		// Advisor: $4 over two messages is $2 each.
-		{Model: "claude-opus-5-5", Input: 1e6, Messages: 2},
-	}
-	workers, rules := tokenSavings(rows, 3)
-	if !near(workers, 23.4) {
-		t.Errorf("workers = %v, want 23.4", workers)
-	}
-	if !near(rules, 6) {
-		t.Errorf("rules = %v, want 6 (3 actions at $2)", rules)
-	}
-	if w, r := tokenSavings(nil, 5); w != 0 || r != 0 {
-		t.Errorf("no usage saved %v and %v, want 0 and 0", w, r)
-	}
-}
-
 func TestNiceMax(t *testing.T) {
 	for in, want := range map[float64]float64{0: 1, 0.3: 0.5, 12.4: 20, 20: 20, 51: 100, 4000: 5000} {
 		if got := niceMax(in); !near(got, want) {
@@ -42,11 +23,11 @@ func TestNiceMax(t *testing.T) {
 
 func TestBarChartStacks(t *testing.T) {
 	g := barChart([]chartColumn{
-		{Name: "Oct 9", Label: "Oct 9", Advisor: 12.4, Worker: 7.6},
+		{Name: "Oct 9", Label: "Oct 9", Advisor: 12.4e6, Worker: 7.6e6},
 		{Name: "Oct 10"},
-		{Name: "Oct 11", Worker: 5},
+		{Name: "Oct 11", Worker: 5e6},
 	})
-	if g.ViewBox != "0 0 30 100" || !near(g.Width, 30) || !near(g.Max, 20) {
+	if g.ViewBox != "0 0 30 100" || !near(g.Width, 30) || !near(g.Max, 20e6) {
 		t.Fatalf("geometry = %q %v %v", g.ViewBox, g.Width, g.Max)
 	}
 	if len(g.Bars) != 3 {
@@ -62,7 +43,7 @@ func TestBarChartStacks(t *testing.T) {
 	if !near(advisor.H+worker.H, 100) {
 		t.Errorf("heights sum to %v, want 100 at the peak day", advisor.H+worker.H)
 	}
-	if want := "Oct 9 · Opus advisor $12.40"; advisor.Title != want {
+	if want := "Oct 9 · Opus advisor 12.4M output"; advisor.Title != want {
 		t.Errorf("title = %q, want %q", advisor.Title, want)
 	}
 	if got := g.Bars[2]; got.X != 21 || got.Series != "2" || !near(got.H, 25) {
@@ -76,15 +57,15 @@ func TestBarChartStacks(t *testing.T) {
 func TestFoldThreads(t *testing.T) {
 	var totals []UsageTotal
 	for i := 10; i >= 1; i-- {
-		totals = append(totals, UsageTotal{Label: "t", AdvisorCost: float64(i), Cost: float64(i)})
+		totals = append(totals, UsageTotal{Label: "t", AdvisorOutput: int64(i), WorkerOutput: 1})
 	}
 	folded := foldThreads(totals, 8)
 	if len(folded) != 9 {
 		t.Fatalf("folded = %d, want top 8 plus Other", len(folded))
 	}
 	other := folded[8]
-	if other.Label != "Other" || !near(other.AdvisorCost, 3) {
-		t.Errorf("Other = %+v, want the two smallest folded (2 + 1)", other)
+	if other.Label != "Other" || other.AdvisorOutput != 3 || other.WorkerOutput != 2 {
+		t.Errorf("Other = %+v, want the two smallest folded (2 + 1 advisor output)", other)
 	}
 	if len(foldThreads(totals[:3], 8)) != 3 {
 		t.Error("threads under the limit must not fold")
@@ -93,7 +74,7 @@ func TestFoldThreads(t *testing.T) {
 
 func TestDayColumnsFillZeroDays(t *testing.T) {
 	since := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
-	days := []UsageTotal{{Key: "2026-10-07", AdvisorCost: 4}}
+	days := []UsageTotal{{Key: "2026-10-07", AdvisorOutput: 4}}
 	cols := dayColumns(days, since, 6)
 	if len(cols) != 7 {
 		t.Fatalf("7d columns = %d, want 7", len(cols))
@@ -121,65 +102,15 @@ func TestHumanTokens(t *testing.T) {
 	}
 }
 
-func TestTokensDataSavings(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
-	if err != nil {
-		t.Fatal(err)
+func TestSummarizeUsageSortsByTokens(t *testing.T) {
+	rows := []UsageRow{
+		// Opus has the bigger input, but Haiku's cache writes make it the larger total: 3M tokens against 2M.
+		{Model: "claude-opus-5-5", Input: 2e6, Messages: 1},
+		{Model: "claude-haiku-5-5", Input: 1e6, CacheWrite5m: 2e6, Messages: 1},
 	}
-	defer store.Close()
-	now := time.Now().UTC()
-	day := now.Format("2006-01-02")
-	// Haiku: $0.70 spent, $28 at Opus prices. Advisor: $4 spent.
-	worker := UsageRow{Day: day, Host: "delta", Project: "-home-mariogk-t3-worktrees-ts-cos-ts-828-x", Kind: "worker", Worktree: "ts-828-x",
-		Branch: "cos/ts-828-x", Session: "w-1", Model: "claude-haiku-5-5", Input: 2e6, Output: 1e6, Messages: 20, First: now.Add(-time.Hour), Last: now}
-	advisor := UsageRow{Day: day, Host: "delta", Project: "-home-mariogk-local-share-cos-agent", Kind: "cos", Session: "cos-1",
-		Model: "claude-opus-5-5", Input: 1e6, Messages: 2, First: now, Last: now}
-	for _, r := range []UsageRow{worker, advisor} {
-		if err := store.SaveUsage(ctx, usageKey(r), r); err != nil {
-			t.Fatal(err)
-		}
-	}
-	w := NewWeb(store, nil)
-	kv := memoryTestBuckets(t, ctx, savingsBucket)[0]
-	w.Chat.savings = kv
-	if err := RecordSaving(ctx, kv, SavingRetrieval, 1e6, 0, now); err != nil {
-		t.Fatal(err)
-	}
-	if err := RecordSaving(ctx, kv, SavingParallel, 0, 3700, now); err != nil {
-		t.Fatal(err)
-	}
-
-	d, err := w.tokensData(ctx, "7d", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 1M tokens priced as Opus input is $4; workers save $27.30 and the ledger $4 against $4.70 spent.
-	if !near(d.Ledger[SavingRetrieval], 4) || d.Ledger[SavingDedup] != 0 {
-		t.Errorf("ledger = %v, want retrieval $4 and nothing else", d.Ledger)
-	}
-	if d.WallSaved != 3700 {
-		t.Errorf("wall saved = %d, want 3700", d.WallSaved)
-	}
-	want := 31.3 / 36 * 100
-	if !near(d.SavedPct, want) || !near(d.DaySaved[day], want) {
-		t.Errorf("saved = %v and day %v, want %v", d.SavedPct, d.DaySaved[day], want)
-	}
-	if d.SavedTarget != savingsTargetPercent {
-		t.Errorf("target = %d, want %d", d.SavedTarget, savingsTargetPercent)
-	}
-
-	w.Chat.savings = nil
-	d, err = w.tokensData(ctx, "7d", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.Ledger[SavingRetrieval] != 0 || d.WallSaved != 0 {
-		t.Errorf("without the ledger got ledger %v and wall %d, want none", d.Ledger, d.WallSaved)
-	}
-	if want := 27.3 / 32 * 100; !near(d.SavedPct, want) {
-		t.Errorf("saved without ledger = %v, want workers only %v", d.SavedPct, want)
+	totals := SummarizeUsage(rows, Live{}, "model")
+	if len(totals) != 2 || totals[0].Key != "claude-haiku-5-5" || usageTokens(totals[0]) != 3e6 {
+		t.Fatalf("totals = %+v, want Haiku first with 3M tokens", totals)
 	}
 }
 
@@ -231,22 +162,17 @@ func TestTokensPageRenders(t *testing.T) {
 		r := get("/tokens?w=" + w)
 		body := r.Body.String()
 		for _, want := range []string{
-			`href="/tokens"`, `>Tokens</a>`, `<span class="kpi-label">Cost</span>`, `<span class="kpi-label">Haiku share</span>`,
+			`href="/tokens"`, `>Tokens</a>`, `<span class="kpi-label">Tokens</span>`, `<span class="kpi-label">Haiku share</span>`,
 			`data-tone="ok"`, `<span class="kpi-label">Peak Haiku parallel</span>`, `data-series="2"`, `href="/work/TS-826"`,
-			`COS agent`, `2 rule actions`, `aria-pressed="true"`, `data-init="@get(&#39;/tokens/events?w=` + w,
-			`Memory retrieval`, `target 30%`,
+			`COS agent`, `aria-pressed="true"`, `data-init="@get(&#39;/tokens/events?w=` + w,
+			`Output tokens per`, `<th scope="col" class="num">Tokens</th>`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s missing %q", w, want)
 			}
 		}
-		i := strings.Index(body, `aria-labelledby="savings-heading"`)
-		if i < 0 {
-			t.Fatalf("%s has no savings card", w)
-		}
-		card := body[i : i+strings.Index(body[i:], "</section>")]
-		if strings.Contains(strings.ToLower(card), "cache") {
-			t.Errorf("%s savings mention cache: %s", w, card)
+		if strings.Contains(body, "$") {
+			t.Errorf("%s shows a dollar figure", w)
 		}
 	}
 	if r := get("/tokens?w=bogus"); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `value="today" aria-pressed="true"`) {

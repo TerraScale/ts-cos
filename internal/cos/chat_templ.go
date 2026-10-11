@@ -801,7 +801,7 @@ func kpiTiles(k kpiView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "</span></div><div class=\"kpi\"><span class=\"kpi-label\"><a href=\"/tokens\">Tokens + cost today</a></span> <strong class=\"kpi-value\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "</span></div><div class=\"kpi\"><span class=\"kpi-label\"><a href=\"/tokens\">Tokens today</a></span> <strong class=\"kpi-value\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

@@ -643,7 +643,7 @@ Answering emits a `user.answer` event on `cos.events.>`.
    skill and delete the old CLI/dashboard/backlog/ledger usage in place.
 4. Deterministic autopilot, replicated JetStream work queue/events, idempotency,
    retry/dead-letter, inbox/answers, rules/routing, new/full-send/deployed flows,
-   audit/cost/doctor, optional ntfy. The queue and events use **3 replicas**;
+   audit/usage/doctor, optional ntfy. The queue and events use **3 replicas**;
    their three-node tests cover retry/dead-letter and event fan-out. Jobs for an
    offline host wait in its queue. No production NATS dependency.
 

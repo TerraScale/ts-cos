@@ -24,7 +24,7 @@ func budgetTestEvent(t *testing.T, kind EventKind, d budgetData) Event {
 		t.Fatal(err)
 	}
 	return Event{ID: NewEventID(SourceBudget, "test", string(kind)), Source: SourceBudget, Kind: kind, Time: time.Now(),
-		Severity: SeverityWarn, Summary: "TS-1 used 10M of 10M tokens today (100%, $1.00)", Host: "beta", Thread: "t1", Ticket: "TS-1", Data: data}
+		Severity: SeverityWarn, Summary: "TS-1 used 10M of 10M tokens today (100%)", Host: "beta", Thread: "t1", Ticket: "TS-1", Data: data}
 }
 
 func budgetThreadEvents(events []Event, thread string) []Event {
@@ -438,10 +438,10 @@ func TestBudgetPauseOptionsCarryTokens(t *testing.T) {
 	}
 }
 
-func TestBudgetTitleSaysSubscriptionNotBill(t *testing.T) {
+func TestBudgetSummarySaysSubscriptionLimits(t *testing.T) {
 	e, ok := budgetEvent(budgetData{Scope: budgetDaily, Day: budgetTestDay, Used: 139_000_000, Limit: 100_000_000,
-		Cost: 94.49, Label: strings.Repeat("x", 120)}, "", "", "")
-	if !ok || !strings.Contains(e.Summary, "not a bill.") || !strings.Contains(e.Summary, "Claude subscription limits") {
+		Label: strings.Repeat("x", 120)}, "", "", "")
+	if !ok || !strings.Contains(e.Summary, "Claude subscription limits") {
 		t.Errorf("summary = %q", e.Summary)
 	}
 }
