@@ -79,6 +79,8 @@ func OpenStore(path string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS inbox(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
 	CREATE TABLE IF NOT EXISTS usage(key TEXT PRIMARY KEY, day TEXT NOT NULL, payload TEXT NOT NULL);
 	CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
+	CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY, id TEXT NOT NULL, time TEXT NOT NULL, ticket TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+	CREATE INDEX IF NOT EXISTS events_ticket ON events(ticket, time);
 	CREATE TABLE IF NOT EXISTS revision(id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL);
 	INSERT OR IGNORE INTO revision VALUES(1,0);`)
 	if err != nil {
