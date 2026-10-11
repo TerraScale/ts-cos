@@ -182,3 +182,48 @@ func TestContextOf(t *testing.T) {
 		})
 	}
 }
+
+func TestJoinStatusMatchesCosMjs(t *testing.T) {
+	ready := PR{Repo: "ts-cos", Number: 15, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/15", Branch: "cos/ts-812-a", Cos: true, CI: "success", Mergeable: true, BotApproved: true, Ready: true, Failing: []string{}}
+	failing := PR{Repo: "Tools/ku", Number: 3, URL: "https://git.terrascale.tech/Tools/ku/pulls/3", Branch: "cos/ts-9-b", Cos: true, CI: "failure", Failing: []string{"test", "vet"}, ChangesRequested: true}
+	orphan := PR{Repo: "ts-go", Number: 7, URL: "https://git.terrascale.tech/TerraScale/ts-go/pulls/7", Branch: "cos/ts-1-c", Cos: true, CI: "pending"}
+	human := PR{Repo: "ts-go", Number: 8, URL: "https://git.terrascale.tech/TerraScale/ts-go/pulls/8", Branch: "feature/x", CI: "pending"}
+	perHost := [][]StatusThread{
+		{{Host: "delta", ThreadID: "a", Key: "TS-812", PRs: []ThreadPR{
+			{URL: "https://git.terrascale.tech/terrascale/ts-cos/pulls/15", State: "open"},
+			{URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/9", State: "merged"},
+			{URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/4", State: "closed"},
+		}}},
+		{{Host: "beta", Error: "COS node unavailable"}},
+		{{Host: "mariogk-dev", ThreadID: "b", Key: "TS-9", PRs: []ThreadPR{{URL: failing.URL, State: "open"}}}},
+	}
+	got := joinStatus(perHost, []PR{ready, failing, orphan, human}, nil)
+	data, _ := json.Marshal(got)
+	want := `{"threads":[{"host":"delta","threadId":"a","key":"TS-812","needsInput":false,"prs":["ts-cos#15 ci=success bot=ok merge=ok READY","ts-cos/pulls/4 closed"],"merged":1},` +
+		`{"host":"beta","needsInput":false,"error":"COS node unavailable"},` +
+		`{"host":"mariogk-dev","threadId":"b","key":"TS-9","needsInput":false,"prs":["Tools/ku#3 ci=failure(test,vet) bot=changes merge=CONFLICT"],"merged":0}],` +
+		`"orphanPrs":["ts-go#7 cos/ts-1-c ci=pending"]}`
+	if string(data) != want {
+		t.Errorf("joinStatus =\n%s\nwant\n%s", data, want)
+	}
+	if got := joinStatus(nil, nil, errors.New("Forgejo down")); got.PRError != "Forgejo down" || got.Threads == nil || got.OrphanPRs == nil {
+		t.Errorf("PR failure = %+v", got)
+	}
+}
+
+func TestLastReplyAndAsks(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	p := Projection{Messages: []ThreadMessage{
+		{Role: "assistant", Text: "NEEDS-USER: old question?"},
+		{Role: "user", Text: "COS DECISION: yes"},
+		{Role: "assistant", Text: "Working.\nNEEDS-USER: Pick a window?\nOPTIONS: Tonight (Recommended) | Tomorrow\nWHY: blocks deploy"},
+		{Role: "assistant", Text: "Done  \n\n " + long},
+	}}
+	last, asks := lastReplyAndAsks(p)
+	if len([]rune(last)) != 280 || strings.Contains(last, "\n") {
+		t.Errorf("last = %q", last)
+	}
+	if len(asks) != 1 || asks[0].Question != "Pick a window?" || len(asks[0].Options) != 2 || asks[0].Why != "blocks deploy" {
+		t.Errorf("asks = %+v", asks)
+	}
+}

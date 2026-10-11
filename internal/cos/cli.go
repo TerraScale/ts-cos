@@ -32,7 +32,7 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	}
 	command, args := args[0], args[1:]
 	if command == "help" || command == "--help" || command == "-h" {
-		commands := []string{"fleet", "prs", "merge <repo> <number> (COS_FULL_SEND=1, COS_ADOPTED=1)", "status [--brief]", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
+		commands := []string{"fleet", "prs", "merge <repo> <number> (COS_FULL_SEND=1, COS_ADOPTED=1)", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
 		for _, k := range sortedCommandNames() {
 			commands = append(commands, localCommands[k].Usage)
 		}
@@ -115,37 +115,6 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 		}
 		v, err := AllAsks(ctx, bus)
 		if err != nil {
-			return err
-		}
-		return output(w, v)
-	}
-	if command == "status" {
-		if len(args) > 1 || (len(args) == 1 && args[0] != "--brief") {
-			return errors.New("usage: cos status [--brief]")
-		}
-		s, err := stateStore(cfg)
-		if err != nil {
-			return err
-		}
-		defer s.Close()
-		bus, err := ConnectBus(ctx, cfg)
-		if err != nil {
-			return err
-		}
-		defer bus.Close()
-		old, err := s.Live(ctx)
-		if err != nil {
-			return err
-		}
-		if err := s.SaveLive(ctx, Refresh(ctx, cfg, bus, old)); err != nil {
-			return err
-		}
-		v, err := View(ctx, s)
-		if err != nil {
-			return err
-		}
-		if len(args) == 1 {
-			_, err = io.WriteString(w, Brief(v))
 			return err
 		}
 		return output(w, v)

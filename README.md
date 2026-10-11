@@ -246,12 +246,12 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos cluster` | Local host, current leader and build revision |
 | `cos nodes [<host> [1h\|24h\|7d]]` | Latest sample of every node, or one host's samples for the window (default 1h) |
 | `cos prs` | Every open PR authored by mariogk, with CI/review/merge gates |
-| `cos status [--brief]` | Refresh all sources; `--brief` is at most 40 lines |
+| `cos status [--brief]` | Live ticket threads on every host with their PRs (ci/bot/merge/READY), last reply, open NEEDS-USER, and `orphanPrs` (cos.mjs shape); `--brief` refreshes the dashboard state and prints at most 40 lines |
 | `cos context list\|get\|set\|rm` | Shared context files for the COS agent |
 | `cos agent [restart '<reason>']` | COS thread state, or a fresh brief at the next wake |
 | `cos projects <host>` | T3 project IDs, titles, and roots |
 | `cos launch <host> '<json>'` | Same launch fields as the old CLI; `projectTitle` can replace `projectId` |
-| `cos thread <host> <id>` / `cos ctx <host> <id>` | Thread summary or context usage |
+| `cos thread <host> <id> [n]` / `cos ctx <host> <id>` | Thread summary (plus the last `n` replies in full) or context usage |
 | `cos send <host> <id> '<text>' [queue]` | Steer the running run (default), or queue behind it |
 | `cos compact <host> <id> ['<focus>']` | Wait for idle, `/compact` with focus, return context before/after |
 | `cos stream <host> [<id>]` | Live thread (or host thread-list) events as JSON lines, from any node |
@@ -267,6 +267,10 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos settle <host> <id>` / `cos archive <host> <id>` | Settle finished work or archive dropped work |
 | `cos close <host> <id>` / `cos delete <host> <id>` | Settle a subtree; delete also removes it. Active threads are skipped |
 | `cos tidy <host>` | Settle inactive orphaned subagents/forks |
+| `cos inventory <host>` | Every non-deleted thread, compact, for cleanup planning |
+| `cos purge <host> ['<keep csv>']` | Delete settled top-level threads and their subtrees, except ids containing a kept substring; trees with an active run are skipped |
+| `cos purge-children <host>` | Delete finished subagent/fork threads, deepest first; children of active threads stay |
+| `cos stop <host> ['<keep csv>']` | Interrupt every running run and cancel queued ones, except kept threads |
 | `cos dispatch <host> '<command json>'` | Send another T3 orchestration command |
 | `cos merge <repo> <number>` | Squash a ready COS PR at the checked head SHA |
 | `cos version` | Git revision the running binary was built from |

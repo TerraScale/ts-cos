@@ -2,6 +2,7 @@ package cos
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"regexp"
 	"slices"
@@ -287,4 +288,188 @@ func sortedKeys(m map[string]any) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+var ticketKey = regexp.MustCompile(`\bTS-\d+\b`)
+
+type StatusThread struct {
+	Host       string `json:"host"`
+	ThreadID   string `json:"threadId,omitempty"`
+	Key        string `json:"key,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Model      string `json:"model,omitempty"`
+	NeedsInput bool   `json:"needsInput"`
+	// PRs is []ThreadPR from a host; Status replaces it with one summary line per PR.
+	PRs    any    `json:"prs,omitempty"`
+	Merged *int   `json:"merged,omitempty"`
+	Last   string `json:"last,omitempty"`
+	Asks   []Ask  `json:"asks,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// StatusHost lists this host's live ticket threads: top-level, not settled, title with a TS key.
+func (c *T3) StatusHost(ctx context.Context) (map[string]any, error) {
+	s, err := c.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	threads := []StatusThread{}
+	for _, t := range s.Threads {
+		key := ticketKey.FindString(t.Title)
+		if t.ArchivedAt != nil || t.DeletedAt != nil || t.SettledAt != nil || t.Lineage.Parent != "" || key == "" {
+			continue
+		}
+		prs := []ThreadPR{}
+		for _, p := range t.PullRequests {
+			prs = append(prs, ThreadPR{URL: p.URL, State: p.Snapshot.State})
+		}
+		row := StatusThread{Host: c.Host, ThreadID: t.ID, Key: key, Title: t.Title, Status: t.Status, Model: t.ModelSelection.Model, NeedsInput: t.NeedsInput(), PRs: prs}
+		if !active(t.Status) {
+			p, err := c.Projection(ctx, t.ID)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				row.Error = "thread projection failed"
+			} else {
+				row.Last, row.Asks = lastReplyAndAsks(p)
+			}
+		}
+		threads = append(threads, row)
+	}
+	return map[string]any{"host": c.Host, "threads": threads}, nil
+}
+
+// lastReplyAndAsks returns the last assistant reply (one line, last 280 runes) and the
+// NEEDS-USER blocks posted since the last "USER ANSWER" / "COS DECISION".
+func lastReplyAndAsks(p Projection) (string, []Ask) {
+	last, answered := "", -1
+	for i, m := range p.Messages {
+		if m.Role == "assistant" {
+			last = m.Text
+		}
+		if m.Role == "user" && (strings.Contains(m.Text, "USER ANSWER") || strings.Contains(m.Text, "COS DECISION")) {
+			answered = i
+		}
+	}
+	r := []rune(strings.Join(strings.Fields(last), " "))
+	if len(r) > 280 {
+		r = r[len(r)-280:]
+	}
+	var asks []Ask
+	for _, m := range p.Messages[answered+1:] {
+		if m.Role == "assistant" {
+			asks = append(asks, ParseAsks(m.Text)...)
+		}
+	}
+	return string(r), asks
+}
+
+type StatusReport struct {
+	Threads   []StatusThread `json:"threads"`
+	OrphanPRs []string       `json:"orphanPrs"`
+	PRError   string         `json:"prError,omitempty"`
+}
+
+// Status joins every host's live ticket threads with the open PRs (cos.mjs `status`).
+func Status(ctx context.Context, cfg Config, bus *Bus) (StatusReport, error) {
+	hosts, err := bus.Hosts(ctx)
+	if err != nil {
+		return StatusReport{}, err
+	}
+	perHost := make([][]StatusThread, len(hosts))
+	var prs []PR
+	var prErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { prs, prErr = (Forgejo{Config: cfg}).PRs(ctx) })
+	for i, h := range hosts {
+		wg.Go(func() {
+			var response struct {
+				Threads []struct {
+					StatusThread
+					PRs []ThreadPR `json:"prs"`
+				} `json:"threads"`
+			}
+			if err := bus.Call(ctx, h, "status-host", nil, &response); err != nil {
+				perHost[i] = []StatusThread{{Host: h, Error: err.Error()}}
+				return
+			}
+			for _, t := range response.Threads {
+				t.StatusThread.PRs = t.PRs
+				perHost[i] = append(perHost[i], t.StatusThread)
+			}
+		})
+	}
+	wg.Wait()
+	return joinStatus(perHost, prs, prErr), nil
+}
+
+func joinStatus(perHost [][]StatusThread, prs []PR, prErr error) StatusReport {
+	out := StatusReport{Threads: []StatusThread{}, OrphanPRs: []string{}}
+	if prErr != nil {
+		out.PRError = prErr.Error()
+	}
+	open := map[string]PR{}
+	for _, p := range prs {
+		open[strings.ToLower(p.URL)] = p
+	}
+	owned := map[string]bool{}
+	for _, threads := range perHost {
+		for _, t := range threads {
+			if t.Error != "" {
+				out.Threads = append(out.Threads, t)
+				continue
+			}
+			merged, lines := 0, []string{}
+			threadPRs, _ := t.PRs.([]ThreadPR)
+			for _, tp := range threadPRs {
+				owned[strings.ToLower(tp.URL)] = true
+				p, ok := open[strings.ToLower(tp.URL)]
+				switch {
+				case ok:
+					lines = append(lines, prLine(p))
+				case tp.State == "merged":
+					merged++
+				default:
+					parts := strings.Split(tp.URL, "/")
+					lines = append(lines, strings.TrimSpace(strings.Join(parts[max(0, len(parts)-3):], "/")+" "+tp.State))
+				}
+			}
+			t.PRs, t.Merged = lines, &merged
+			out.Threads = append(out.Threads, t)
+		}
+	}
+	for _, p := range prs {
+		if p.Cos && !owned[strings.ToLower(p.URL)] {
+			line := fmt.Sprintf("%s#%d %s ci=%s", p.Repo, p.Number, p.Branch, p.CI)
+			if p.Ready {
+				line += " READY"
+			}
+			out.OrphanPRs = append(out.OrphanPRs, line)
+		}
+	}
+	return out
+}
+
+func prLine(p PR) string {
+	line := fmt.Sprintf("%s#%d ci=%s", p.Repo, p.Number, p.CI)
+	if len(p.Failing) > 0 {
+		line += "(" + strings.Join(p.Failing, ",") + ")"
+	}
+	bot := "-"
+	if p.BotApproved {
+		bot = "ok"
+	} else if p.ChangesRequested {
+		bot = "changes"
+	}
+	merge := "CONFLICT"
+	if p.Mergeable {
+		merge = "ok"
+	}
+	line += " bot=" + bot + " merge=" + merge
+	if p.Ready {
+		line += " READY"
+	}
+	return line
 }

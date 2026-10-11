@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,10 +18,12 @@ type commandSpec struct {
 
 var localCommands = map[string]commandSpec{
 	"projects": {0, 0, "projects <host>"}, "shell": {0, 0, "shell <host>"}, "asks-host": {0, 0, "asks-host <host>"}, "tidy": {0, 0, "tidy <host>"},
+	"inventory": {0, 0, "inventory <host>"}, "purge-children": {0, 0, "purge-children <host>"}, "status-host": {0, 0, "status-host <host>"},
 	"launch": {1, 1, "launch <host> '<json>'"}, "dispatch": {1, 1, "dispatch <host> '<json>'"},
-	"thread": {1, 1, "thread <host> <threadId>"}, "ctx": {1, 1, "ctx <host> <threadId>"}, "settle": {1, 1, "settle <host> <threadId>"}, "archive": {1, 1, "archive <host> <threadId>"}, "close": {1, 1, "close <host> <threadId>"}, "delete": {1, 1, "delete <host> <threadId>"},
+	"thread": {1, 2, "thread <host> <threadId> [n]"}, "ctx": {1, 1, "ctx <host> <threadId>"}, "settle": {1, 1, "settle <host> <threadId>"}, "archive": {1, 1, "archive <host> <threadId>"}, "close": {1, 1, "close <host> <threadId>"}, "delete": {1, 1, "delete <host> <threadId>"},
 	"send": {2, 3, "send <host> <threadId> '<text>' [queue]"}, "compact": {1, 2, "compact <host> <threadId> ['<focus>']"}, "fork": {1, 2, "fork <host> <threadId> ['<title>']"}, "watch": {2, 2, "watch <host> <threadId> <prUrl>"}, "model": {2, 2, "model <host> <threadId> '<modelSelection json>'"}, "rename": {2, 2, "rename <host> <threadId> '<title>'"},
 	"handoff": {2, 3, "handoff <host> <threadId> '<modelSelection json>' ['<brief>']"}, "respond": {3, 3, "respond <host> <threadId> <requestId> '<answers json>'"},
+	"purge": {0, 1, "purge <host> ['<keep id substrings csv>']"}, "stop": {0, 1, "stop <host> ['<keep id substrings csv>']"},
 }
 
 func validateLocal(command string, args []string) error {
@@ -38,6 +41,11 @@ func validateLocal(command string, args []string) error {
 	}
 	if command == "send" && len(args) == 3 && args[2] != "queue" {
 		return errors.New("send mode must be queue")
+	}
+	if command == "thread" && len(args) == 2 {
+		if n, err := strconv.Atoi(args[1]); err != nil || n < 1 || n > 50 {
+			return errors.New("n must be a positive integer up to 50")
+		}
 	}
 	return nil
 }
@@ -99,6 +107,18 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 	if command == "tidy" {
 		return c.Tidy(ctx)
 	}
+	switch command {
+	case "inventory":
+		return c.Inventory(ctx)
+	case "purge":
+		return c.Purge(ctx, keepIDs(args))
+	case "purge-children":
+		return c.PurgeChildren(ctx)
+	case "stop":
+		return c.Stop(ctx, keepIDs(args))
+	case "status-host":
+		return c.StatusHost(ctx)
+	}
 	id := args[0]
 	switch command {
 	case "thread", "ctx":
@@ -130,7 +150,12 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 		if runs == nil {
 			runs = []ThreadRun{}
 		}
-		return map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": p.PendingRequests(), "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}, nil
+		out := map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": p.PendingRequests(), "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}
+		if len(args) == 2 {
+			n, _ := strconv.Atoi(args[1])
+			out["replies"] = lastReplies(p, n)
+		}
+		return out, nil
 	case "send":
 		mode := SendSteer
 		if len(args) == 3 {
@@ -369,8 +394,6 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief s
 			window = 258400
 		case "claudeAgent":
 			window = 1000000
-		case "claude-haiku-5-5":
-			window = 200000
 		}
 	}
 	budget := window / 2
@@ -402,4 +425,280 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief s
 		}
 	}
 	return map[string]any{"action": "handed-off", "to": sel["model"], "budget": budget, "ctx": usage, "steps": steps}, nil
+}
+
+// InventoryThread is one live thread in cleanup planning output.
+type InventoryThread struct {
+	ID       string  `json:"id"`
+	Title    string  `json:"title"`
+	Status   string  `json:"status"`
+	Settled  bool    `json:"settled"`
+	Archived bool    `json:"archived"`
+	Parent   *string `json:"parent"`
+	Updated  *string `json:"updated"`
+}
+
+type PurgeResult struct {
+	Deleted int      `json:"deleted"`
+	Skipped []string `json:"skipped"`
+}
+
+type StopResult struct {
+	Stopped []string `json:"stopped"`
+	Failed  []string `json:"failed"`
+}
+
+// threadGraph indexes the live (not deleted) threads of one snapshot.
+type threadGraph struct {
+	live     []Thread
+	byID     map[string]Thread
+	children map[string][]string
+}
+
+func newThreadGraph(s ShellSnapshot) threadGraph {
+	g := threadGraph{byID: map[string]Thread{}, children: map[string][]string{}}
+	for _, t := range s.Threads {
+		if t.DeletedAt != nil {
+			continue
+		}
+		g.live = append(g.live, t)
+		g.byID[t.ID] = t
+		g.children[t.Lineage.Parent] = append(g.children[t.Lineage.Parent], t.ID)
+	}
+	return g
+}
+
+// ancestors walks live parents until a missing parent or a cycle.
+func (g threadGraph) ancestors(t Thread) []Thread {
+	var out []Thread
+	seen := map[string]bool{t.ID: true}
+	for p, ok := g.byID[t.Lineage.Parent]; ok && !seen[p.ID]; p, ok = g.byID[p.Lineage.Parent] {
+		seen[p.ID] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// busy reports whether the thread or any live descendant is active.
+func (g threadGraph) busy(id string, seen map[string]bool) bool {
+	if seen[id] {
+		return false
+	}
+	seen[id] = true
+	if t, ok := g.byID[id]; ok && active(t.Status) {
+		return true
+	}
+	for _, child := range g.children[id] {
+		if g.busy(child, seen) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *T3) Inventory(ctx context.Context) ([]InventoryThread, error) {
+	s, err := c.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []InventoryThread{}
+	for _, t := range newThreadGraph(s).live {
+		out = append(out, InventoryThread{ID: t.ID, Title: firstRunes(t.Title, 90), Status: t.Status, Settled: t.SettledAt != nil, Archived: t.ArchivedAt != nil, Parent: optionalString(t.Lineage.Parent), Updated: optionalString(t.UpdatedAt)})
+	}
+	return out, nil
+}
+
+// Purge deletes settled top-level threads with their subtrees, children first; trees with an active run are skipped.
+func (c *T3) Purge(ctx context.Context, keep []string) (PurgeResult, error) {
+	s, err := c.Snapshot(ctx)
+	if err != nil {
+		return PurgeResult{}, err
+	}
+	g := newThreadGraph(s)
+	out := PurgeResult{Skipped: []string{}}
+	seen := map[string]bool{}
+	var tree []string
+	var walk func(string)
+	walk = func(id string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		for _, child := range g.children[id] {
+			walk(child)
+		}
+		tree = append(tree, id)
+	}
+	for _, root := range g.live {
+		if root.Lineage.Parent != "" || root.SettledAt == nil || active(root.Status) || keptBy(root.ID, keep) {
+			continue
+		}
+		// Deleting a parent can cancel a running child (TS-805/TS-808): keep busy trees whole.
+		if g.busy(root.ID, map[string]bool{}) {
+			out.Skipped = append(out.Skipped, root.ID+": active run in subtree")
+			continue
+		}
+		tree = nil
+		walk(root.ID)
+		for _, id := range tree {
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
+			c.removeThread(ctx, g.byID[id], &out)
+		}
+	}
+	return out, nil
+}
+
+// PurgeChildren deletes finished child threads, deepest first, unless they or an ancestor are active.
+func (c *T3) PurgeChildren(ctx context.Context) (PurgeResult, error) {
+	s, err := c.Snapshot(ctx)
+	if err != nil {
+		return PurgeResult{}, err
+	}
+	g := newThreadGraph(s)
+	var candidates []Thread
+	depth := map[string]int{}
+	for _, t := range g.live {
+		if t.Lineage.Parent == "" || g.busy(t.ID, map[string]bool{}) {
+			continue
+		}
+		ancestors := g.ancestors(t)
+		if anyActive(ancestors) {
+			continue
+		}
+		depth[t.ID] = len(ancestors)
+		candidates = append(candidates, t)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return depth[candidates[i].ID] > depth[candidates[j].ID] })
+	out := PurgeResult{Skipped: []string{}}
+	for _, t := range candidates {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		c.removeThread(ctx, t, &out)
+	}
+	return out, nil
+}
+
+// Stop interrupts active runs and cancels queued ones on every active thread not matched by keep.
+func (c *T3) Stop(ctx context.Context, keep []string) (StopResult, error) {
+	s, err := c.Snapshot(ctx)
+	if err != nil {
+		return StopResult{}, err
+	}
+	out := StopResult{Stopped: []string{}, Failed: []string{}}
+	for _, t := range newThreadGraph(s).live {
+		if !active(t.Status) || keptBy(t.ID, keep) {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		label := threadTitleLabel(t)
+		p, err := c.Projection(ctx, t.ID)
+		if err != nil {
+			out.Failed = append(out.Failed, label+": projection failed")
+			continue
+		}
+		for _, r := range p.Runs {
+			if !active(r.Status) {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
+			command := map[string]any{"type": "run.interrupt", "threadId": t.ID, "runId": r.ID, "createdBy": "user", "creationSource": "server"}
+			if r.Status == "queued" {
+				command["type"] = "queued-run.cancel"
+			}
+			if _, err := c.Dispatch(ctx, command); err != nil {
+				out.Failed = append(out.Failed, label+": interrupt failed")
+				continue
+			}
+			out.Stopped = append(out.Stopped, label+" ("+r.Status+")")
+		}
+	}
+	return out, nil
+}
+
+// removeThread settles then deletes one thread; errors become fixed skip strings, never upstream text.
+func (c *T3) removeThread(ctx context.Context, t Thread, out *PurgeResult) {
+	if t.SettledAt == nil {
+		if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.settle", "threadId": t.ID}); err != nil {
+			out.Skipped = append(out.Skipped, t.ID+": settle failed")
+			return
+		}
+	}
+	if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.delete", "threadId": t.ID}); err != nil {
+		out.Skipped = append(out.Skipped, t.ID+": delete failed")
+		return
+	}
+	out.Deleted++
+}
+
+// keepIDs reads the optional <keep csv> argument, dropping empty entries.
+func keepIDs(args []string) (keep []string) {
+	if len(args) == 1 {
+		for _, k := range strings.Split(args[0], ",") {
+			if k != "" {
+				keep = append(keep, k)
+			}
+		}
+	}
+	return keep
+}
+
+func keptBy(id string, keep []string) bool {
+	for _, k := range keep {
+		if strings.Contains(id, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyActive(threads []Thread) bool {
+	for _, t := range threads {
+		if active(t.Status) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastReplies returns the last n assistant messages in full, oldest first.
+func lastReplies(p Projection, n int) []string {
+	replies := []string{}
+	for _, m := range p.Messages {
+		if m.Role == "assistant" {
+			replies = append(replies, m.Text)
+		}
+	}
+	if len(replies) > n {
+		replies = replies[len(replies)-n:]
+	}
+	return replies
+}
+
+func threadTitleLabel(t Thread) string {
+	if t.Title == "" {
+		return t.ID
+	}
+	return firstRunes(t.Title, 50)
+}
+
+func firstRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		r = r[:n]
+	}
+	return string(r)
+}
+
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
