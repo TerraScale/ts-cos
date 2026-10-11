@@ -9,9 +9,10 @@ templ page(v Dashboard) {
 			<title>COS · TerraScale</title>
 			<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.classless.min.css"/>
 			<script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js"></script>
-			<style>main{max-width:1440px} .table-scroll{overflow-x:auto} td{vertical-align:top} small{display:block} mark{white-space:nowrap}</style>
+			<style>main{max-width:1440px} .table-scroll{overflow-x:auto} td{vertical-align:top} small{display:block} mark{white-space:nowrap}
+			.inbox-text{white-space:pre-wrap} .inbox-options{display:flex;flex-wrap:wrap;gap:.5rem} .inbox-options button{width:auto;margin:0}</style>
 		</head>
-		<body data-init="@get('/events')">
+		<body data-init="@get('/events', {retry: 'always', retryMaxCount: 1000})">
 			<nav><a href="/password">Change password</a><form method="post" action="/logout"><button type="submit" class="secondary">Log out</button></form></nav>
 			<p id="autopilot-notice" role="status"></p>
 			@dashboard(v)
@@ -23,8 +24,12 @@ templ dashboard(v Dashboard) {
 	<main id="dashboard">
 		<header>
 			<h1>COS · TerraScale</h1>
-			<p>Live refresh: { v.Live.At } · Story updates on change</p>
+			<p>
+				<a href="#inbox">Inbox <mark>{ integer(len(v.Inbox)) }</mark></a>
+				· Live refresh: { v.Live.At } · Story updates on change
+			</p>
 		</header>
+		@inbox(v)
 		for _, key := range sortedKeysAny(v.Live.Errors) {
 			<p role="alert"><strong>{ key } refresh failed:</strong> { v.Live.Errors[key] } · Previous data stays visible.</p>
 		}
@@ -39,10 +44,10 @@ templ dashboard(v Dashboard) {
 		</section>
 		<section aria-labelledby="needs-heading">
 			<h2 id="needs-heading">Needs you</h2>
-			if len(notesOf(v.Story.Notes, "need")) > 0 || len(v.Live.Asks) == 0 {
+			if len(notesOf(v.Story.Notes, "need")) > 0 || len(liveRequests(v.Live.Asks)) == 0 {
 				@noteList(v.Story.Notes, "need")
 			}
-			for _, a := range v.Live.Asks {
+			for _, a := range liveRequests(v.Live.Asks) {
 				<article>
 					<header>{ a.Host } · { a.Title }</header>
 					if a.Stale {
@@ -175,4 +180,105 @@ templ noteList(notes []Note, kind string) {
 			}
 		</ul>
 	}
+}
+
+// The Inbox mirrors T3 Code's: a list of what COS needs, each opening to its
+// context with answer controls. Open items keep their state across live patches.
+templ inbox(v Dashboard) {
+	<section id="inbox" aria-labelledby="inbox-heading">
+		<h2 id="inbox-heading">Inbox <mark>{ integer(len(v.Inbox)) }</mark></h2>
+		if len(v.Inbox) == 0 {
+			<p>Nothing needs you. COS keeps working.</p>
+		}
+		for _, item := range v.Inbox {
+			<details id={ "inbox-" + item.ID } name="inbox" data-preserve-attr="open">
+				<summary>
+					<strong>{ inboxKindLabel(item) }</strong> · { item.Title }
+					<small>
+						{ age(item.Created) } ago
+						if item.Blocks != "" {
+							· blocks { item.Blocks }
+						}
+						if item.Ticket != "" {
+							· { item.Ticket }
+						}
+					</small>
+				</summary>
+				<article>
+					if item.Context != "" {
+						<p class="inbox-text">{ item.Context }</p>
+					}
+					<p>
+						if url := ticketURL(v, item.Ticket); url != "" {
+							<a href={ templ.URL(url) }>{ item.Ticket }</a> ·
+						}
+						for _, link := range item.Links {
+							<a href={ templ.URL(link) }>{ link }</a> ·
+						}
+						<small>From { item.Source }
+							if item.Host != "" {
+								· { item.Host } worker thread
+							}
+						</small>
+					</p>
+					if item.Kind != "fyi" {
+						<form method="post" action={ templ.SafeURL("/inbox/" + item.ID + "/answer") } data-on:submit={ "@post('/inbox/" + item.ID + "/answer', {contentType: 'form'})" }>
+							if len(item.Options) > 0 {
+								<div class="inbox-options" role="group" aria-label="Options">
+									for i, option := range item.Options {
+										<button type="submit" name="option" value={ option }>
+											{ option }
+											if i == 0 && item.Kind == "question" {
+												(Recommended)
+											}
+										</button>
+									}
+								</div>
+							}
+							<label>
+								{ inboxTextLabel(item) }
+								<textarea name="text" rows="2" maxlength="3000"></textarea>
+							</label>
+							<button type="submit">Send</button>
+						</form>
+					}
+					if item.Kind == "decision" || item.Kind == "blocker" || item.Kind == "fyi" {
+						<form method="post" action={ templ.SafeURL("/inbox/" + item.ID + "/dismiss") } data-on:submit={ "@post('/inbox/" + item.ID + "/dismiss', {contentType: 'form'})" }>
+							<button type="submit">
+								if item.Kind == "decision" {
+									Keep this decision
+								} else {
+									Got it
+								}
+							</button>
+						</form>
+					}
+				</article>
+			</details>
+		}
+		if len(v.History) > 0 {
+			<details>
+				<summary>History ({ integer(len(v.History)) })</summary>
+				<ul>
+					for _, item := range v.History {
+						<li>
+							<strong>{ item.Status }</strong> · { item.Title }
+							if item.Answer != nil {
+								<small class="inbox-text">Answer: { answerText(item.Answer) }</small>
+							}
+							if item.Note != "" {
+								<small>{ item.Note }</small>
+							}
+							<small>
+								{ age(item.Closed) } ago on { item.ClosedOn }
+								if item.ForwardError != "" {
+									· forward to worker failed, retrying: { item.ForwardError }
+								}
+							</small>
+						</li>
+					}
+				</ul>
+			</details>
+		}
+	</section>
 }

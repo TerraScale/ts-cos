@@ -16,6 +16,8 @@ type Dashboard struct {
 	Live                    Live           `json:"live"`
 	Tasks                   []Task         `json:"tasks"`
 	Autopilot               AutopilotState `json:"autopilot"`
+	Inbox                   []InboxItem    `json:"inbox"`
+	History                 []InboxItem    `json:"history"`
 	Running, Ready, Failing int
 }
 
@@ -48,6 +50,10 @@ func View(ctx context.Context, store *Store) (Dashboard, error) {
 		return Dashboard{}, err
 	}
 	v := Dashboard{Story: story, Live: live, Tasks: []Task{}, Autopilot: autopilot}
+	if v.Inbox, v.History, err = store.Inbox(ctx); err != nil {
+		return Dashboard{}, err
+	}
+	v.History = v.History[:min(len(v.History), inboxHistoryMax)]
 	for _, h := range live.Fleet {
 		if !h.Stale {
 			v.Running += h.Active
@@ -220,7 +226,13 @@ func Brief(v Dashboard) string {
 			add("HOST %s: %d active / %d open", h.Host, h.Active, len(h.Threads))
 		}
 	}
+	for _, item := range v.Inbox {
+		add("INBOX %s %s %s: %s | %s", item.ID, item.Kind, item.Ticket, item.Title, strings.Join(item.Options, " | "))
+	}
 	for _, a := range v.Live.Asks {
+		if a.Kind == "marker" && a.Error == "" && !a.Stale {
+			continue // filed as an Inbox item
+		}
 		if a.Error != "" {
 			source := a.Host
 			if a.ThreadID != "" {

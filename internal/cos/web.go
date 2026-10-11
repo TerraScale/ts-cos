@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +24,7 @@ type Web struct {
 	clients     map[chan struct{}]struct{}
 	watchCancel context.CancelFunc
 	watchDone   chan struct{}
+	inbox       atomic.Pointer[Inbox]
 }
 
 func NewWeb(s *Store, auth *Auth) *Web {
@@ -68,7 +71,44 @@ func (w *Web) routes() *http.ServeMux {
 		rw.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(rw).Encode(v)
 	})
+	mux.HandleFunc("POST /inbox/{id}/{action}", w.InboxAction)
 	return mux
+}
+
+// InboxAction answers or dismisses an item from any node; the bucket's
+// compare-and-set closes it everywhere and the mirror patches every dashboard.
+func (w *Web) InboxAction(rw http.ResponseWriter, r *http.Request) {
+	in := w.inbox.Load()
+	if in == nil {
+		http.Error(rw, "Inbox is starting; retry in a few seconds", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(rw, r.Body, 16<<10)
+	var err error
+	switch r.PathValue("action") {
+	case "answer":
+		_, err = in.Answer(r.Context(), r.PathValue("id"), AnswerData{Option: r.PostFormValue("option"), Text: r.PostFormValue("text")})
+	case "dismiss":
+		_, err = in.Dismiss(r.Context(), r.PathValue("id"))
+	default:
+		http.NotFound(rw, r)
+		return
+	}
+	var public OperationError
+	if errors.As(err, &public) {
+		http.Error(rw, public.PublicMessage(), http.StatusConflict)
+		return
+	}
+	if err != nil {
+		slog.Error("inbox action", "error", err)
+		http.Error(rw, "Inbox update failed", http.StatusBadGateway)
+		return
+	}
+	if r.Header.Get("Datastar-Request") == "true" {
+		rw.WriteHeader(http.StatusNoContent)
+		return
+	}
+	http.Redirect(rw, r, "/#inbox", http.StatusSeeOther)
 }
 func (w *Web) Events(rw http.ResponseWriter, r *http.Request) {
 	if _, ok := rw.(http.Flusher); !ok {

@@ -91,7 +91,7 @@ func TestDashboardReadOnly(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 	h.ServeHTTP(r, req)
 	body := r.Body.String()
-	if r.Code != 200 || !strings.Contains(body, "pico.classless") || !strings.Contains(body, "data-init=\"@get('/events')\"") {
+	if r.Code != 200 || !strings.Contains(body, "pico.classless") || !strings.Contains(body, "data-init=\"@get('/events', {retry: 'always', retryMaxCount: 1000})\"") {
 		t.Fatal(r.Code, body)
 	}
 	for _, heading := range []string{"Direction", "Needs you", "Decided for you", "Priorities", "What we're missing", "Suggestions", "Open PRs", "Threads by host"} {

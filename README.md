@@ -137,6 +137,8 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos stream <host> [<id>]` | Live thread (or host thread-list) events as JSON lines, from any node |
 | `cos handoff <host> <id> '<modelSelection>' ['<brief>']` | Wait for idle, compact if needed, check half the target context window, switch, send |
 | `cos asks` / `cos asks-host <host>` | Unanswered NEEDS-USER markers and pending runtime requests |
+| `cos inbox add '<json>'` / `list` / `history` | File an Inbox item; list open items or recent closed ones |
+| `cos inbox answer <id> '<text>'` / `dismiss <id>` | Answer an Inbox item (option or text), or dismiss it |
 | `cos respond <host> <id> <requestId> '<answers>'` | Answer a T3 runtime request |
 | `cos fork <host> <id> ['<title>']` | Fork from the latest stable point |
 | `cos watch <host> <id> <prUrl>` | Link and watch a PR |
@@ -270,6 +272,34 @@ The beat is the reconciler: it refreshes T3, Forgejo and Ku and logs what it saw
 Every step is published with its reason to the 3-replica `COS_AUTOPILOT_LOG`
 stream; each node mirrors the stream and the KV state into its SQLite, so a
 restarted or joining node catches up and the feed shows the same entries everywhere.
+
+## Inbox
+
+The Inbox holds everything COS needs from you. Item kinds (`kind`: `question`,
+`approval`, `decision`, `blocker`, `fyi`):
+
+- **Questions:** 2-4 options, recommended first, plus free text.
+- **Approvals:** Approve or Reject, with an optional note.
+- **Decisions:** choices COS made for you. Keep them or override them.
+- **FYI blockers:** informational, with an optional reply.
+- **FYI:** informational only (for example a rolled-back deploy). Dismiss only;
+  never urgent, and its event is `info`, so it does not wake COS.
+
+`cos inbox add` takes JSON with these fields: `kind`, `title`, `context`,
+`blocks`, `options`, `ticket`, `links`, `host`, `thread`, `source` (`cos`,
+`rules`, `worker`, or `deploy`), `key`, `urgent`, and `supersedes`. Unknown fields are
+rejected.
+
+Items dedupe by `key`. The default key is the thread (or ticket) plus the title,
+ignoring case and extra spacing. An open item updates in place. An answered or
+dismissed key is not asked again. A superseded item closes with a note.
+
+Worker NEEDS-USER blocks become items automatically. An answer is forwarded to
+that worker as a `USER ANSWER` message.
+
+State lives in the replicated `COS_INBOX` JetStream KV bucket (3 replicas). Every
+node mirrors it into SQLite, so any node shows and answers the same Inbox.
+Answering emits a `user.answer` event on `cos.events.>`.
 
 ## TS-769 slices
 

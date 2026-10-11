@@ -321,6 +321,9 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	defer w.Close()
+	inboxDone := make(chan struct{})
+	go func() { defer close(inboxDone); RunInbox(ctx, bus, cfg.LocalHost, s, w.inbox.Store) }()
+	defer func() { cancel(); <-inboxDone }()
 	l, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", *port))
 	if err != nil {
 		return err
