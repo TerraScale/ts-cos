@@ -33,7 +33,7 @@ type OperationHandler func(context.Context, string, []string) (any, error)
 var busCommands = []string{
 	"projects", "launch", "thread", "send", "handoff", "asks-host", "ctx", "shell",
 	"archive", "fork", "watch", "model", "settle", "rename", "tidy", "close",
-	"delete", "dispatch", "respond", "asks", "compact", "usage-verify", "inventory", "purge", "purge-children", "stop", "status-host",
+	"delete", "dispatch", "respond", "asks", "compact", "usage-verify", "inventory", "purge", "purge-children", "stop", "status-host", "unpushed",
 }
 
 const (

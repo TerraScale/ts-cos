@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +27,7 @@ var localCommands = map[string]commandSpec{
 	"send": {2, 3, "send <host> <threadId> '<text>' [queue]"}, "compact": {1, 2, "compact <host> <threadId> ['<focus>']"}, "fork": {1, 2, "fork <host> <threadId> ['<title>']"}, "watch": {2, 2, "watch <host> <threadId> <prUrl>"}, "model": {2, 2, "model <host> <threadId> '<modelSelection json>'"}, "rename": {2, 2, "rename <host> <threadId> '<title>'"},
 	"handoff": {2, 3, "handoff <host> <threadId> '<modelSelection json>' ['<brief>']"}, "respond": {3, 3, "respond <host> <threadId> <requestId> '<answers json>'"},
 	"purge": {0, 1, "purge <host> ['<keep id substrings csv>']"}, "stop": {0, 1, "stop <host> ['<keep id substrings csv>']"},
+	"unpushed": {1, 1, "unpushed <host> <threadId>"},
 }
 
 func validateLocal(command string, args []string) error {
@@ -233,8 +237,66 @@ func localCommand(ctx context.Context, open func(context.Context) (*T3, error), 
 		return c.Dispatch(ctx, map[string]any{"type": "thread.metadata.update", "threadId": id, "title": args[1]})
 	case "settle", "archive":
 		return c.Dispatch(ctx, map[string]any{"type": "thread." + command, "threadId": id})
+	case "unpushed":
+		p, err := c.Projection(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return unpushedState(ctx, c.Host, id, p.Thread.WorktreePath)
 	}
 	return nil, fmt.Errorf("unknown command %q", command)
+}
+
+// unpushedState reports a thread's worktree for the delete safeguard. Callers must refuse destructive actions when missing is true.
+func unpushedState(ctx context.Context, host, id, path string) (map[string]any, error) {
+	out := map[string]any{"host": host, "threadId": id, "worktree": path, "dirty": false, "ahead": 0}
+	if path == "" {
+		return out, nil
+	}
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		out["missing"] = true
+		return out, nil
+	} else if err != nil {
+		return nil, err
+	}
+	dirty, ahead, err := worktreeState(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	out["dirty"], out["ahead"] = dirty, ahead
+	return out, nil
+}
+
+// worktreeState reports uncommitted changes and commits that no remote branch has.
+func worktreeState(ctx context.Context, dir string) (dirty bool, ahead int, err error) {
+	status, err := gitOutput(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return false, 0, err
+	}
+	count, err := gitOutput(ctx, dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
+	if err != nil {
+		return false, 0, err
+	}
+	ahead, err = strconv.Atoi(strings.TrimSpace(count))
+	if err != nil {
+		return false, 0, fmt.Errorf("git rev-list --count in %s: %w", dir, err)
+	}
+	return status != "", ahead, nil
+}
+
+// gitOutput runs git in dir with a 10 s cap; the error names the git arguments that failed.
+func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(strings.TrimSpace(string(exitErr.Stderr))) > 0 {
+			return "", fmt.Errorf("git %s in %s: %w: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", fmt.Errorf("git %s in %s: %w", strings.Join(args, " "), dir, err)
+	}
+	return string(out), nil
 }
 
 func (c *T3) Projects(ctx context.Context) ([]Project, error) {
