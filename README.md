@@ -348,10 +348,14 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   leader. Finally, the leader is SIGKILLed and the survivors must agree on a new
   one within 30 s.
 - `rules.heartbeat-leader`: the autopilot heartbeat runs on the cluster leader.
+- `rules.heartbeat-presets` (TS-813): the Settings page renders every heartbeat preset and
+  the stored interval is one of them. It reads the page and never sets a preset.
+- `failure.t3-schema-change` (TS-812): every host answers the T3 shell in a schema COS
+  understands. A changed schema fails the check, naming the host.
 - `deploy.watchdog.<host>` (TS-818): `cos.service` is the build-store unit (notify, 60 s start
   timeout, trial revert in ExecStartPre and ExecStopPost), `current` and `good` point at
-  `builds/<40-hex>`, idle means no trial and no rollout, `cos version` reports protocol 1,
-  and at most three builds (plus pinned). A rollout in progress skips.
+  `builds/<40-hex>`, idle means no trial and no rollout, `cos version` reports protocol 1
+  and rollout 2 or later, and at most three builds in total. A rollout in progress skips.
 - `deploy.reconnect` (TS-818): on each node `/version` reports the host, protocol and one
   shared revision, `/release` streams its `_release` signal (or `: release unknown`), and
   the dashboard renders `releaseWatch`. It skips until `/version` is served.

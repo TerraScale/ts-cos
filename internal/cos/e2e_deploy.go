@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +19,7 @@ import (
 const watchdogGuard = "if [ -e trial ]"
 
 // e2eWatchdogScript prints the unit's directives and the build store in one ssh round trip.
-// Links are printed as bare revisions; Newest are the three most recent builds; Pinned are current and good.
+// Links are printed as bare revisions. Builds counts the build store (at most keepBuilds, TS-818).
 const e2eWatchdogScript = `d=$HOME/.local/share/cos
 systemctl --user cat ` + e2eUnit + ` | grep -E '^(Type|TimeoutStartSec|ExecStartPre|ExecStopPost|ExecStart)='
 echo "Current=$(basename "$(readlink "$d/current")")"
@@ -28,8 +27,6 @@ echo "Good=$(basename "$(readlink "$d/good")")"
 echo "Trial=$([ -e "$d/trial" ] && echo yes)"
 echo "TrialNext=$([ -e "$d/trial.next" ] && echo yes)"
 echo "Builds=$(ls "$d/builds" 2>/dev/null | wc -l)"
-echo "Newest=$(ls -t "$d/builds" 2>/dev/null | head -3 | tr '\n' ' ')"
-echo "Pinned=$(for l in current good; do basename "$(readlink "$d/$l")"; done | sort -u | tr '\n' ' ')"
 echo "Version=$("$d/current/cos" version 2>&1 | tr -d '\n ')"
 `
 
@@ -39,7 +36,6 @@ type watchdogFacts struct {
 	Current, Good                                                string
 	Trial, TrialNext                                             bool
 	Builds                                                       int // -1 when the store cannot be listed
-	Newest, Pinned                                               []string
 	Version                                                      string
 }
 
@@ -73,10 +69,6 @@ func parseWatchdog(out string) watchdogFacts {
 			if n, err := strconv.Atoi(v); err == nil {
 				f.Builds = n
 			}
-		case "Newest":
-			f.Newest = strings.Fields(v)
-		case "Pinned":
-			f.Pinned = strings.Fields(v)
 		case "Version":
 			f.Version = v
 		}
@@ -122,19 +114,15 @@ func watchdogProblems(f watchdogFacts) (problems []string, rolling bool) {
 		if v.Trial {
 			problems = append(problems, "cos version reports a trial with no rollout")
 		}
-	}
-	// keepBuilds newest plus any pinned build outside them (prune keeps current and good).
-	allowed := keepBuilds
-	for _, r := range f.Pinned {
-		if !slices.Contains(f.Newest, r) {
-			allowed++
+		if v.Rollout < rolloutProtocol {
+			problems = append(problems, fmt.Sprintf("rollout=%d, want >= %d", v.Rollout, rolloutProtocol))
 		}
 	}
 	switch {
 	case f.Builds < 0:
 		problems = append(problems, "build store cannot be listed")
-	case f.Builds > allowed:
-		problems = append(problems, fmt.Sprintf("%d builds, want <= %d (%d newest plus pinned)", f.Builds, allowed, keepBuilds))
+	case f.Builds > keepBuilds:
+		problems = append(problems, fmt.Sprintf("%d builds, want <= %d (current, good and trial)", f.Builds, keepBuilds))
 	}
 	return problems, false
 }

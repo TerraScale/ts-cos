@@ -19,7 +19,7 @@ const (
 
 // versionText is what `current/cos version` prints on a settled host, compacted as the script prints it.
 func versionText(rev string) string {
-	return fmt.Sprintf(`{"protocol":1,"host":"delta","revision":%q,"good":%q}`, rev, rev)
+	return fmt.Sprintf(`{"protocol":1,"rollout":2,"host":"delta","revision":%q,"good":%q}`, rev, rev)
 }
 
 // healthyWatchdog is the script output of a settled host with the TS-818 unit installed.
@@ -32,8 +32,6 @@ var healthyWatchdog = map[string]string{
 	"Current":         testSHA,
 	"Good":            testSHA,
 	"Builds":          "2",
-	"Newest":          testSHA + " " + oldSHA,
-	"Pinned":          testSHA,
 	"Version":         versionText(testSHA),
 }
 
@@ -59,12 +57,11 @@ func TestWatchdogProblems(t *testing.T) {
 		{"wrong ExecStart", watchdogText("ExecStart", "/home/x/.local/bin/cos serve"), "ExecStart=", false},
 		{"no revert in ExecStopPost", watchdogText("ExecStopPost", "/bin/sh -c 'true'"), "ExecStopPost has no trial revert", false},
 		{"Type simple", watchdogText("Type", "simple"), "Type=simple", false},
-		{"4 builds, one extra", watchdogText("Builds", "4", "Newest", testSHA+" "+oldSHA+" "+thirdSHA), "4 builds, want <= 3", false},
-		{"4 builds, good pinned outside newest", watchdogText(
-			"Builds", "4", "Newest", testSHA+" "+oldSHA+" "+thirdSHA,
-			"Current", fourthSHA, "Good", fourthSHA, "Pinned", fourthSHA, "Version", versionText(fourthSHA)), "", false},
-		{"version reports a trial", watchdogText("Version", fmt.Sprintf(`{"protocol":1,"revision":%q,"good":%q,"trial":true}`, testSHA, testSHA)), "reports a trial", false},
-		{"old protocol", watchdogText("Version", fmt.Sprintf(`{"protocol":0,"revision":%q,"good":%q}`, testSHA, testSHA)), "protocol=0", false},
+		{"4 builds, one extra", watchdogText("Builds", "4"), "4 builds, want <= 3", false},
+		{"4 builds, good pinned outside the newest", watchdogText("Builds", "4", "Current", fourthSHA, "Good", fourthSHA, "Version", versionText(fourthSHA)), "4 builds, want <= 3", false},
+		{"version reports a trial", watchdogText("Version", fmt.Sprintf(`{"protocol":1,"rollout":2,"revision":%q,"good":%q,"trial":true}`, testSHA, testSHA)), "reports a trial", false},
+		{"old protocol", watchdogText("Version", fmt.Sprintf(`{"protocol":0,"rollout":2,"revision":%q,"good":%q}`, testSHA, testSHA)), "protocol=0", false},
+		{"old rollout controller", watchdogText("Version", fmt.Sprintf(`{"protocol":1,"rollout":1,"revision":%q,"good":%q}`, testSHA, testSHA)), "rollout=1, want >= 2", false},
 		{"version is not JSON", watchdogText("Version", "cos: not found"), "no JSON", false},
 		{"version is another build", watchdogText("Version", versionText(oldSHA)), "revision=", false},
 	}
@@ -92,7 +89,7 @@ func TestCheckWatchdog(t *testing.T) {
 		{"healthy", "pass", "unit and watchdog as deployed", watchdogText()},
 		{"rollout in progress", "skip", "rollout in progress on delta", watchdogText("Trial", "yes", "Current", oldSHA)},
 		{"wrong ExecStart", "fail", "ExecStart=", watchdogText("ExecStart", "/usr/bin/cos serve")},
-		{"4 builds", "fail", "4 builds", watchdogText("Builds", "4", "Newest", testSHA+" "+oldSHA+" "+thirdSHA)},
+		{"4 builds", "fail", "4 builds", watchdogText("Builds", "4")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

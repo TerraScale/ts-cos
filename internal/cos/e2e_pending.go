@@ -18,11 +18,9 @@ var e2ePending = func() []E2ECheck {
 		{"events.t3.host-offline", "TS-814", "T3 live events"},
 		{"rules.red-ci-wake", "TS-813", "rules engine"},
 		{"rules.ready-merge-once", "TS-813", "rules engine merge"},
-		{"rules.heartbeat-presets", "TS-813", "heartbeat presets"},
 		{"rules.reconciler-dropped-event", "TS-813", "reconciler"},
 		{"failure.t3-down", "TS-812", "T3 client host failure handling"},
 		{"failure.forgejo-5xx", "TS-812", "Forgejo client failure handling"},
-		{"failure.t3-schema-change", "TS-812", "T3 contract check"},
 		{"failure.nats-restart", "TS-810", "deployed cluster"},
 		{"failure.sqlite-disk-full", "TS-810", "deployed cluster"},
 	}

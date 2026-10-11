@@ -321,7 +321,9 @@ func e2eChecks() []E2ECheck {
 		// as an automatic restart, so it runs only on demand: cos e2e cluster.leader-kill.
 		E2ECheck{ID: "cluster.leader-kill", Stream: "TS-810", Chaos: true, OnDemand: true, Run: checkLeaderKill},
 		E2ECheck{ID: "rules.heartbeat-leader", Stream: "TS-813", Smoke: true, Run: checkHeartbeatLeader},
+		E2ECheck{ID: "rules.heartbeat-presets", Stream: "TS-813", Run: checkHeartbeatPresets},
 		E2ECheck{ID: "threads.no-haiku", Stream: "TS-812", Run: checkNoHaikuThreads},
+		E2ECheck{ID: "failure.t3-schema-change", Stream: "TS-812", Run: checkT3Schema},
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
 		E2ECheck{ID: "memory.recall", Stream: "TS-828", Run: checkMemoryRecall},
 		E2ECheck{ID: "access.login.tailnet", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginTailnet)},
