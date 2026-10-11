@@ -102,7 +102,7 @@ func TestChatRoutes(t *testing.T) {
 	}
 	r := serve("GET", "/", false, "")
 	body := r.Body.String()
-	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `data-init="@get(&#39;/release&#39;`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", cssPath} {
+	for _, want := range []string{`data-init="@get(&#39;/chat/events?tab=cos&#39;, {retry: &#39;always&#39;`, `data-init="@get(&#39;/release&#39;`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", cssPath} {
 		if r.Code != http.StatusOK || !strings.Contains(body, want) {
 			t.Fatal(r.Code, "missing", want)
 		}

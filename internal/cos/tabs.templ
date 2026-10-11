@@ -1,0 +1,98 @@
+package cos
+
+// chatTabs is the tab strip above the chat: the COS tab, then each open chat tab. The current chat
+// tab also gets Rename and Close; every dialog is native, so no script is needed.
+templ chatTabs(tabs []ChatTab, current ChatTab) {
+	<nav id="chat-tabs" class="ts-tabs" aria-label="Chat tabs">
+		@tabLink(mainTab.ID, mainTab.Name, current.ID)
+		for _, t := range tabs {
+			@tabLink(t.ID, t.Name, current.ID)
+		}
+		<button type="button" class="ts-btn ts-btn-ghost ts-btn-sm" command="show-modal" commandfor="tab-new">New tab</button>
+		if current.ID != chatMainTab {
+			<button type="button" class="ts-btn ts-btn-ghost ts-btn-sm" command="show-modal" commandfor="tab-rename">Rename</button>
+			<button type="button" class="ts-btn ts-btn-ghost ts-btn-sm" command="show-modal" commandfor="tab-close">Close</button>
+			@renameTabDialog(current)
+			@closeTabDialog(current)
+		}
+		@newTabDialog(current.ID)
+	</nav>
+}
+
+templ tabLink(id, name, current string) {
+	if id == current {
+		<a class="ts-tab" href={ tabHref(id) } aria-current="page">{ name }</a>
+	} else {
+		<a class="ts-tab" href={ tabHref(id) }>{ name }</a>
+	}
+}
+
+templ newTabDialog(current string) {
+	<dialog id="tab-new" class="ts-dialog" aria-labelledby="tab-new-title">
+		<div class="ts-dialog-content">
+			<header class="ts-dialog-head">
+				<div class="ts-dialog-header">
+					<h2 class="ts-dialog-title" id="tab-new-title">New tab</h2>
+					<p class="ts-dialog-description">Each tab is its own COS conversation with its own thread.</p>
+				</div>
+			</header>
+			<form method="post" action="/tabs" class="ts-stack">
+				<input type="hidden" name="tab" value={ current }/>
+				<input class="ts-input" name="name" required maxlength="40" aria-label="Tab name" placeholder="Tab name"/>
+				<textarea class="ts-input" name="focus" maxlength="2000" rows="4" aria-label="Focus" placeholder="Focus (optional)"></textarea>
+				<div class="ts-dialog-footer">
+					<button type="button" class="ts-btn ts-btn-secondary" command="close" commandfor="tab-new">Cancel</button>
+					<button class="ts-btn ts-btn-primary" type="submit">Create tab</button>
+				</div>
+			</form>
+		</div>
+	</dialog>
+}
+
+templ renameTabDialog(t ChatTab) {
+	<dialog id="tab-rename" class="ts-dialog" aria-labelledby="tab-rename-title">
+		<div class="ts-dialog-content">
+			<header class="ts-dialog-head">
+				<div class="ts-dialog-header">
+					<h2 class="ts-dialog-title" id="tab-rename-title">Rename tab</h2>
+					<p class="ts-dialog-description">The COS thread keeps running under the new name.</p>
+				</div>
+			</header>
+			<form method="post" action={ tabAction(t.ID, "rename") } class="ts-stack">
+				<input class="ts-input" name="name" required maxlength="40" value={ t.Name } aria-label="Tab name"/>
+				<div class="ts-dialog-footer">
+					<button type="button" class="ts-btn ts-btn-secondary" command="close" commandfor="tab-rename">Cancel</button>
+					<button class="ts-btn ts-btn-primary" type="submit">Rename</button>
+				</div>
+			</form>
+		</div>
+	</dialog>
+}
+
+templ closeTabDialog(t ChatTab) {
+	<dialog id="tab-close" class="ts-dialog" aria-labelledby="tab-close-title">
+		<div class="ts-dialog-content">
+			<header class="ts-dialog-head">
+				<div class="ts-dialog-header">
+					<h2 class="ts-dialog-title" id="tab-close-title">Close { t.Name }</h2>
+					<p class="ts-dialog-description">Close this tab? Its COS thread is settled.</p>
+				</div>
+			</header>
+			<form method="post" action={ tabAction(t.ID, "close") } class="ts-stack">
+				<div class="ts-dialog-footer">
+					<button type="button" class="ts-btn ts-btn-secondary" command="close" commandfor="tab-close">Cancel</button>
+					<button class="ts-btn ts-btn-danger" type="submit">Close tab</button>
+				</div>
+			</form>
+		</div>
+	</dialog>
+}
+
+// tabNotice shows a message beside the composer; empty text clears it.
+templ tabNotice(text string) {
+	<p id="chat-notice" class="toast" role="status">{ text }</p>
+}
+
+templ tabClosedNotice() {
+	<p id="chat-notice" class="toast" role="status">This tab was closed. <a href="/">Back to COS</a></p>
+}

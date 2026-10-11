@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -277,4 +280,95 @@ func TestChatTabAgent(t *testing.T) {
 		_, ok := e.chat.Tab(tab.ID)
 		return !ok && len(e.chat.Entries(tab.ID)) == 0
 	})
+}
+
+func postForm(h http.Handler, target string, form url.Values) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestChatTabWeb(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	e := newAgentTestEnv(t, ctx)
+	e.reset(t)
+	web := NewWeb(e.store, nil)
+	web.Chat = e.chat
+	mux := web.routes()
+
+	expectRedirect := func(rec *httptest.ResponseRecorder, location string) {
+		t.Helper()
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != location {
+			t.Fatalf("status %d location %q, want 303 to %q", rec.Code, rec.Header().Get("Location"), location)
+		}
+	}
+
+	rec := postForm(mux, "/tabs", url.Values{"name": {"Deploys"}, "focus": {"watch the release"}, "tab": {chatMainTab}})
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/?tab=") {
+		t.Fatalf("create: status %d location %q", rec.Code, rec.Header().Get("Location"))
+	}
+	id := strings.TrimPrefix(rec.Header().Get("Location"), "/?tab=")
+	chatTestWait(t, "created tab cached", func() bool { got, ok := e.chat.Tab(id); return ok && got.Name == "Deploys" })
+
+	rec = postForm(mux, "/tabs", url.Values{"name": {""}, "tab": {chatMainTab}})
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/?tab=cos&notice=") {
+		t.Fatalf("empty name: status %d location %q", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = postForm(mux, "/tabs/cos/rename", url.Values{"name": {"Main"}})
+	if !strings.HasPrefix(rec.Header().Get("Location"), "/?tab=cos&notice=") {
+		t.Fatalf("rename COS: location %q", rec.Header().Get("Location"))
+	}
+	rec = postForm(mux, "/tabs/cos/close", url.Values{})
+	if !strings.HasPrefix(rec.Header().Get("Location"), "/?tab=cos&notice=") {
+		t.Fatalf("close COS: location %q", rec.Header().Get("Location"))
+	}
+	if got, _ := e.chat.Tab(chatMainTab); got.ID != "" {
+		t.Fatal("the main COS tab is stored as a tab")
+	}
+
+	expectRedirect(postForm(mux, "/tabs/"+id+"/rename", url.Values{"name": {"Ops"}}), "/?tab="+id)
+	chatTestWait(t, "renamed tab cached", func() bool { got, ok := e.chat.Tab(id); return ok && got.Name == "Ops" })
+
+	// A message posted to a tab is stored under that tab.
+	second, err := e.chat.CreateTab(ctx, "Infra", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatTestWait(t, "second tab cached", func() bool { _, ok := e.chat.Tab(second.ID); return ok })
+	req := httptest.NewRequest(http.MethodPost, "/chat?tab="+second.ID, strings.NewReader(`{"msg":"hi"}`))
+	req.Header.Set("Datastar-Request", "true")
+	posted := httptest.NewRecorder()
+	mux.ServeHTTP(posted, req)
+	if posted.Code != http.StatusOK {
+		t.Fatalf("chat post status %d", posted.Code)
+	}
+	chatTestWait(t, "message in its tab", func() bool {
+		for _, m := range e.chat.Entries(second.ID) {
+			if m.Role == "user" && m.Text == "hi" {
+				return true
+			}
+		}
+		return false
+	})
+
+	expectRedirect(postForm(mux, "/tabs/"+id+"/close", url.Values{}), "/")
+	chatTestWait(t, "tab closed", func() bool { got, ok := e.chat.Tab(id); return ok && got.Closed })
+	expectRedirect(postForm(mux, "/tabs/"+id+"/close", url.Values{}), "/?notice=This+tab+is+already+closed")
+
+	// Unknown and closed tabs fall back to the COS tab, and cannot take messages.
+	for _, target := range []string{"/?tab=unknown", "/?tab=" + id} {
+		get := httptest.NewRecorder()
+		mux.ServeHTTP(get, httptest.NewRequest(http.MethodGet, target, nil))
+		expectRedirect(get, "/")
+	}
+	req = httptest.NewRequest(http.MethodPost, "/chat?tab="+id, strings.NewReader(`{"msg":"late"}`))
+	req.Header.Set("Datastar-Request", "true")
+	late := httptest.NewRecorder()
+	mux.ServeHTTP(late, req)
+	if late.Code != http.StatusOK || !strings.Contains(late.Body.String(), "closed or unknown") {
+		t.Fatalf("message to a closed tab: status %d body %q", late.Code, late.Body.String())
+	}
 }
