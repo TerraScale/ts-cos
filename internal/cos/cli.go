@@ -327,7 +327,9 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	defer w.Close()
 	inboxDone := make(chan struct{})
 	go func() { defer close(inboxDone); RunInbox(ctx, bus, cfg.LocalHost, s, w.inbox.Store) }()
-	defer func() { cancel(); <-inboxDone }()
+	usageDone := make(chan struct{})
+	go func() { defer close(usageDone); RunUsage(ctx, bus, cfg.LocalHost, s) }()
+	defer func() { cancel(); <-inboxDone; <-usageDone }()
 	l, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", *port))
 	if err != nil {
 		return err

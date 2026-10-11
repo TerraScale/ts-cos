@@ -1,0 +1,2 @@
+{"type":"assistant","timestamp":"2026-10-10T10:05:00.000Z","sessionId":"haiku-b","gitBranch":"cos/ts-826-work-tokens","message":{"id":"msg_b","model":"claude-haiku-5-5-20261001","usage":{"input_tokens":5,"output_tokens":10}}}
+{"type":"assistant","timestamp":"2026-10-10T10:20:00.000Z","sessionId":"haiku-b","gitBranch":"cos/ts-826-work-tokens","message":{"id":"msg_b","model":"claude-haiku-5-5-20261001","usage":{"input_tokens":5,"output_tokens":30}}}

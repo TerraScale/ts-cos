@@ -46,12 +46,18 @@ func chatID(at time.Time) string {
 // openKV binds a replicated bucket. Only the JetStream meta leader creates it:
 // concurrent creates from several nodes can wedge the stream assignment.
 func openKV(ctx context.Context, b *Bus, bucket string) (jetstream.KeyValue, error) {
+	return openKVConfig(ctx, b, jetstream.KeyValueConfig{Bucket: bucket})
+}
+
+// openKVConfig binds a bucket described by cfg, creating it with the cluster's replicas.
+func openKVConfig(ctx context.Context, b *Bus, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 	js, err := jetstream.New(b.conn)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	bucket := cfg.Bucket
 	kv, err := js.KeyValue(ctx, bucket)
 	if b.server == nil && err != nil {
 		return nil, fmt.Errorf("COS %s store unavailable; is cos serve running? (%w)", strings.ToLower(strings.TrimPrefix(bucket, "COS_")), err)
@@ -62,12 +68,12 @@ func openKV(ctx context.Context, b *Bus, bucket string) (jetstream.KeyValue, err
 	if !b.server.JetStreamIsLeader() {
 		return nil, fmt.Errorf("waiting for the JetStream leader to create %s", bucket)
 	}
-	replicas := 1
+	cfg.Replicas, cfg.Storage = 1, jetstream.FileStorage
 	if b.server.JetStreamIsClustered() {
-		replicas = 3
+		cfg.Replicas = 3
 	}
 	// shortcut: buckets grow without pruning; trim old chat keys when they reach megabytes.
-	return js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bucket, Replicas: replicas, Storage: jetstream.FileStorage})
+	return js.CreateKeyValue(ctx, cfg)
 }
 
 // Chat mirrors the replicated chat bucket in memory so every node renders the same live view.
