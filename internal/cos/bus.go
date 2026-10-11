@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -81,6 +82,7 @@ type Bus struct {
 	resignOnce  sync.Once
 	elected     chan struct{} // closed when elect returns
 	hookSecrets map[string]string
+	reloads     atomic.Int64 // route reloads applied; tests read it
 }
 
 // Fixed COS node settings; the ports stay clear of dev dashboards near 8790 and NATS defaults.
@@ -243,32 +245,62 @@ func tailnetIPv4(peer tailnetPeer) string {
 	return ""
 }
 
-// cosRoute reports whether address is a COS route listener. NATS sends INFO
-// before credentials, so route passwords only ever reach COS nodes.
-func cosRoute(ctx context.Context, address string) bool {
+// cosRoute reports the server name of address when it is a COS route listener.
+// NATS sends INFO before credentials, so route passwords only ever reach COS nodes.
+func cosRoute(ctx context.Context, address string) (string, bool) {
 	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
-		return false
+		return "", false
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 	line, err := bufio.NewReader(io.LimitReader(conn, 64<<10)).ReadString('\n')
 	info, ok := strings.CutPrefix(line, "INFO ")
-	var fields struct{ Cluster string }
-	return err == nil && ok && json.Unmarshal([]byte(info), &fields) == nil && fields.Cluster == busClusterName
+	var fields struct {
+		Cluster    string `json:"cluster"`
+		ServerName string `json:"server_name"`
+	}
+	if err != nil || !ok || json.Unmarshal([]byte(info), &fields) != nil || fields.Cluster != busClusterName {
+		return "", false
+	}
+	return fields.ServerName, true
+}
+
+// routeConnected reports whether name is this node or already routed through gossip.
+func (b *Bus) routeConnected(name string) bool {
+	if name == b.server.Name() {
+		return true
+	}
+	routez, err := b.server.Routez(&server.RoutezOptions{})
+	if err != nil {
+		return false
+	}
+	for _, route := range routez.Routes {
+		if route.RemoteName == name {
+			return true
+		}
+	}
+	return false
 }
 
 // discover adds a route to every COS node found; NATS gossip completes the mesh
-// and retries configured routes while a peer restarts.
+// and retries configured routes while a peer restarts. A reload briefly rejects
+// client auth, so peers already connected through gossip are not reloaded for.
 func (b *Bus) discover(ctx context.Context, opts *server.Options, peers func(context.Context) ([]string, error)) {
 	routed := map[string]bool{}
 	for {
 		candidates, _ := peers(ctx)
 		added := false
 		for _, peer := range candidates {
-			if !routed[peer] && cosRoute(ctx, peer) {
-				routed[peer], added = true, true
+			if routed[peer] {
+				continue
 			}
+			name, ok := cosRoute(ctx, peer)
+			if !ok {
+				continue
+			}
+			routed[peer] = true
+			added = added || !b.routeConnected(name)
 		}
 		if added {
 			next := opts.Clone()
@@ -280,6 +312,7 @@ func (b *Bus) discover(ctx context.Context, opts *server.Options, peers func(con
 				slog.Error("COS route update failed", "error", err)
 				clear(routed)
 			} else {
+				b.reloads.Add(1)
 				opts = next
 			}
 		}
@@ -406,7 +439,7 @@ func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHa
 	}
 	b.server.SetLoggerV2(natsLog{secrets: []string{opts.Password, opts.Cluster.Password}}, false, false, false)
 	go b.server.Start()
-	ready, stopReady := context.WithTimeout(ctx, 5*time.Second)
+	ready, stopReady := context.WithTimeout(ctx, 30*time.Second)
 	defer stopReady()
 	for !b.server.ReadyForConnections(50 * time.Millisecond) {
 		if err := ready.Err(); err != nil {

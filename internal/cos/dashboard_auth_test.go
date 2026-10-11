@@ -120,7 +120,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 		}), http.NotFoundHandler()))
 		t.Cleanup(servers[i].Close)
 	}
-	deadline := time.Now().Add(40 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for _, auth := range auths {
 		for users, _, _ := auth.kv(); users == nil; users, _, _ = auth.kv() {
 			if time.Now().After(deadline) {

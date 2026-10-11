@@ -110,18 +110,40 @@ func hookDeliveryID(source string, header http.Header, body []byte) string {
 }
 
 // limiter counts requests per key in fixed one-minute windows on this node.
+// Each key has its own window, so one key's reset never resets another's count.
 type limiter struct {
-	mu     sync.Mutex
-	window time.Time
-	seen   map[string]int
+	mu   sync.Mutex
+	now  func() time.Time // defaults to time.Now; tests inject a clock
+	seen map[string]keyWindow
+}
+
+type keyWindow struct {
+	start time.Time
+	n     int
 }
 
 func (l *limiter) allow(key string, max int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.seen == nil || time.Since(l.window) >= time.Minute {
-		l.window, l.seen = time.Now(), map[string]int{}
+	if l.seen == nil {
+		l.seen = map[string]keyWindow{}
 	}
-	l.seen[key]++
-	return l.seen[key] <= max
+	now := time.Now()
+	if l.now != nil {
+		now = l.now()
+	}
+	w, ok := l.seen[key]
+	if !ok || now.Sub(w.start) >= time.Minute {
+		if !ok && len(l.seen) >= 4096 {
+			for k, old := range l.seen {
+				if now.Sub(old.start) >= time.Minute {
+					delete(l.seen, k)
+				}
+			}
+		}
+		w = keyWindow{start: now}
+	}
+	w.n++
+	l.seen[key] = w
+	return w.n <= max
 }

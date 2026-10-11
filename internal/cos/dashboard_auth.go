@@ -210,18 +210,37 @@ func (a *Auth) sessionUser(r *http.Request) string {
 	if !ok || !valid {
 		return ""
 	}
-	if _, err := sessions.Get(r.Context(), key); err != nil {
-		// A local replica can lag the write that started the session, so a miss is checked on the leader.
-		// Forged cookies must not stampede the stream leader.
-		if !a.limit.allow("session-miss:"+clientIP(r), sessionMissPerMinute) {
+	// The leader decides validity so logout and password change revoke at once; a local hit
+	// still signs in while the session stream re-elects; a local miss (fresh session on a
+	// lagging node, or a forged cookie) is capped per address before it may reach the leader.
+	_, err = sessions.Get(r.Context(), key)
+	local := err == nil
+	if !local && !a.limit.allow("session-miss:"+clientIP(r), sessionMissPerMinute) {
+		return ""
+	}
+	_, _, found, err := leaderGet(r.Context(), a.nc, sessionBucket, key)
+	if err != nil {
+		if !local {
 			return ""
 		}
-		_, _, found, err := leaderGet(r.Context(), a.nc, sessionBucket, key)
-		if err != nil || !found {
-			return ""
-		}
+		return user
+	}
+	if !found {
+		return ""
 	}
 	return user
+}
+
+// untilRevoked retries op every 100 ms for up to 5 seconds and reports whether it succeeded.
+func untilRevoked(op func() bool) bool {
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if op() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
 }
 
 func sessionKey(user, token string) (string, bool) {
@@ -454,8 +473,8 @@ func (a *Auth) logout(rw http.ResponseWriter, r *http.Request) {
 	_, sessions, _ := a.kv()
 	if cookie, err := r.Cookie(sessionCookie); err == nil && sessions != nil {
 		user, token, _ := strings.Cut(cookie.Value, ".")
-		if key, ok := sessionKey(user, token); ok {
-			_ = sessions.Delete(r.Context(), key)
+		if key, ok := sessionKey(user, token); ok && !untilRevoked(func() bool { return sessions.Delete(r.Context(), key) == nil }) {
+			slog.Error("COS session revocation failed", "user", user)
 		}
 	}
 	setSessionCookie(rw, r, "", -1)
@@ -498,10 +517,23 @@ func (a *Auth) changePassword(rw http.ResponseWriter, r *http.Request) {
 		renderAuth(rw, r, http.StatusConflict, passwordPage("The password changed elsewhere meanwhile. Reload and try again."))
 		return
 	}
-	if keys, err := sessions.ListKeysFiltered(r.Context(), user+".*"); err == nil {
-		for key := range keys.Keys() {
-			_ = sessions.Delete(r.Context(), key)
+	revoked := untilRevoked(func() bool {
+		keys, err := sessions.ListKeysFiltered(r.Context(), user+".*")
+		if err != nil {
+			return false
 		}
+		ok := true
+		for key := range keys.Keys() {
+			if sessions.Delete(r.Context(), key) != nil {
+				ok = false
+			}
+		}
+		return ok
+	})
+	if !revoked {
+		slog.Error("COS session revocation failed", "user", user)
+		renderAuth(rw, r, http.StatusServiceUnavailable, passwordPage("Password changed, but other sessions could not be signed out. Try again in a minute."))
+		return
 	}
 	if err := a.startSession(rw, r, sessions, user); err != nil {
 		renderAuth(rw, r, http.StatusOK, passwordPage("Password changed. Sign in again."))

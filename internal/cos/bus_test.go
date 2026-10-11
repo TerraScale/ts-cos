@@ -601,10 +601,10 @@ func TestBusCluster(t *testing.T) {
 func TestBusAdmission(t *testing.T) {
 	t.Run("probe sends nothing and accepts only COS route listeners", func(t *testing.T) {
 		for banner, want := range map[string]bool{
-			"INFO {\"cluster\":\"COS\",\"name\":\"beta\"}\r\n": true,
-			"INFO {\"cluster\":\"production\"}\r\n":            false,
-			"-ERR 'not nats'\r\n":                              false,
-			"":                                                 false,
+			"INFO {\"cluster\":\"COS\",\"server_name\":\"beta\"}\r\n": true,
+			"INFO {\"cluster\":\"production\"}\r\n":                   false,
+			"-ERR 'not nats'\r\n":                                     false,
+			"":                                                        false,
 		} {
 			listener, err := net.Listen("tcp4", "127.0.0.1:0")
 			if err != nil {
@@ -626,7 +626,7 @@ func TestBusAdmission(t *testing.T) {
 			if banner == "" {
 				go func() { time.Sleep(100 * time.Millisecond); listener.Close() }()
 			}
-			if got := cosRoute(context.Background(), listener.Addr().String()); got != want {
+			if _, got := cosRoute(context.Background(), listener.Addr().String()); got != want {
 				t.Fatalf("banner %q accepted = %v", banner, got)
 			}
 			if n := <-received; n > 0 {
@@ -777,5 +777,58 @@ func TestBusContextCleanup(t *testing.T) {
 	}
 	if bus.server.Running() || !client.conn.IsClosed() {
 		t.Fatal("context cancellation left bus running")
+	}
+}
+
+// TestDiscoverDoesNotReloadConnectedPeer: a peer already routed through gossip is
+// marked routed without a reload, because a reload briefly rejects client auth.
+func TestDiscoverDoesNotReloadConnectedPeer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ports := busTestPorts(t, 4)
+	handler := func(context.Context, string, []string) (any, error) { return nil, nil }
+	cfgA, nodeA := busTestConfig(t, "delta", ports[0], ports[1], []int{ports[3]})
+	cfgB, nodeB := busTestConfig(t, "beta", ports[2], ports[3], []int{ports[1]})
+	a, err := startBus(ctx, cfgA, nodeA, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Close)
+	b, err := startBus(ctx, cfgB, nodeB, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Close)
+	deadline := time.Now().Add(60 * time.Second)
+	for !a.routeConnected(b.server.Name()) {
+		if time.Now().After(deadline) {
+			t.Fatal("nodes did not route to each other")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Each probe is one discovery cycle; the first cycle finishes before the second probe starts.
+	probes := make(chan struct{}, 2)
+	peers := func(context.Context) ([]string, error) {
+		probes <- struct{}{}
+		return []string{"127.0.0.1:" + strconv.Itoa(ports[3])}, nil
+	}
+	before := a.reloads.Load()
+	discoverCtx, stopDiscover := context.WithCancel(ctx)
+	discovered := make(chan struct{})
+	go func() {
+		defer close(discovered)
+		a.discover(discoverCtx, busOptions(cfgA, nodeA), peers)
+	}()
+	for range 2 {
+		select {
+		case <-probes:
+		case <-time.After(60 * time.Second):
+			t.Fatal("discovery did not run two cycles")
+		}
+	}
+	stopDiscover()
+	<-discovered
+	if got := a.reloads.Load(); got != before {
+		t.Fatalf("connected peer caused %d reload(s)", got-before)
 	}
 }

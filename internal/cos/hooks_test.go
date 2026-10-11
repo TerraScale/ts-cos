@@ -109,3 +109,23 @@ func TestHooksStoreSignedDeliveriesOnce(t *testing.T) {
 		t.Fatalf("request %d from one address = %d", hookPerMinute+1, last)
 	}
 }
+
+// TestLimiterWindowIsPerKey: a key's expired window must not reset another key's count.
+func TestLimiterWindowIsPerKey(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := &limiter{now: func() time.Time { return now }}
+	if !l.allow("a", 1) {
+		t.Fatal("first attempt for a was refused")
+	}
+	now = now.Add(30 * time.Second)
+	if !l.allow("b", 1) {
+		t.Fatal("first attempt for b was refused")
+	}
+	now = now.Add(31 * time.Second) // a's window has expired; b's has not
+	if !l.allow("a", 1) {
+		t.Fatal("a was not reset after its window expired")
+	}
+	if l.allow("b", 1) {
+		t.Fatal("a's window expiry reset b's count")
+	}
+}
