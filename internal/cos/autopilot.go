@@ -126,6 +126,13 @@ func Reconcile(cfg Config, bus *Bus, store *Store) func(context.Context) []Autop
 		}
 		out := []AutopilotEntry{{Kind: "record", Action: "Reconciled live state",
 			Reason: fmt.Sprintf("%d threads, %d PRs", threads, len(live.PRs))}}
+		if js, err := bus.JetStream(); err != nil {
+			out = append(out, AutopilotEntry{Kind: "error", Action: "Reconciler", Reason: err.Error()})
+		} else if kv, err := js.KeyValue(ctx, autopilotSettings); err != nil {
+			out = append(out, AutopilotEntry{Kind: "error", Action: "Reconciler", Reason: err.Error()})
+		} else {
+			out = append(out, reconcileSynthetic(ctx, js, kv, live)...)
+		}
 		for _, source := range sortedKeysAny(live.Errors) {
 			out = append(out, AutopilotEntry{Kind: "error", Target: source, Action: "Source refresh failed", Reason: live.Errors[source]})
 		}

@@ -452,6 +452,18 @@ published with its reason to the 3-replica `COS_AUTOPILOT_LOG` stream
 (`cos.autopilot.log.<class>`); each node mirrors the stream and the KV state into
 its SQLite, so a restarted or joining node catches up and every node shows the same feed.
 
+**Reconciler.** Every beat diffs live Forgejo PR state against the fingerprints
+the previous beat saw, stored under the `reconcile` key in `COS_AUTOPILOT`. A
+changed PR (CI, mergeability, review or head commit) publishes a synthetic event
+(`Synthetic: true`) into `cos.events.>`, so a dropped webhook still reaches the
+rules engine within one heartbeat. The first beat only records fingerprints, so
+the existing backlog does not replay. Event IDs are deterministic (the source,
+the item and a hash of its state), so a repeat publish is deduplicated by the
+stream. Thread reconciliation is deferred: a synthetic `turn.failed` would
+duplicate the real one under a different event ID and count as a second failure
+for same-failure escalation. The step uses no tokens, and its feed entry reads
+`Reconciler: N synthetic events` only when it published something.
+
 ## Inbox
 
 The Inbox (`/inbox`, linked with its open count from the chat header) holds
