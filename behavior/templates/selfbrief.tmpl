@@ -18,6 +18,6 @@ This is a COS self-change: COS merges your PR itself as soon as CI and the full 
 3. Smallest diff that makes the check pass, with a test. Do not edit {{.CheckFile}} or any other file under checks/, and do not touch login, deploy/rollback, CI workflows, e2e checks or the self-change code: COS refuses such PRs.
 4. Behavior-only changes (brief, rules, wake budget, templates) belong in behavior/; they go live without a deploy.
 5. `nice -n 19 go tool templ generate && go build ./... && go vet ./... && go test ./...` green before every push.
-6. Commits "{{.Ticket}}: ...", no AI attribution. fj pr create --base main, body starts "Closes {{.Ticket}}". link_pull_request + watch_pull_request, end the turn.
+6. Plain commit messages and a plain PR title and short body: no ticket key, no AI attribution. fj pr create --base main. link_pull_request + watch_pull_request, end the turn.
 7. On wake: CI failure -> fix the root cause; review findings -> fix or reply with evidence; conflict -> rebase on origin/main, push --force-with-lease (your branch only).
 8. Never merge, never push to main, never use AskUserQuestion. Need the user -> end with NEEDS-USER / OPTIONS / WHY.

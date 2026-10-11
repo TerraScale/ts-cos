@@ -23,7 +23,7 @@ NATS/micro transport; dashboard commands + plugins; rollout; deterministic
 autopilot + JetStream jobs/events + inbox/rules/flows/visibility. Do not implement
 later slices early. COS uses its own NATS cluster, never production NATS.
 Use T3 `delegate_task` for independent tests/docs or review before the first push.
-Commits start `TS-769: `. Never merge or push main.
+Commits are plain messages: no ticket key, no AI attribution. Never merge or push main.
 
 ## Zero configuration (user decision 2026-10-09, do not revert)
 

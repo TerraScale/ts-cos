@@ -89,7 +89,6 @@ func TestHooksStoreSignedDeliveriesOnce(t *testing.T) {
 		"another key":               {"/hooks/forgejo", body, []string{"X-Forgejo-Signature", hookTestSign("guess", []byte(body))}, http.StatusUnauthorized},
 		"altered body":              {"/hooks/forgejo", body + " ", forgejo[4:], http.StatusUnauthorized},
 		"unknown source":            {"/hooks/github", body, nil, http.StatusNotFound},
-		"retired Ku source":         {"/hooks/ku", body, forgejo[4:], http.StatusNotFound},
 		"over the size cap":         {"/hooks/forgejo", strings.Repeat("x", ingestMaxMsg+1), nil, http.StatusRequestEntityTooLarge},
 		"dashboard stays signed in": {"/autopilot/run", "", nil, http.StatusUnauthorized},
 	} {

@@ -16,13 +16,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// COS registers one webhook on the TerraScale org and one on the Tools/ku code
-// repository (a separate org where the user's PRs also live), signed with the secret
-// every node derives, pointing at A's ingress.
+// COS registers one webhook on the TerraScale org, signed with the secret every node
+// derives, pointing at A's ingress.
 const forgejoHookURL = "https://cos.terrascale.tech/hooks/forgejo"
 
 var (
-	forgejoHookTargets = []string{"/orgs/" + forgejoOrg + "/hooks", "/repos/Tools/ku/hooks"}
+	forgejoHookTargets = []string{"/orgs/" + forgejoOrg + "/hooks"}
 	forgejoHookEvents  = []string{"push", "pull_request", "pull_request_sync",
 		"pull_request_review_approved", "pull_request_review_rejected", "pull_request_review_comment",
 		"action_run_failure", "action_run_recover", "action_run_success"}

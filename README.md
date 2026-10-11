@@ -231,8 +231,7 @@ Each node ingests only its local T3 shell stream. The `forgejo` source covers on
 authored by mariogk, CI, and pushes on main.
 
 Forgejo webhooks reach the stream in two steps. The cluster leader registers the
-TerraScale org hook and the `Tools/ku` repository hook to
-`https://cos.terrascale.tech/hooks/forgejo`, signed with a secret every node derives
+TerraScale org hook to `https://cos.terrascale.tech/hooks/forgejo`, signed with a secret every node derives
 from the Vault master. Deliveries land on `COS_INGEST` (`cos.ingest.forgejo`, work
 queue), and one durable consumer normalizes each once on whichever node pulls it.
 Mergeability is read from the API 15 seconds after a PR update or a push to main.

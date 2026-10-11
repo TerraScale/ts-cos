@@ -75,7 +75,7 @@ func TestLastEventsReadsNewestInOrder(t *testing.T) {
 		t.Fatalf("t3 events:\n got %#v", t3)
 	}
 
-	none, err := lastEvents(ctx, js[2], "cos.events.ku.>", 20)
+	none, err := lastEvents(ctx, js[2], "cos.events.none.>", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestEventsArgs(t *testing.T) {
 		{name: "zero count", args: []string{"0"}, err: true},
 		{name: "negative count", args: []string{"-1"}, err: true},
 		{name: "non-numeric count", args: []string{"cos.events.>", "many"}, err: true},
-		{name: "filter outside cos.events", args: []string{"ku.events.>"}, err: true},
+		{name: "filter outside cos.events", args: []string{"other.events.>"}, err: true},
 		{name: "bare prefix", args: []string{"cos.events."}, err: true},
 		{name: "filter with bad count", args: []string{"cos.events.>", "0"}, err: true},
 		{name: "too many args", args: []string{"cos.events.>", "5", "extra"}, err: true},

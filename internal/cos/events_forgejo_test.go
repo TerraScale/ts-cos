@@ -49,8 +49,8 @@ func TestForgejoRegisterHooksCreatesThenAdopts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := []string{"GET /orgs/TerraScale/hooks", "POST /orgs/TerraScale/hooks", "GET /repos/Tools/ku/hooks", "POST /repos/Tools/ku/hooks",
-		"GET /orgs/TerraScale/hooks", "PATCH /orgs/TerraScale/hooks/42", "GET /repos/Tools/ku/hooks", "PATCH /repos/Tools/ku/hooks/42"}
+	want := []string{"GET /orgs/TerraScale/hooks", "POST /orgs/TerraScale/hooks",
+		"GET /orgs/TerraScale/hooks", "PATCH /orgs/TerraScale/hooks/42"}
 	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("calls:\n%s", strings.Join(calls, "\n"))
 	}

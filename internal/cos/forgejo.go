@@ -210,7 +210,7 @@ func forgejoRepoPath(repo string) (string, error) {
 	return "/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]), nil
 }
 
-// forgejoRepoName keeps bare names for the TerraScale org and owner/name elsewhere (Tools/ku).
+// forgejoRepoName keeps bare names for the TerraScale org and owner/name elsewhere.
 func forgejoRepoName(fullName string) string {
 	if owner, name, ok := strings.Cut(fullName, "/"); ok && owner == forgejoOrg {
 		return name

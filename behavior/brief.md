@@ -81,7 +81,7 @@ Rules that apply: <greenfield / zero-config / v1 / no re-found / … as relevant
    Run independent pieces as parallel Haiku workers, never one after another. Target ≥ 50% of the thread's output tokens on Haiku. Run a command yourself only to make a decision. Haiku never works without your review: review every worker's diff before pushing. Never Haiku 4.5.
 3. Smallest diff that meets the acceptance, with tests; PR ≤ ~1,500 changed lines, else slice it.
 4. Build/lint/tests green (nice -n 19) before every push; failures already on origin/main go in the PR body and don't block.
-5. Commits "<KEY>: …", no AI attribution. fj pr create --base main, body starts "Closes <KEY>". link_pull_request + watch_pull_request, end the turn.
+5. Plain commit messages and a plain PR title and short body: no ticket key, no AI attribution. fj pr create --base main. link_pull_request + watch_pull_request, end the turn.
 6. On wake: CI failure → fix the root cause; terrascale-bot findings → fix, or reply with evidence; conflict → rebase on origin/main, push --force-with-lease (your branch only). Approved + green → reply "READY <url>". After merge, verify live where it deploys.
 7. Live/destructive ops serving this ticket are pre-approved: verify the target first, never touch unrelated infra (Forgejo/ts-ops/homelab), never mariogk-desktop. Never merge, never push to main, never use AskUserQuestion, never "@terrascale-bot escalate". Need the user → end with:
    NEEDS-USER: <question with context>
