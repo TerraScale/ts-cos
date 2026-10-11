@@ -44,7 +44,7 @@ func TestBudgetE2EDeleteRaiseIgnoresMissingKey(t *testing.T) {
 		t.Fatalf("missing raise key failed cleanup: %v", err)
 	}
 	boom := errors.New("boom")
-	if err := budgetE2EDeleteRaise(failingKV{err: boom}, "k")(context.Background()); !errors.Is(err, boom) {
+	if err := budgetE2EDeleteRaise(budgetFailingKV{err: boom}, "k")(context.Background()); !errors.Is(err, boom) {
 		t.Fatalf("real delete error = %v, want %v", err, boom)
 	}
 }
@@ -56,13 +56,15 @@ func (missingKV) Delete(context.Context, string, ...jetstream.KVDeleteOpt) error
 	return jetstream.ErrKeyNotFound
 }
 
-// failingKV fails every delete with err.
-type failingKV struct {
+// budgetFailingKV fails every delete with err.
+type budgetFailingKV struct {
 	jetstream.KeyValue
 	err error
 }
 
-func (f failingKV) Delete(context.Context, string, ...jetstream.KVDeleteOpt) error { return f.err }
+func (f budgetFailingKV) Delete(context.Context, string, ...jetstream.KVDeleteOpt) error {
+	return f.err
+}
 
 func TestBudgetCleanupRunsEveryStep(t *testing.T) {
 	var ran []string
