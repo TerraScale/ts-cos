@@ -737,3 +737,57 @@ func TestSelfKeyAllocation(t *testing.T) {
 		t.Fatal(b)
 	}
 }
+
+func TestSelfStoreListSeesEveryWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rig := newSelfTestRig(t, ctx)
+	first, err := selfRequest(`{"request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.ID = "LIST-first"
+	if err := rig.d.store.create(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 30 {
+		r, err := selfRequest(`{"request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]}}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.ID = fmt.Sprintf("LIST-%d", i)
+		if err := rig.d.store.create(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		records, err := rig.d.store.list(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, got := range records {
+			found = found || got.ID == r.ID
+		}
+		if !found {
+			t.Fatalf("list missed %s right after create (%d records)", r.ID, len(records))
+		}
+		got, rev, err := rig.d.store.get(ctx, first.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got.State = selfDone
+		if err := rig.d.store.save(ctx, got, rev); err != nil {
+			t.Fatal(err)
+		}
+		records, err = rig.d.store.list(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updated := false
+		for _, got := range records {
+			updated = updated || (got.ID == first.ID && got.State == selfDone)
+		}
+		if !updated {
+			t.Fatalf("list missed the save to %s in round %d", first.ID, i)
+		}
+	}
+}

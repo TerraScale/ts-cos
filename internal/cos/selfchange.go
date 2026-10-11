@@ -106,7 +106,11 @@ func (r selfRecord) entry() SelfChange {
 func selfBranch(key string) string { return "cos/" + strings.ToLower(key) }
 
 // selfStore is the replicated changelog and queue.
-type selfStore struct{ kv jetstream.KeyValue }
+type selfStore struct {
+	kv jetstream.KeyValue
+	// stream is the bucket's stream; list reads its subjects, which never miss a just-written record.
+	stream jetstream.Stream
+}
 
 func openSelfStore(ctx context.Context, bus *Bus, create bool) (selfStore, error) {
 	js, err := bus.JetStream()
@@ -127,10 +131,14 @@ func openSelfStore(ctx context.Context, bus *Bus, create bool) (selfStore, error
 	} else {
 		kv, err = js.KeyValue(ctx, selfBucket)
 	}
-	if err != nil {
-		return selfStore{}, fmt.Errorf("COS self-change store unavailable; is cos serve running? (%w)", err)
+	if err == nil {
+		var stream jetstream.Stream
+		stream, err = js.Stream(ctx, "KV_"+selfBucket)
+		if err == nil {
+			return selfStore{kv, stream}, nil
+		}
 	}
-	return selfStore{kv}, nil
+	return selfStore{}, fmt.Errorf("COS self-change store unavailable; is cos serve running? (%w)", err)
 }
 
 // selfLeaderReads turns off direct gets on COS_SELF: a direct get may be answered by a
@@ -150,13 +158,15 @@ func selfLeaderReads(ctx context.Context, js jetstream.JetStream) error {
 	return err
 }
 
+// list reads the keys from the stream's subjects: ListKeys can end its replay early under load and miss a just-written record.
 func (s selfStore) list(ctx context.Context) ([]selfRecord, error) {
-	keys, err := s.kv.ListKeys(ctx)
+	info, err := s.stream.Info(ctx, jetstream.WithSubjectFilter("$KV."+selfBucket+".>"))
 	if err != nil {
 		return nil, err
 	}
 	var out []selfRecord
-	for k := range keys.Keys() {
+	for subject := range info.State.Subjects {
+		k := strings.TrimPrefix(subject, "$KV."+selfBucket+".")
 		if k == "seq" {
 			continue
 		}
