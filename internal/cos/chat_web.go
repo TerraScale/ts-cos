@@ -446,7 +446,7 @@ func (w *Web) chatPost(rw http.ResponseWriter, r *http.Request) {
 	}
 	tab, open := w.openTab(r)
 	if !open {
-		http.Error(rw, "This chat tab is closed or unknown", http.StatusNotFound)
+		chatNotice(rw, "This chat tab is closed or unknown")
 		return
 	}
 	text := strings.TrimSpace(in.Msg)

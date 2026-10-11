@@ -314,7 +314,7 @@ func TestChatTabWeb(t *testing.T) {
 	req.Header.Set("Datastar-Request", "true")
 	late := httptest.NewRecorder()
 	mux.ServeHTTP(late, req)
-	if late.Code != http.StatusNotFound {
-		t.Fatalf("message to a closed tab: status %d", late.Code)
+	if late.Code != http.StatusOK || !strings.Contains(late.Body.String(), "closed or unknown") {
+		t.Fatalf("message to a closed tab: status %d body %q", late.Code, late.Body.String())
 	}
 }
