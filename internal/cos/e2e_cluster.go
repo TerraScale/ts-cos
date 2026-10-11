@@ -139,9 +139,9 @@ func checkVersion(ctx context.Context, e *E2EEnv, host string) (string, error) {
 	return "", errors.New(state)
 }
 
-// Unexpected restarts in the last 25 min (one e2e period plus slack); the e2e leader kill adds
-// at most one. Deploy installs are reported, not counted.
-const maxAutoRestarts = 2
+// Every automatic restart in the last 25 min must be explained by an e2e sigkill record; deploy
+// installs are reported, not counted.
+const maxUnattributedRestarts = 0
 
 func checkRestarts(ctx context.Context, e *E2EEnv, host string) (string, error) {
 	f, err := e.deployed(ctx, host)
@@ -152,8 +152,20 @@ func checkRestarts(ctx context.Context, e *E2EEnv, host string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("%s: cannot read journal restarts: %q", host, f["AutoRestarts"])
 	}
-	state := fmt.Sprintf("%s: %d automatic restarts in 25 min (plus %s deploy installs), NRestarts=%s", host, n, f["DeployRestarts"], f["NRestarts"])
-	if n > maxAutoRestarts {
+	attributed := 0
+	if n > 0 {
+		bus, err := e.bus(ctx)
+		if err != nil {
+			return "", err
+		}
+		defer bus.Close()
+		if attributed, err = attributedKills(ctx, bus, host, time.Now().Add(-25*time.Minute)); err != nil {
+			return "", err
+		}
+	}
+	unattributed := max(0, n-attributed)
+	state := fmt.Sprintf("%s: %d unattributed automatic restarts in 25 min (%d from e2e chaos, %s deploy installs), NRestarts=%s", host, unattributed, attributed, f["DeployRestarts"], f["NRestarts"])
+	if unattributed > maxUnattributedRestarts {
 		return "", errors.New(state)
 	}
 	return state, nil
@@ -335,6 +347,9 @@ func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 	if _, _, err := waitCluster(ctx, bus.conn, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("cluster unhealthy before restart, not perturbing it: %w", err)
 	}
+	if err := e.chaos(ctx, bus, target, "cluster.restart", "restart"); err != nil {
+		return "", err
+	}
 	if _, err := e.run(ctx, target, "systemctl --user restart "+e2eUnit); err != nil {
 		return "", err
 	}
@@ -426,6 +441,9 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 				peers = append(peers, a)
 			}
 		}
+	}
+	if err := e.chaos(ctx, bus, target, "cluster.partition", "partition"); err != nil {
+		return "", err
 	}
 	// Heal with a fresh context so a cancelled run never leaves the partition in place.
 	defer func() {

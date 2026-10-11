@@ -293,10 +293,11 @@ func TestE2ECheckRestarts(t *testing.T) {
 		name, want, wantEvidence string
 		facts                    map[string]string
 	}{
-		{"two automatic restarts", "pass", "2 automatic restarts", with("AutoRestarts", "2")},
-		{"three automatic restarts", "fail", "3 automatic restarts", with("AutoRestarts", "3")},
+		{"no automatic restarts", "pass", "0 unattributed automatic restarts", with()},
+		// Attribution reads the chaos bucket through the runner's bus; the fake env has no delta host, so it fails there.
+		{"automatic restarts need the runner's bus", "fail", "delta: no route to host", with("AutoRestarts", "2")},
 		{"non-numeric count", "fail", "cannot read journal restarts", with("AutoRestarts", "lots")},
-		{"deploy installs are reported, not counted", "pass", "plus 6 deploy installs", with("DeployRestarts", "6")},
+		{"deploy installs are reported, not counted", "pass", "6 deploy installs", with("DeployRestarts", "6")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -514,6 +515,7 @@ func TestRegisterE2E(t *testing.T) {
 		{ID: "accept..x", Stream: "TS-900", Run: run},
 		{ID: "accept.ts-900.x", Run: run},
 		{ID: "accept.ts-900.y", Stream: "TS-900"},
+		{ID: "accept.ts-900.z", Stream: "TS-900", Smoke: true, Chaos: true, Run: run},
 	} {
 		func() {
 			defer func() {
@@ -523,6 +525,34 @@ func TestRegisterE2E(t *testing.T) {
 			}()
 			RegisterE2E(bad)
 		}()
+	}
+}
+
+// TestE2ESmokeHasNoChaos: the fast health gate never perturbs the cluster.
+func TestE2ESmokeHasNoChaos(t *testing.T) {
+	chaos := map[string]bool{}
+	for _, c := range e2eChecks() {
+		if c.Smoke && c.Chaos {
+			t.Errorf("%s is both Smoke and Chaos", c.ID)
+		}
+		chaos[c.ID] = c.Chaos
+	}
+	for _, id := range []string{"cluster.restart", "cluster.partition", "cluster.leader-freeze", "cluster.leader-kill"} {
+		if !chaos[id] {
+			t.Errorf("%s is not marked Chaos", id)
+		}
+	}
+}
+
+func TestE2ESmokeSkipsChaos(t *testing.T) {
+	run := func(context.Context, *E2EEnv) (string, error) { return "", nil }
+	checks := []E2ECheck{
+		{ID: "deploy.unit.beta", Stream: "TS-810", Smoke: true, Run: run},
+		{ID: "cluster.restart", Stream: "TS-810", Smoke: true, Chaos: true, Run: run},
+	}
+	report := runE2E(t.Context(), &E2EEnv{}, checks, []string{"--smoke"})
+	if len(report.Checks) != 1 || report.Checks[0].ID != "deploy.unit.beta" {
+		t.Fatalf("smoke run = %+v, want only deploy.unit.beta", report.Checks)
 	}
 }
 

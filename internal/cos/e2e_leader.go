@@ -137,6 +137,9 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := e.chaos(ctx, bus, leader, "cluster.leader-kill", "sigkill"); err != nil {
+		return "", err
+	}
 	// A crash, not a clean stop: no Resign, so the lease must expire. systemd restarts the node.
 	if _, err := e.run(ctx, leader, "systemctl --user kill -s SIGKILL "+e2eUnit); err != nil {
 		return "", err
@@ -254,6 +257,9 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 	}
 	leader, err := leaderOf(ctx, bus)
 	if err != nil {
+		return "", err
+	}
+	if err := e.chaos(ctx, bus, leader, "cluster.leader-freeze", "freeze"); err != nil {
 		return "", err
 	}
 	// A root-free safety net: the leader's own user manager resumes it even if this runner dies.

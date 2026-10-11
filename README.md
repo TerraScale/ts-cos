@@ -187,9 +187,15 @@ every check has `status` (`pass`, `fail`, or `skip` while its feature is not on 
 It finishes within 5 minutes, cleans up after itself and never touches real work.
 
 - `deploy.*`: `cos.service` active, running `cos version` equals origin/main
-  (15-minute deploy window), at most 2 automatic restarts in 25 minutes, no error
-  or panic lines since the process started (at most 17 minutes, which leaves out
-  the previous run's own chaos).
+  (15-minute deploy window), no unattributed automatic restarts in 25 minutes, no
+  error or panic lines since the process started (at most 17 minutes, which leaves
+  out the previous run's own chaos).
+- Chaos is attributable: each perturbation first writes a record to the `cos_e2e`
+  KV bucket (node, check, action, time) and a `cos-e2e` journal line on the target.
+  `deploy.restarts` counts only automatic restarts with no matching `sigkill` record
+  (allowance 0); deploy installs are reported, not counted.
+- `--smoke` never runs chaos. COS runs `--smoke` every 10 minutes and the full
+  suite hourly.
 - `cluster.*`: all three hosts answer micro PING; every JetStream stream is R3 with
   a leader and current replicas; every node's `cos cluster` names the same leader.
   A non-leader is restarted and must catch up within 60 s. The leader (or another

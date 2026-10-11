@@ -62,6 +62,7 @@ type E2ECheck struct {
 	ID     string
 	Stream string // owning ticket, reported with every result
 	Smoke  bool   // also part of the fast health gate (cos e2e --smoke, < 30 s, TS-818)
+	Chaos  bool   // perturbs the cluster (kill, restart, partition, freeze); never part of --smoke
 	// OnDemand checks run only when named by their exact ID (for example a real crash).
 	OnDemand bool
 	Run      func(ctx context.Context, env *E2EEnv) (evidence string, err error)
@@ -77,6 +78,9 @@ func RegisterE2E(c E2ECheck) {
 	parts := strings.Split(c.ID, ".")
 	if len(parts) < 3 || parts[0] != "accept" || slices.Contains(parts, "") || c.Stream == "" || c.Run == nil {
 		panic("RegisterE2E: need ID accept.<slug>.<name>, Stream and Run: " + c.ID)
+	}
+	if c.Smoke && c.Chaos {
+		panic("RegisterE2E: a check cannot be both Smoke and Chaos: " + c.ID)
 	}
 	for _, r := range e2eRegistered {
 		if r.ID == c.ID {
@@ -182,8 +186,8 @@ func smokeChecks(checks []E2ECheck, host string) []E2ECheck {
 	})
 }
 
-// runE2E runs checks in order. "--smoke" selects the fast health-gate subset; other args are
-// ID prefixes (for example "deploy" or "cluster.partition").
+// runE2E runs checks in order. "--smoke" selects the fast health-gate subset, which never includes
+// chaos; other args are ID prefixes (for example "deploy" or "cluster.partition").
 func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) E2EReport {
 	smoke := slices.Contains(args, "--smoke")
 	filter := slices.DeleteFunc(slices.Clone(args), func(a string) bool { return a == "--smoke" })
@@ -195,7 +199,7 @@ func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) 
 	defer cancel()
 	report := E2EReport{StartedAt: time.Now().UTC(), Runner: env.cfg.LocalHost, Version: Version, Summary: map[string]int{"pass": 0, "fail": 0, "skip": 0}, Checks: []E2EResult{}}
 	for _, c := range checks {
-		if smoke && !c.Smoke || len(filter) > 0 && !slicesHasPrefix(filter, c.ID) || c.OnDemand && !slices.Contains(filter, c.ID) {
+		if smoke && (!c.Smoke || c.Chaos) || len(filter) > 0 && !slicesHasPrefix(filter, c.ID) || c.OnDemand && !slices.Contains(filter, c.ID) {
 			continue
 		}
 		start := time.Now()
@@ -240,12 +244,12 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "cluster.members", Stream: "TS-810", Smoke: true, Run: checkMembers},
 		E2ECheck{ID: "cluster.jetstream", Stream: "TS-810", Smoke: true, Run: checkJetStream},
 		E2ECheck{ID: "cluster.leader", Stream: "TS-810", Smoke: true, Run: checkLeader},
-		E2ECheck{ID: "cluster.restart", Stream: "TS-810", Run: checkRestartCatchUp},
-		E2ECheck{ID: "cluster.partition", Stream: "TS-810", Run: checkPartition},
-		E2ECheck{ID: "cluster.leader-freeze", Stream: "TS-810", Run: checkLeaderFreeze},
+		E2ECheck{ID: "cluster.restart", Stream: "TS-810", Chaos: true, Run: checkRestartCatchUp},
+		E2ECheck{ID: "cluster.partition", Stream: "TS-810", Chaos: true, Run: checkPartition},
+		E2ECheck{ID: "cluster.leader-freeze", Stream: "TS-810", Chaos: true, Run: checkLeaderFreeze},
 		// SIGKILL proves a real crash, systemd restart and rejoin from the store, but each run counts
 		// as an automatic restart, so it runs only on demand: cos e2e cluster.leader-kill.
-		E2ECheck{ID: "cluster.leader-kill", Stream: "TS-810", OnDemand: true, Run: checkLeaderKill},
+		E2ECheck{ID: "cluster.leader-kill", Stream: "TS-810", Chaos: true, OnDemand: true, Run: checkLeaderKill},
 		E2ECheck{ID: "rules.heartbeat-leader", Stream: "TS-813", Smoke: true, Run: checkHeartbeatLeader},
 		E2ECheck{ID: "threads.no-haiku", Stream: "TS-812", Run: checkNoHaikuThreads},
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
