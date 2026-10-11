@@ -25,6 +25,7 @@ const (
 	budgetSettingsThread = "budget.thread"
 	budgetSettingsDaily  = "budget.daily"
 	budgetWarnPercent    = 80
+	budgetMaxTokens      = 1_000_000_000_000
 	budgetDaily          = "daily"
 	budgetCOSLabel       = "COS agent"
 	budgetLabelMax       = 80
@@ -268,6 +269,12 @@ func budgetGet(ctx context.Context, kv jetstream.KeyValue, key string) (n int64,
 	return n, true, nil
 }
 
+// budgetSetLimit stores one base limit; the CLI and the Settings form both write through it.
+func budgetSetLimit(ctx context.Context, kv jetstream.KeyValue, setting string, tokens int64) error {
+	_, err := kv.Put(ctx, setting, []byte(strconv.FormatInt(tokens, 10)))
+	return err
+}
+
 // budgetLoadLimits reads the base limits and the day's raises. A non-positive base is
 // ignored so a bad setting never makes every percentage divide by zero.
 func budgetLoadLimits(ctx context.Context, kv jetstream.KeyValue, day string, scopes []string) (budgetLimits, error) {
@@ -305,22 +312,31 @@ func budgetStoreRaise(ctx context.Context, kv jetstream.KeyValue, key string, va
 
 // loadBudgets reads today's usage from the local mirror and the settings from KV.
 func loadBudgets(ctx context.Context, store *Store, settings jetstream.KeyValue, now time.Time) (budgetState, error) {
+	st, scopes, err := budgetUsage(ctx, store, now)
+	if err != nil {
+		return st, err
+	}
+	st.Limits, err = budgetLoadLimits(ctx, settings, st.Day, scopes)
+	return st, err
+}
+
+// budgetUsage reads today's totals and the scopes they name; the limits are left unset.
+func budgetUsage(ctx context.Context, store *Store, now time.Time) (budgetState, []string, error) {
 	day := now.UTC().Format(time.DateOnly)
 	rows, err := store.Usage(ctx, day) // on or after today; no rows are dated later
 	if err != nil {
-		return budgetState{}, err
+		return budgetState{}, nil, err
 	}
 	live, err := store.Live(ctx)
 	if err != nil {
-		return budgetState{}, err
+		return budgetState{}, nil, err
 	}
 	st := budgetState{Day: day, Totals: SummarizeUsage(rows, live, "thread"), Daily: usageTotal(budgetDaily, rows)}
 	scopes := []string{budgetDaily}
 	for _, t := range st.Totals {
 		scopes = append(scopes, budgetScope(t.Key))
 	}
-	st.Limits, err = budgetLoadLimits(ctx, settings, day, scopes)
-	return st, err
+	return st, scopes, nil
 }
 
 // runBudgets is leader-only: it publishes today's budget events and applies answers.
@@ -393,6 +409,7 @@ func budgetApply(ctx context.Context, bus *Bus, settings jetstream.KeyValue, st 
 }
 
 // parseTokens reads a positive token count with an optional k or M suffix: 10M, 500k, 42.
+// Anything above budgetMaxTokens is rejected, which also keeps n*mult from overflowing.
 func parseTokens(s string) (int64, error) {
 	mult := int64(1)
 	switch {
@@ -402,8 +419,8 @@ func parseTokens(s string) (int64, error) {
 		mult, s = 1_000, strings.TrimSuffix(s, "k")
 	}
 	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || n <= 0 || n > (1<<62)/mult {
-		return 0, OperationError("budget must be a positive token count such as 10M or 500k")
+	if err != nil || n <= 0 || n > budgetMaxTokens/mult {
+		return 0, OperationError("budget must be a positive token count such as 10M or 500k, up to 1000000M")
 	}
 	return n * mult, nil
 }

@@ -116,7 +116,7 @@ templ kpiTiles(k kpiView) {
 	</section>
 }
 
-templ settingsPage(a AutopilotState) {
+templ settingsPage(a AutopilotState, b budgetPanelData) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Settings · COS")
@@ -130,6 +130,7 @@ templ settingsPage(a AutopilotState) {
 			</header>
 			<main class="page page-narrow">
 				@autopilotPanel(a)
+				@budgetSection(b)
 				<section class="panel" aria-labelledby="account-heading">
 					<header class="panel-head"><h2 id="account-heading">Account</h2></header>
 					<div class="row">

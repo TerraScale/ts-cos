@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"slices"
-	"strconv"
 	"time"
 )
 
@@ -70,7 +69,7 @@ func budgetCommand(ctx context.Context, cfg Config, args []string, w io.Writer) 
 		return err
 	}
 	if setting != "" {
-		if _, err := settings.Put(ctx, setting, []byte(strconv.FormatInt(tokens, 10))); err != nil {
+		if err := budgetSetLimit(ctx, settings, setting, tokens); err != nil {
 			return err
 		}
 	}

@@ -568,7 +568,7 @@ func kpiTiles(k kpiView) templ.Component {
 	})
 }
 
-func settingsPage(a AutopilotState) templ.Component {
+func settingsPage(a AutopilotState, b budgetPanelData) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -602,6 +602,10 @@ func settingsPage(a AutopilotState) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		templ_7745c5c3_Err = autopilotPanel(a).Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = budgetSection(b).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -646,7 +650,7 @@ func chatHead(h chatHeader) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(integer(h.Autopilot.Interval))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 155, Col: 66}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 156, Col: 66}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
@@ -659,7 +663,7 @@ func chatHead(h chatHeader) templ.Component {
 			var templ_7745c5c3_Var27 string
 			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(h.Autopilot.NextBeat())
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 155, Col: 105}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 156, Col: 105}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
@@ -677,7 +681,7 @@ func chatHead(h chatHeader) templ.Component {
 		var templ_7745c5c3_Var28 string
 		templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(integer(h.Running))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 158, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 159, Col: 40}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 		if templ_7745c5c3_Err != nil {
@@ -690,7 +694,7 @@ func chatHead(h chatHeader) templ.Component {
 		var templ_7745c5c3_Var29 string
 		templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(integer(h.PRs))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 159, Col: 36}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 160, Col: 36}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 		if templ_7745c5c3_Err != nil {
@@ -703,7 +707,7 @@ func chatHead(h chatHeader) templ.Component {
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(integer(h.Inbox))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 164, Col: 109}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 165, Col: 109}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 		if templ_7745c5c3_Err != nil {
@@ -795,7 +799,7 @@ func chatEntry(e ChatEntry) templ.Component {
 		var templ_7745c5c3_Var34 string
 		templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.ResolveAttributeValue("m-" + e.ID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 183, Col: 26}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 184, Col: 26}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var34)
 		if templ_7745c5c3_Err != nil {
@@ -823,7 +827,7 @@ func chatEntry(e ChatEntry) templ.Component {
 			var templ_7745c5c3_Var36 string
 			templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(e.Text)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 186, Col: 12}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 187, Col: 12}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 			if templ_7745c5c3_Err != nil {
@@ -837,7 +841,7 @@ func chatEntry(e ChatEntry) templ.Component {
 			var templ_7745c5c3_Var37 string
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(e.Text)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 188, Col: 19}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 189, Col: 19}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 			if templ_7745c5c3_Err != nil {
@@ -856,7 +860,7 @@ func chatEntry(e ChatEntry) templ.Component {
 				var templ_7745c5c3_Var38 string
 				templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(toolSummary(e.Tools))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 192, Col: 37}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 193, Col: 37}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 				if templ_7745c5c3_Err != nil {
@@ -874,7 +878,7 @@ func chatEntry(e ChatEntry) templ.Component {
 					var templ_7745c5c3_Var39 string
 					templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(tool)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 195, Col: 18}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 196, Col: 18}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 					if templ_7745c5c3_Err != nil {

@@ -50,6 +50,7 @@ func (w *Web) routes() *http.ServeMux {
 	mux.HandleFunc("GET /chat/events", w.chatEvents)
 	mux.HandleFunc("POST /chat", w.chatPost)
 	mux.HandleFunc("GET /settings", w.settings)
+	mux.HandleFunc("POST /settings/budgets", w.budgetSave)
 	mux.HandleFunc("GET /inbox", w.inboxPage)
 	mux.HandleFunc("GET /inbox/events", w.inboxEvents)
 	mux.HandleFunc("GET /tokens", w.tokensPage)

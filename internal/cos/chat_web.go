@@ -123,15 +123,21 @@ func heartbeatSub(a AutopilotState) string {
 	return "next " + next.Local().Format("15:04")
 }
 
-// settings hosts the heartbeat presets (TS-813); account settings join it here.
+// settings hosts the heartbeat presets (TS-813), token budgets (TS-826); account settings join it here.
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
+	w.renderSettings(rw, r, http.StatusOK, w.budgetPanel(r.Context(), time.Now()))
+}
+
+// renderSettings writes the Settings page with the Budgets section d, at status.
+func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int, d budgetPanelData) {
 	v, err := View(r.Context(), w.Store)
 	if err != nil {
 		http.Error(rw, "Cannot read COS state", 500)
 		return
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := settingsPage(v.Autopilot).Render(r.Context(), rw); err != nil {
+	rw.WriteHeader(status)
+	if err := settingsPage(v.Autopilot, d).Render(r.Context(), rw); err != nil {
 		slog.Error("render settings", "error", err)
 	}
 }
