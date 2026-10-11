@@ -291,6 +291,16 @@ type Thread struct {
 			Mergeability string `json:"mergeability"`
 		} `json:"snapshot"`
 	} `json:"pullRequests"`
+	LastErrorClass    string           `json:"lastErrorClass"`
+	UsageLimitResetAt string           `json:"usageLimitResetAt"`
+	LimitRecovery     *T3LimitRecovery `json:"limitRecovery"`
+}
+
+// T3LimitRecovery is T3's armed auto-resume after a usage limit (UsageLimitRecoveryWorker).
+type T3LimitRecovery struct {
+	RunID      string `json:"runId"`
+	ResetAt    string `json:"resetAt"`
+	AutoResume bool   `json:"autoResume"`
 }
 
 // NeedsInput reports a pending question or approval.

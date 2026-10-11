@@ -275,8 +275,8 @@ func TestClassify(t *testing.T) {
 		},
 		{
 			name:  "subagent rate limit is not woken or escalated",
-			event: Event{ID: "t3:turn-13", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached", Host: "beta", Thread: "sub"},
-			want:  []Decision{{Class: ClassRecord, Rule: "child-thread"}},
+			event: Event{ID: "t3:turn-13", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached", Host: "beta", Thread: "sub", Data: json.RawMessage(`{"error":"Claude API rate limit reached"}`)},
+			want:  []Decision{{Class: ClassRecord, Rule: "limit-failure"}},
 			check: func(t *testing.T, got []Decision) {
 				if got[0].Wake != "" || got[0].Model != nil {
 					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
@@ -285,8 +285,8 @@ func TestClassify(t *testing.T) {
 		},
 		{
 			name:  "top-level rate limit records without waking",
-			event: Event{ID: "t3:turn-14", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached. Try again later.", Host: "beta", Thread: "t1"},
-			want:  []Decision{{Class: ClassRecord, Rule: "transient-failure"}},
+			event: Event{ID: "t3:turn-14", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached. Try again later.", Host: "beta", Thread: "t1", Data: json.RawMessage(`{"error":"Claude API rate limit reached. Try again later."}`)},
+			want:  []Decision{{Class: ClassRecord, Rule: "limit-failure"}},
 			check: func(t *testing.T, got []Decision) {
 				if got[0].Wake != "" || got[0].Model != nil {
 					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
@@ -305,8 +305,8 @@ func TestClassify(t *testing.T) {
 		},
 		{
 			name:  "credential cooldown is transient",
-			event: Event{ID: "t3:turn-21", Source: SourceT3, Kind: KindTurnFailed, Summary: "API Error: Server is temporarily limiting requests (not your usage limit) · All credentials for model claude-opus-5-5 are cooling down", Host: "beta", Thread: "t1"},
-			want:  []Decision{{Class: ClassRecord, Rule: "transient-failure"}},
+			event: Event{ID: "t3:turn-21", Source: SourceT3, Kind: KindTurnFailed, Summary: "TS-1 · ts-cos: x: turn failed", Host: "beta", Thread: "t1", Data: json.RawMessage(`{"error":"API Error: Server is temporarily limiting requests (not your usage limit) · All credentials for model claude-opus-5-5 are cooling down"}`)},
+			want:  []Decision{{Class: ClassRecord, Rule: "limit-failure"}},
 			check: func(t *testing.T, got []Decision) {
 				if got[0].Wake != "" || got[0].Model != nil {
 					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
@@ -315,9 +315,9 @@ func TestClassify(t *testing.T) {
 		},
 		{
 			name:   "repeated top-level rate limit does not escalate the model",
-			event:  Event{ID: "t3:turn-15", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached. Try again later.", Host: "beta", Thread: "t1"},
+			event:  Event{ID: "t3:turn-15", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached. Try again later.", Host: "beta", Thread: "t1", Data: json.RawMessage(`{"error":"Claude API rate limit reached. Try again later."}`)},
 			memory: WakeMemory{Sig: "failed:run failed: Claude API rate limit reached. Try again later.", SHA: "t3:turn-15", Count: 1},
-			want:   []Decision{{Class: ClassRecord, Rule: "transient-failure"}},
+			want:   []Decision{{Class: ClassRecord, Rule: "limit-failure"}},
 			check: func(t *testing.T, got []Decision) {
 				if got[0].Wake != "" || got[0].Model != nil {
 					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
@@ -586,9 +586,56 @@ func TestRulesEngineHandleNodeAlert(t *testing.T) {
 func TestRulesEngineHandleWakeFailure(t *testing.T) {
 	rec := &rulesRecorder{sha: "aaa", sendErr: errors.New("bus down")}
 	r := newRulesEngine(t, rec)
-	err := r.Handle(context.Background(), rulesCIEvent())
-	if err == nil || !strings.Contains(err.Error(), "wake t1") {
-		t.Fatalf("Handle error = %v, want a wake t1 error", err)
+	if err := r.Handle(context.Background(), rulesCIEvent()); err != nil {
+		t.Fatalf("Handle error = %v, want nil: a failed wake is state, not a retry", err)
+	}
+	if len(rec.published) != 1 || rec.published[0].Kind != "error" || !strings.Contains(rec.published[0].Reason, "wake failed") {
+		t.Fatalf("published = %+v, want one wake failed error entry", rec.published)
+	}
+	if n := len(r.memory.(*fakeKV).data); n != 0 {
+		t.Fatalf("wake memory entries = %d, want none", n)
+	}
+}
+
+func providerFailureEvent(thread, summary, data string) Event {
+	e := Event{ID: "t3:turn-p", Source: SourceT3, Kind: KindTurnFailed, Summary: summary, Host: "beta", Thread: thread}
+	if data != "" {
+		e.Data = json.RawMessage(data)
+	}
+	return e
+}
+
+func TestClassifyProviderFailure(t *testing.T) {
+	const cooldown = `{"error":"API Error: Server is temporarily limiting requests (not your usage limit) · All credentials for model claude-opus-5-5 are cooling down (last error: rate_limit_error)"}`
+	tests := []struct {
+		name  string
+		event Event
+		class string
+		rule  string
+	}{
+		{"usage limit on a running ticket records", providerFailureEvent("t1", "turn failed", `{"errorClass":"usage_limit"}`), ClassRecord, "limit-failure"},
+		{"usage limit in a subagent records", providerFailureEvent("sub", "turn failed", `{"errorClass":"usage_limit"}`), ClassRecord, "limit-failure"},
+		{"usage limit on a paused ticket records", providerFailureEvent("t2", "turn failed", `{"errorClass":"usage_limit"}`), ClassRecord, "limit-failure"},
+		{"usage limit without a ticket records", providerFailureEvent("gone", "turn failed", `{"errorClass":"usage_limit"}`), ClassRecord, "limit-failure"},
+		{"cooldown error text records without a class", providerFailureEvent("t1", "turn failed", cooldown), ClassRecord, "limit-failure"},
+		{"provider error records as an API failure", providerFailureEvent("t1", "turn failed", `{"errorClass":"provider_error"}`), ClassRecord, "api-failure"},
+		{"interrupted turn on a limit records", Event{ID: "t3:turn-i", Source: SourceT3, Kind: KindTurnInterrupted, Summary: "turn interrupted", Host: "beta", Thread: "t1", Data: json.RawMessage(`{"error":"Claude API rate limit reached"}`)}, ClassRecord, "limit-failure"},
+		{"thread title with quota still wakes on an unrelated error", providerFailureEvent("t1", "TS-1 quota page: turn failed", `{"error":"go test failed"}`), ClassAct, "failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(tt.event, rulesLive(), nil, WakeMemory{}, rulesPaused)
+			if len(got) != 1 || got[0].Class != tt.class || got[0].Rule != tt.rule || (tt.class == ClassRecord) != (got[0].Wake == "") || got[0].Model != nil {
+				t.Fatalf("decisions = %+v, want one %s %s", got, tt.class, tt.rule)
+			}
+		})
+	}
+}
+
+func TestClassifyUnknownFailureStillWakes(t *testing.T) {
+	got := Classify(providerFailureEvent("t1", "go test failed", ""), rulesLive(), nil, WakeMemory{}, rulesPaused)
+	if len(got) == 0 || got[0].Class != ClassAct || got[0].Rule != "failed" || got[0].Wake == "" {
+		t.Fatalf("decisions = %+v, want a failed wake", got)
 	}
 }
 

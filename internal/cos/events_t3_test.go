@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -175,6 +176,10 @@ func TestT3EventsReconnect(t *testing.T) {
 		}
 		var request struct{ Tag string }
 		_ = json.Unmarshal(data, &request)
+		if request.Tag == "orchestration.dispatchCommand" {
+			_ = ws.Write(ctx, websocket.MessageText, []byte(`{"_tag":"Exit","requestId":"1","exit":{"_tag":"Success","value":null}}`))
+			return
+		}
 		if request.Tag == "orchestration.getThreadProjection" {
 			var value bytes.Buffer // T3 frames are one line each
 			_ = json.Compact(&value, t3TestProjectionJSON(85))
@@ -247,5 +252,72 @@ func TestEventIDAndText(t *testing.T) {
 	}
 	if got := EventText("abcdef", 4); got != "abc…" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestT3TrackerLimitFailureData(t *testing.T) {
+	tracker := newT3Tracker("delta")
+	row := Thread{ID: "thread-1", Title: "TS-830 limits", Status: "failed", LatestRunID: "run-9", LatestRunDone: "2026-10-11T01:00:00.000Z",
+		LastError: "usage limit", LastErrorClass: "usage_limit", UsageLimitResetAt: "2026-10-11T05:00:00.000Z"}
+	events, ended := tracker.observe(row, false, time.Now())
+	if !ended || len(events) != 1 || events[0].Kind != KindTurnFailed {
+		t.Fatalf("events = %#v, want one turn.failed", events)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(events[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["errorClass"] != "usage_limit" || data["resetAt"] != "2026-10-11T05:00:00.000Z" {
+		t.Fatalf("data = %v, want errorClass and resetAt", data)
+	}
+}
+
+func TestT3TrackerDisarmsAutoResume(t *testing.T) {
+	const resetAt = "2026-10-11T05:00:00.000Z"
+	ctx := context.Background()
+	var sent []map[string]any
+	dispatch := func(_ context.Context, command map[string]any) (any, error) {
+		sent = append(sent, command)
+		return nil, nil
+	}
+	armed := Thread{ID: "thread-1", LimitRecovery: &T3LimitRecovery{RunID: "run-1", ResetAt: resetAt, AutoResume: true}}
+	tracker := newT3Tracker("delta")
+	tracker.disarm(ctx, Thread{ID: "thread-1"}, dispatch)
+	tracker.disarm(ctx, Thread{ID: "thread-1", LimitRecovery: &T3LimitRecovery{RunID: "run-1", ResetAt: resetAt}}, dispatch)
+	if len(sent) != 0 {
+		t.Fatalf("unarmed rows dispatched %v", sent)
+	}
+
+	tracker.disarm(ctx, armed, dispatch)
+	tracker.disarm(ctx, armed, dispatch)
+	if len(sent) != 1 {
+		t.Fatalf("dispatches = %d, want 1", len(sent))
+	}
+	raw, _ := json.Marshal(sent[0])
+	if strings.Contains(string(raw), "snooze") {
+		t.Fatalf("command %s carries snooze", raw)
+	}
+	limit, _ := sent[0]["limitRecovery"].(map[string]any)
+	if sent[0]["type"] != "thread.metadata.update" || sent[0]["threadId"] != "thread-1" || sent[0]["commandId"] == "" ||
+		limit["runId"] != "run-1" || limit["resetAt"] != resetAt || limit["autoResume"] != false {
+		t.Fatalf("command = %s, want a disarm of run-1 at %s", raw, resetAt)
+	}
+
+	next := Thread{ID: "thread-1", LimitRecovery: &T3LimitRecovery{RunID: "run-2", ResetAt: resetAt, AutoResume: true}}
+	tracker.disarm(ctx, next, dispatch)
+	if len(sent) != 2 {
+		t.Fatalf("dispatches after a new run = %d, want 2", len(sent))
+	}
+
+	// A rejected disarm is logged and never retried.
+	rejected := 0
+	failing := func(context.Context, map[string]any) (any, error) {
+		rejected++
+		return nil, errors.New("provider limit changed")
+	}
+	tracker.disarm(ctx, Thread{ID: "thread-2", LimitRecovery: &T3LimitRecovery{RunID: "run-3", ResetAt: resetAt, AutoResume: true}}, failing)
+	tracker.disarm(ctx, Thread{ID: "thread-2", LimitRecovery: &T3LimitRecovery{RunID: "run-3", ResetAt: resetAt, AutoResume: true}}, failing)
+	if rejected != 1 {
+		t.Fatalf("rejected disarm dispatched %d times, want 1", rejected)
 	}
 }
