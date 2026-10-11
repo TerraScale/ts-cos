@@ -126,6 +126,10 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", ctx.Err()
 	case <-time.After(20 * time.Second):
 	}
+	gate, err := e.allCurrent(ctx, bus, "cluster.leader-kill")
+	if err != nil {
+		return "", err
+	}
 	if _, _, err := waitCluster(ctx, bus.conn, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("cluster unhealthy before killing the leader, not perturbing it: %w", err)
 	}
@@ -135,9 +139,6 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 	}
 	revision, err := leaseRevision(ctx, bus)
 	if err != nil {
-		return "", err
-	}
-	if err := e.allCurrent(ctx, bus, "cluster.leader-kill"); err != nil {
 		return "", err
 	}
 	if err := e.chaos(ctx, bus, leader, "cluster.leader-kill", "sigkill"); err != nil {
@@ -196,8 +197,8 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 	if _, views, err := e.agreedLeader(ctx, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("after the leader kill: %w (views %v)", err, views)
 	}
-	return fmt.Sprintf("killed leader %s; %s %s in %s; cluster recovered %s later (%s)",
-		leader, next, how, took.Round(100*time.Millisecond), rejoin.Round(100*time.Millisecond), summary), nil
+	return fmt.Sprintf("killed leader %s; %s %s in %s; cluster recovered %s later (%s); %s",
+		leader, next, how, took.Round(100*time.Millisecond), rejoin.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
 }
 
 // reconnect waits for the runner's restarted node to accept connections again.
@@ -255,14 +256,15 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 			bus.Close()
 		}
 	}()
+	gate, err := e.allCurrent(ctx, bus, "cluster.leader-freeze")
+	if err != nil {
+		return "", err
+	}
 	if _, _, err := waitCluster(ctx, bus.conn, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("cluster unhealthy before freezing the leader, not perturbing it: %w", err)
 	}
 	leader, err := leaderOf(ctx, bus)
 	if err != nil {
-		return "", err
-	}
-	if err := e.allCurrent(ctx, bus, "cluster.leader-freeze"); err != nil {
 		return "", err
 	}
 	if err := e.chaos(ctx, bus, leader, "cluster.leader-freeze", "freeze"); err != nil {
@@ -330,8 +332,8 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 	} else if n > 0 {
 		overlap = fmt.Sprintf("%d heartbeat(s) from it after resume (overlap)", n)
 	}
-	return fmt.Sprintf("froze leader %s for %s; %s took over after %s; resumed %s named %s within %s; %s; cluster caught up %s after resume (%s)",
-		leader, e2eFreeze, next, took.Round(100*time.Millisecond), leader, next, stepDown.Round(10*time.Millisecond), overlap, caughtUp.Round(100*time.Millisecond), summary), nil
+	return fmt.Sprintf("froze leader %s for %s; %s took over after %s; resumed %s named %s within %s; %s; cluster caught up %s after resume (%s); %s",
+		leader, e2eFreeze, next, took.Round(100*time.Millisecond), leader, next, stepDown.Round(10*time.Millisecond), overlap, caughtUp.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
 }
 
 // beatsSince counts autopilot heartbeats host logged after since (singleton work that should have stopped).

@@ -235,6 +235,27 @@ func TestAllHealthy(t *testing.T) {
 	}
 }
 
+func TestStreamSummary(t *testing.T) {
+	a := streamRow{line: "A", ok: true, lag: 3}
+	b := streamRow{line: "B", ok: true}
+	bad := streamRow{line: "C", lag: 7}
+	tests := []struct {
+		name    string
+		rows    []streamRow
+		healthy bool
+		want    string
+	}{
+		{"all current", []streamRow{a, b}, true, "2 streams R3, all current (max lag 3)"},
+		{"one failing listed first", []streamRow{a, bad, b}, false, "C; A; B"},
+		{"no streams", nil, true, "0 streams R3, all current (max lag 0)"},
+	}
+	for _, tc := range tests {
+		if got, healthy := streamSummary(tc.rows); healthy != tc.healthy || got != tc.want {
+			t.Errorf("%s: streamSummary = %q %v, want %q %v", tc.name, got, healthy, tc.want, tc.healthy)
+		}
+	}
+}
+
 func TestE2EClipTruncates(t *testing.T) {
 	if got, want := e2eClip(strings.Repeat("a", 700), 600), strings.Repeat("a", 600)+"…"; got != want {
 		t.Errorf("long text clipped to len %d, want 600 + ellipsis", len(got))

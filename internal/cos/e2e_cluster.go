@@ -236,6 +236,33 @@ func checkMembers(ctx context.Context, e *E2EEnv) (string, error) {
 	return fmt.Sprintf("micro ping via %s answered by %v", e.cfg.LocalHost, hosts), nil
 }
 
+// streamRow is one stream's replica state as streamHealth reads it.
+type streamRow struct {
+	line string // the per-stream detail, listed only when the stream is not ok
+	ok   bool
+	lag  uint64
+}
+
+// streamSummary lists failing streams first; when every stream is ok it is one compact line.
+func streamSummary(rows []streamRow) (string, bool) {
+	var failing, passing []string
+	var maxLag uint64
+	healthy := true
+	for _, r := range rows {
+		maxLag = max(maxLag, r.lag)
+		healthy = healthy && r.ok
+		if r.ok {
+			passing = append(passing, r.line)
+		} else {
+			failing = append(failing, r.line)
+		}
+	}
+	if healthy {
+		return fmt.Sprintf("%d streams R3, all current (max lag %d)", len(rows), maxLag), true
+	}
+	return strings.Join(append(failing, passing...), "; "), false
+}
+
 // streamHealth reports every stream's replica state; healthy means R3, a leader, and all peers current.
 // With down set, that host's replica is ignored and must not lead (the majority side of a partition).
 func streamHealth(ctx context.Context, conn *nats.Conn, down string) (summary string, healthy bool, count int, err error) {
@@ -244,10 +271,8 @@ func streamHealth(ctx context.Context, conn *nats.Conn, down string) (summary st
 		return "", false, 0, err
 	}
 	lister := js.ListStreams(ctx)
-	var parts []string
-	healthy = true
+	var rows []streamRow
 	for info := range lister.Info() {
-		count++
 		c := info.Cluster
 		ok := info.Config.Replicas == 3 && c != nil && c.Leader != "" && c.Leader != down && len(c.Replicas) == 2
 		var lag uint64
@@ -261,13 +286,17 @@ func streamHealth(ctx context.Context, conn *nats.Conn, down string) (summary st
 		if c != nil {
 			leader = c.Leader
 		}
-		parts = append(parts, fmt.Sprintf("%s R%d leader=%s maxLag=%d ok=%t", info.Config.Name, info.Config.Replicas, leader, lag, ok))
-		healthy = healthy && ok
+		rows = append(rows, streamRow{
+			line: fmt.Sprintf("%s R%d leader=%s maxLag=%d ok=%t", info.Config.Name, info.Config.Replicas, leader, lag, ok),
+			ok:   ok,
+			lag:  lag,
+		})
 	}
 	if err := lister.Err(); err != nil && !errors.Is(err, jetstream.ErrEndOfData) {
-		return "", false, count, err
+		return "", false, len(rows), err
 	}
-	return strings.Join(parts, "; "), healthy, count, nil
+	summary, healthy = streamSummary(rows)
+	return summary, healthy, len(rows), nil
 }
 
 func checkJetStream(ctx context.Context, e *E2EEnv) (string, error) {
@@ -367,7 +396,8 @@ func allHealthy(status map[string]string) (bool, string) {
 
 // allCurrent waits until every node reports JetStream current on its own, so a perturbation never
 // lands on a cluster still catching up from the last one (TS-816). It skips, not fails, on timeout.
-func (e *E2EEnv) allCurrent(ctx context.Context, bus *Bus, step string) error {
+// Call it before choosing the target: a leader picked earlier can move while this waits.
+func (e *E2EEnv) allCurrent(ctx context.Context, bus *Bus, step string) (time.Duration, error) {
 	start := time.Now()
 	deadline := start.Add(120 * time.Second)
 	for {
@@ -379,10 +409,10 @@ func (e *E2EEnv) allCurrent(ctx context.Context, bus *Bus, step string) error {
 		}
 		ok, evidence := allHealthy(status)
 		if ok {
-			return nil
+			return time.Since(start), nil
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return e2eSkip(fmt.Sprintf("JetStream not fully current on every node before %s after %s, not perturbing: %s",
+			return time.Since(start), e2eSkip(fmt.Sprintf("JetStream not fully current on every node before %s after %s, not perturbing: %s",
 				step, time.Since(start).Round(time.Second), e2eClip(evidence, 300)))
 		}
 		select {
@@ -392,21 +422,27 @@ func (e *E2EEnv) allCurrent(ctx context.Context, bus *Bus, step string) error {
 	}
 }
 
+// gateEvidence is the health gate's wait, appended to a check's pass evidence.
+func gateEvidence(waited time.Duration) string {
+	return "health gate waited " + waited.Round(100*time.Millisecond).String()
+}
+
 func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 	bus, err := e.bus(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer bus.Close()
+	gate, err := e.allCurrent(ctx, bus, "cluster.restart")
+	if err != nil {
+		return "", err
+	}
 	target, err := e.chaosTarget(ctx, bus, false)
 	if err != nil {
 		return "", err
 	}
 	if _, _, err := waitCluster(ctx, bus.conn, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("cluster unhealthy before restart, not perturbing it: %w", err)
-	}
-	if err := e.allCurrent(ctx, bus, "cluster.restart"); err != nil {
-		return "", err
 	}
 	if err := e.chaos(ctx, bus, target, "cluster.restart", "restart"); err != nil {
 		return "", err
@@ -418,7 +454,7 @@ func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s restarted but did not catch up: %w", target, err)
 	}
-	return fmt.Sprintf("%s restarted and caught up in %s; %s", target, took.Round(100*time.Millisecond), summary), nil
+	return fmt.Sprintf("%s restarted and caught up in %s; %s; %s", target, took.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
 }
 
 // e2eHeal removes every cos-e2e firewall rule; it is idempotent and also runs from a root timer.
@@ -467,6 +503,10 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
+	gate, err := e.allCurrent(ctx, bus, "cluster.partition")
+	if err != nil {
+		return "", err
+	}
 	// Partition the leader when another host leads: the majority must elect a new one and the
 	// old leader must step down (no split brain).
 	target, err := e.chaosTarget(ctx, bus, true)
@@ -502,9 +542,6 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 				peers = append(peers, a)
 			}
 		}
-	}
-	if err := e.allCurrent(ctx, bus, "cluster.partition"); err != nil {
-		return "", err
 	}
 	if err := e.chaos(ctx, bus, target, "cluster.partition", "partition"); err != nil {
 		return "", err
@@ -544,6 +581,6 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 	if _, views, err := e.agreedLeader(ctx, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("split brain after healing %s: %w (views %v)", target, err, views)
 	}
-	return fmt.Sprintf("partitioned %s: %v served after %s (%s); %s; rejoined in %s (%s); one leader after heal",
-		target, rest, tookSplit.Round(100*time.Millisecond), split, lead, tookHeal.Round(100*time.Millisecond), summary), nil
+	return fmt.Sprintf("partitioned %s: %v served after %s (%s); %s; rejoined in %s (%s); one leader after heal; %s",
+		target, rest, tookSplit.Round(100*time.Millisecond), split, lead, tookHeal.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
 }
