@@ -166,9 +166,9 @@ func TestWorkBoardUsageColumns(t *testing.T) {
 	workFixture(t, s)
 	_, page := workGet(t, NewWeb(s, nil), "/work")
 	for _, want := range []string{
-		`<td class="hide-sm">opus-5-5 · high</td>`,
-		`<td class="num hide-sm">75% · 2 workers</td>`,
-		`<td class="num hide-sm">100% · 1 worker</td>`,
+		`<td>opus-5-5 · high</td>`,
+		`<td class="num">75% · 2 workers</td>`,
+		`<td class="num">100% · 1 worker</td>`,
 		`<td>2 · beta, delta</td>`,
 	} {
 		if !strings.Contains(page, want) {

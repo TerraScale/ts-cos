@@ -1,12 +1,12 @@
 package cos
 
 // nodesPage is the overview: one live card per node, repatched by nodesEvents.
-templ nodesPage(cards []NodeCard) {
+templ nodesPage(h chatHeader, cards []NodeCard) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Nodes · COS")
-		<body class="shell" data-init="@get('/nodes/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
-			@nodesTopbar()
+		<body class="ts-app" data-init="@get('/nodes/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
+			@chatHead(h, "nodes")
 			<main class="page">
 				<section class="panel" aria-labelledby="nodes-heading">
 					<header class="panel-head"><h1 id="nodes-heading">Nodes</h1></header>
@@ -15,18 +15,6 @@ templ nodesPage(cards []NodeCard) {
 			</main>
 		</body>
 	</html>
-}
-
-templ nodesTopbar() {
-	<header class="topbar">
-		<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
-		<nav class="topbar-nav" aria-label="Main">
-			<a class="navlink" href="/">Chat</a>
-			<a class="navlink" href="/inbox">Inbox</a>
-			<a class="navlink" href="/nodes" aria-current="page">Nodes</a>
-			<a class="navlink" href="/settings">Settings</a>
-		</nav>
-	</header>
 }
 
 // nodesGrid is the patch target: every card redraws when /nodes/events sends it.

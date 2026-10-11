@@ -7,7 +7,7 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 		@docHead("COS · TerraScale")
 		<body class="app chat" data-init="@get('/chat/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" data-signals="{tab:'chat'}" data-attr:data-tab="$tab">
 			@releaseWatch()
-			@chatHead(h)
+			@chatHead(h, "chat")
 			<div class="app-body">
 				<nav class="sidebar" aria-label="Sections">
 					<p class="side-title">COS</p>
@@ -168,19 +168,12 @@ templ kpiTiles(k kpiView) {
 	</section>
 }
 
-templ settingsPage(a AutopilotState, b budgetPanelData, push PushState) {
+templ settingsPage(h chatHeader, a AutopilotState, b budgetPanelData, push PushState) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Settings · COS")
-		<body class="shell">
-			<header class="topbar">
-				<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
-				<nav class="topbar-nav" aria-label="Main">
-					<a class="navlink" href="/">Chat</a>
-					<a class="navlink" href="/nodes">Nodes</a>
-					<a class="navlink" href="/settings" aria-current="page">Settings</a>
-				</nav>
-			</header>
+		<body class="ts-app">
+			@chatHead(h, "settings")
 			<main class="page page-narrow">
 				@autopilotPanel(a)
 				@pushPanel(push)
@@ -200,12 +193,14 @@ templ settingsPage(a AutopilotState, b budgetPanelData, push PushState) {
 	</html>
 }
 
-templ chatHead(h chatHeader) {
-	<header id="chat-head" class="topbar">
-		<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
-		<ul class="topbar-stats" aria-label="Status">
+// chatHead is the one top bar on every page; page marks the current link. On the chat page phones get an
+// Inbox toggle instead of the link, because the Inbox column sits beside the chat there.
+templ chatHead(h chatHeader, page string) {
+	<header id="chat-head" class="ts-topbar">
+		<a class="ts-topbar-brand" href="/"><img src="/static/icon.svg" alt="" width="24" height="24"/><span>COS</span></a>
+		<ul id="topbar-stats" class="ts-topbar-stats" aria-label="Status">
 			<!-- TS-813 heartbeat state -->
-			<li id="heartbeat-slot" class="stat">
+			<li id="heartbeat-slot" class="ts-topbar-stat">
 				if h.Autopilot.Interval > 0 {
 					<a href="/settings">
 						Heartbeat { integer(h.Autopilot.Interval) } min ·
@@ -217,17 +212,18 @@ templ chatHead(h chatHeader) {
 					</a>
 				}
 			</li>
-			<li class="stat">{ integer(h.Running) } running</li>
-			<li class="stat">{ integer(h.PRs) } PRs waiting</li>
+			<li class="ts-topbar-stat">{ integer(h.Running) } running</li>
+			<li class="ts-topbar-stat">{ integer(h.PRs) } PRs waiting</li>
 		</ul>
-		<nav class="topbar-nav" aria-label="Main">
-			<a class="navlink" href="/">Chat</a>
-			<a class="navlink hide-sm" href="/work">Work</a>
-			<a id="inbox-slot" class="navlink" href="/inbox">Inbox <span class="badge badge-accent">{ integer(h.Inbox) }</span></a>
-			<a class="navlink" href="/nodes">Nodes</a>
-			<a class="navlink hide-sm" href="/tokens">Tokens</a>
-			<a class="navlink" href="/settings">Settings</a>
+		<nav class="ts-topnav" aria-label="Main">
+			for _, l := range navLinks {
+				<a class="ts-nav-link" href={ templ.SafeURL(l.href) } { currentPage(page, l.page)... }>{ l.label }</a>
+			}
 		</nav>
+		<a id="inbox-slot" class="ts-nav-link ts-topbar-inbox" href="/inbox" { currentPage(page, "inbox")... }>Inbox <span class="ts-nav-count">{ integer(h.Inbox) }</span></a>
+		if page == "chat" {
+			<button type="button" class="ts-nav-link ts-topbar-inbox-toggle" data-on:click="$tab = $tab == 'inbox' ? 'chat' : 'inbox'" data-attr:aria-pressed="$tab == 'inbox'">Inbox <span class="ts-nav-count">{ integer(h.Inbox) }</span></button>
+		}
 	</header>
 }
 

@@ -4,8 +4,8 @@ templ tokensPage(h chatHeader, d tokensPageData) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Tokens · COS")
-		<body class="shell" data-init={ "@get('/tokens/events?w=" + d.Window + "', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" }>
-			@chatHead(h)
+		<body class="ts-app" data-init={ "@get('/tokens/events?w=" + d.Window + "', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" }>
+			@chatHead(h, "tokens")
 			<main class="page">
 				@tokens(d)
 			</main>

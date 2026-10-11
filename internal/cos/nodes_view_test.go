@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -93,7 +94,7 @@ var nonFinite = regexp.MustCompile(`NaN|\bInf\b`)
 
 func TestNodesPageRender(t *testing.T) {
 	var buf bytes.Buffer
-	if err := nodesPage(nodeFixtureCards(time.Now())).Render(context.Background(), &buf); err != nil {
+	if err := nodesPage(chatHeader{}, nodeFixtureCards(time.Now())).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	html := buf.String()
@@ -106,7 +107,12 @@ func TestNodesPageRender(t *testing.T) {
 }
 
 func TestNodeRoutesWithoutBus(t *testing.T) {
-	w := &Web{}
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	w := NewWeb(store, nil)
 	mux := http.NewServeMux()
 	w.nodesRoutes(mux)
 	get := func(path string) *httptest.ResponseRecorder {

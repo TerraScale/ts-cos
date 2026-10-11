@@ -141,7 +141,7 @@ func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(status)
-	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context(), pushUser(r))).Render(r.Context(), rw); err != nil {
+	if err := settingsPage(headerOf(v), v.Autopilot, d, w.pushState(r.Context(), pushUser(r))).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render settings", err)
 	}
 }
@@ -226,7 +226,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	home := func(v Dashboard) error {
 		h := headerOf(v)
 		last = h
-		if err := patchElements(ctx, rw, chatHead(h)); err != nil {
+		if err := patchElements(ctx, rw, chatHead(h, "chat")); err != nil {
 			return err
 		}
 		if err := patchElements(ctx, rw, kpiTiles(w.kpis(h))); err != nil {
@@ -428,7 +428,7 @@ func (w *Web) inboxEvents(rw http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := patchElements(ctx, rw, chatHead(headerOf(v))); err != nil {
+		if err := patchElements(ctx, rw, chatHead(headerOf(v), "inbox")); err != nil {
 			return err
 		}
 		if err := patchElements(ctx, rw, inbox(v)); err != nil {
@@ -515,4 +515,18 @@ func (w *Web) chatAnswer(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rw.WriteHeader(http.StatusNoContent)
+}
+
+// navLinks are the top bar's sections, in order; the Inbox count sits beside them.
+var navLinks = []struct{ page, href, label string }{
+	{"chat", "/", "Chat"}, {"nodes", "/nodes", "Nodes"},
+	{"work", "/work", "Work"}, {"tokens", "/tokens", "Tokens"}, {"settings", "/settings", "Settings"},
+}
+
+// currentPage is aria-current for a nav link: "page" on its own page, omitted elsewhere.
+func currentPage(page, link string) templ.Attributes {
+	if page == link {
+		return templ.Attributes{"aria-current": "page"}
+	}
+	return nil
 }

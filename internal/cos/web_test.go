@@ -134,7 +134,7 @@ func TestChatRoutes(t *testing.T) {
 		t.Fatal("home missing the Nodes summary")
 	}
 	inboxPage := serve("GET", "/inbox", false, "")
-	for _, want := range []string{`data-init="@get('/inbox/events'`, `data-init="@get(&#39;/release&#39;`, `id="inbox"`, `href="/inbox">Inbox <span class="badge badge-accent">0</span>`, "Nothing needs you"} {
+	for _, want := range []string{`data-init="@get('/inbox/events'`, `data-init="@get(&#39;/release&#39;`, `id="inbox"`, `href="/inbox" aria-current="page">Inbox <span class="ts-nav-count">0</span>`, "Nothing needs you"} {
 		if inboxPage.Code != http.StatusOK || !strings.Contains(inboxPage.Body.String(), want) {
 			t.Fatal(inboxPage.Code, "inbox page missing", want)
 		}

@@ -1,12 +1,12 @@
 package cos
 
 // nodeDetailPage is one node: header, range control, the ten charts and the newest cores.
-templ nodeDetailPage(c NodeCard, window string, charts []nodeChart) {
+templ nodeDetailPage(h chatHeader, c NodeCard, window string, charts []nodeChart) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead(c.Host + " · Nodes · COS")
-		<body class="shell">
-			@nodesTopbar()
+		<body class="ts-app">
+			@chatHead(h, "nodes")
 			<main class="page">
 				<section class="panel" aria-labelledby="node-heading">
 					<header class="panel-head">
