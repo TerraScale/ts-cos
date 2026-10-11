@@ -101,7 +101,8 @@ func (r selfRecord) entry() SelfChange {
 	return SelfChange{Summary: r.Summary, SHA: r.SHA, Ticket: r.Ticket, PR: r.PRURL, At: at, Reverted: r.RevertedBy != ""}
 }
 
-func selfBranch(key string) string { return "cos/" + strings.ToLower(key) }
+// self/ keeps COS's merge train (cos/ and cos-hold/ only) off self-change PRs: only the driver merges them, after the full e2e gate.
+func selfBranch(key string) string { return "self/" + strings.ToLower(key) }
 
 // selfStore is the replicated changelog and queue.
 type selfStore struct {

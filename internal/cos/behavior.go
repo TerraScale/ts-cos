@@ -46,7 +46,7 @@ var behaviorTemplates = map[string]any{
 	"digest":   Digest{Since: time.Unix(0, 0).UTC(), Items: []DigestItem{{Kind: "ci.status", Text: "ts-cos#9 failed"}}},
 	"changes":  []SelfChange{{Summary: "Header label reads Fleet", SHA: "0123456789abcdef", Ticket: "TS-900", At: time.Unix(0, 0).UTC()}},
 	"brief":    AgentBriefData{At: time.Unix(0, 0).UTC(), Reason: "first start", Memory: "- [fact] Ship the chat (#focus)\n", MemoryTokens: 12, MemoryFull: 40, MemoryOmitted: 1, Recent: []string{"user: hi"}, Live: "0 running", Now: "User: hi"},
-	"selfbrief": SelfBrief{Ticket: "TS-900", Branch: "cos/ts-900-self", Summary: "Header label reads Fleet", Request: "rename the header to Fleet",
+	"selfbrief": SelfBrief{Ticket: "TS-900", Branch: "self/ts-900", Summary: "Header label reads Fleet", Request: "rename the header to Fleet",
 		CheckFile: "checks/TS-900.json", Check: `{"summary": "Header reads Fleet", "path": "/", "contains": ["Fleet"]}`},
 	"compact_focus": nil,
 	"fresh_brief":   freshBrief{LastReply: "Pushed PR #90"},

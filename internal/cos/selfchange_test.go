@@ -216,7 +216,7 @@ func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && p == "/pulls":
 		list := []any{}
 		if _, ok := f.prOpen[7]; ok {
-			list = append(list, pr(7, "cos/ts-901"))
+			list = append(list, pr(7, "self/ts-901"))
 		}
 		forgejoTestJSON(w, list)
 	case r.Method == "POST" && p == "/pulls":
@@ -411,7 +411,7 @@ func TestSelfChangeLoopAndUndo(t *testing.T) {
 	if got.State != selfGating || got.Ticket != "TS-901" || got.Thread != "thread-1" || got.PR != 7 {
 		t.Fatalf("after 4 steps: %+v", got)
 	}
-	if rig.fake.files["cos/ts-901"]["checks/TS-901.json"] != selfCheckJSON(r.Check) {
+	if rig.fake.files["self/ts-901"]["checks/TS-901.json"] != selfCheckJSON(r.Check) {
 		t.Fatal("acceptance check not committed first on the branch")
 	}
 	steps(1)
@@ -578,7 +578,7 @@ func TestSelfChangeMergedPRIsNotFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.State, r.Ticket, r.Branch, r.PR = selfGating, "TS-901", "cos/ts-901", 7
+	r.State, r.Ticket, r.Branch, r.PR = selfGating, "TS-901", "self/ts-901", 7
 	if err := rig.d.store.create(ctx, r); err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +598,7 @@ func TestSelfChangeWorkerQuestionBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.State, r.Ticket, r.Branch, r.Host, r.Thread = selfWorking, "TS-901", "cos/ts-901", "delta", "thread-1"
+	r.State, r.Ticket, r.Branch, r.Host, r.Thread = selfWorking, "TS-901", "self/ts-901", "delta", "thread-1"
 	if err := rig.d.store.create(ctx, r); err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +661,7 @@ func TestSelfChangeGuardsAndQueue(t *testing.T) {
 	// One rollout at a time: a green PR waits while another change is rolling out.
 	rolling := selfRecord{ID: "a0", Ticket: "TS-800", State: selfMerged, MergedAt: time.Now()}
 	rig.d.store.create(ctx, rolling)
-	waiting := selfRecord{ID: "a1", Ticket: "TS-901", Branch: "cos/ts-901", PR: 7, State: selfGating, Check: r.Check, CreatedAt: time.Now()}
+	waiting := selfRecord{ID: "a1", Ticket: "TS-901", Branch: "self/ts-901", PR: 7, State: selfGating, Check: r.Check, CreatedAt: time.Now()}
 	rig.set(func(f *selfFake) {
 		f.prOpen[7], f.prFiles[7] = true, []string{"internal/cos/dashboard.templ", "checks/TS-901.json"}
 		f.files["head7"] = map[string]string{"checks/TS-901.json": selfCheckJSON(r.Check)}
@@ -739,7 +739,7 @@ func TestSelfKeyAllocation(t *testing.T) {
 	if records, err := rig.d.store.list(ctx); err != nil || len(records) != 0 {
 		t.Fatalf("counter leaked into the changelog: %v %v", records, err)
 	}
-	if b := selfBranch("SELF-3"); b != "cos/self-3" {
+	if b := selfBranch("SELF-3"); b != "self/self-3" {
 		t.Fatal(b)
 	}
 }
