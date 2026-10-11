@@ -2,9 +2,6 @@ package cos
 
 import (
 	"context"
-	"crypto/ecdh"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,24 +14,6 @@ import (
 	"git.terrascale.tech/TerraScale/ts-cos/internal/webpush"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-// newPushSubscription makes what a browser hands over: a P-256 key pair and 16 auth bytes. It returns the
-// private key and auth so a receiver can decrypt what Send posts.
-func newPushSubscription(endpoint string) (webpush.Subscription, *ecdh.PrivateKey, []byte, error) {
-	priv, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		return webpush.Subscription{}, nil, nil, err
-	}
-	auth := make([]byte, 16)
-	if _, err := rand.Read(auth); err != nil {
-		return webpush.Subscription{}, nil, nil, err
-	}
-	var sub webpush.Subscription
-	sub.Endpoint = endpoint
-	sub.Keys.P256dh = base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes())
-	sub.Keys.Auth = base64.RawURLEncoding.EncodeToString(auth)
-	return sub, priv, auth, nil
-}
 
 // pushTestStores opens the push store on every bus. Only the JetStream leader may create the bucket,
 // so each node must keep trying until the leader has done so.
