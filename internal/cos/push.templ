@@ -1,0 +1,34 @@
+package cos
+
+templ pushPanel(s PushState) {
+	<section id="push" class="panel" aria-labelledby="push-heading" data-init="window.cosPush?.refresh()">
+		<header class="panel-head"><h2 id="push-heading">Notifications</h2></header>
+		if !s.Ready {
+			<p class="meta">Notifications are starting</p>
+		} else {
+			<div class="stack">
+				<p id="push-device" class="meta">Checking this device…</p>
+				<div class="row">
+					<button type="button" id="push-toggle" disabled>Turn on for this device</button>
+					<button type="button" data-on:click="@post('/push/test')">Send test</button>
+				</div>
+				@pushNotice("")
+				<p class="meta">{ integer(s.Devices) } devices subscribed</p>
+				for _, c := range pushCategories {
+					<div class="field">
+						<span class="field-label" id={ "push-cat-" + c.ID }>{ c.Label }</span>
+						<div class="segmented" role="group" aria-labelledby={ "push-cat-" + c.ID }>
+							<button type="button" aria-pressed={ boolText(!s.Off[c.ID]) } data-on:click={ "@post('/push/prefs/" + c.ID + "/on')" }>On</button>
+							<button type="button" aria-pressed={ boolText(s.Off[c.ID]) } data-on:click={ "@post('/push/prefs/" + c.ID + "/off')" }>Off</button>
+						</div>
+					</div>
+				}
+			</div>
+			<script type="module" src="/pwa/push.js"></script>
+		}
+	</section>
+}
+
+templ pushNotice(msg string) {
+	<p id="push-notice" role="status">{ msg }</p>
+}

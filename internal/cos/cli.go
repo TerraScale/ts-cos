@@ -264,7 +264,9 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	go func() { defer close(usageDone); RunUsage(ctx, bus, cfg.LocalHost, s) }()
 	mirrorDone := make(chan struct{})
 	go func() { defer close(mirrorDone); RunEventMirror(ctx, bus, s) }()
-	defer func() { cancel(); <-inboxDone; <-usageDone; <-mirrorDone }()
+	pushDone := make(chan struct{})
+	go func() { defer close(pushDone); RunPush(ctx, bus, w.Chat, w.push.Store) }()
+	defer func() { cancel(); <-inboxDone; <-usageDone; <-mirrorDone; <-pushDone }()
 	l, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", *port))
 	if err != nil {
 		return err

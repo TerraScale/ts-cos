@@ -15,9 +15,12 @@ var pwaSource string
 //go:embed pwa/offline.html
 var pwaOffline string
 
+//go:embed pwa/push.js
+var pwaPush string
+
 // pwaSW binds the cache name to a hash of everything a visitor caches, so a content change installs a new worker.
 var pwaSW = func() string {
-	sum := sha256.Sum256([]byte(pwaSource + pwaOffline))
+	sum := sha256.Sum256([]byte(pwaSource + pwaOffline + pwaPush))
 	return strings.ReplaceAll(pwaSource, "__VERSION__", hex.EncodeToString(sum[:])[:12])
 }()
 
@@ -60,4 +63,5 @@ func servePWA(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /manifest.webmanifest", asset("application/manifest+json", pwaDay, func() []byte { return pwaManifest }))
 	mux.HandleFunc("GET /pwa/offline", asset("text/html; charset=utf-8", "no-cache", text(pwaOffline)))
+	mux.HandleFunc("GET /pwa/push.js", asset("text/javascript; charset=utf-8", "no-cache", text(pwaPush)))
 }

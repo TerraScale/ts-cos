@@ -71,4 +71,7 @@ func TestPWAPublicAssets(t *testing.T) {
 	if offline := get("/pwa/offline"); offline.Header().Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Fatal(offline.Header())
 	}
+	if pushJS := get("/pwa/push.js"); pushJS.Header().Get("Content-Type") != "text/javascript; charset=utf-8" || pushJS.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatal(pushJS.Header())
+	}
 }

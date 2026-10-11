@@ -234,6 +234,25 @@ Mergeability is read from the API 15 seconds after a PR update or a push to main
 
 `cos events [<subject filter>] [<count>]` prints recent events as JSON from any node.
 
+### Install and notifications
+
+Install COS, then turn notifications on in Settings (`/settings`).
+
+- **Android Chrome:** menu > Install app.
+- **iOS Safari:** Share > Add to Home Screen. Then open COS from the Home Screen and turn notifications on. iOS sends pushes only to Home Screen apps.
+- **Desktop Chrome or Firefox:** install icon in the address bar.
+
+Four categories push, each switchable in Settings and on by default:
+
+- **Inbox items:** approvals, questions, decisions and blockers.
+- **COS replies:** each final reply, when it lands (replies older than 10 minutes do not push).
+- **Finished and deployed work:** `deploy.completed` and rollbacks.
+- **Node alerts:** warn or urgent node events.
+
+"Send test" pushes one notice to your own devices; test notices ignore the category switches.
+
+The VAPID key is generated once and kept in the replicated `cos_push` bucket, so every node signs with the same key. Subscriptions are accepted only for real push services (FCM, Apple, Mozilla, Windows); any other endpoint gets HTTP 400.
+
 ## Commands
 
 Output is JSON by default. Errors are JSON on stderr and return a nonzero exit

@@ -1,6 +1,6 @@
-// __VERSION__ is replaced at serve time with a hash of this file and offline.html.
+// __VERSION__ is replaced at serve time with a hash of this file, offline.html and push.js.
 const SHELL = 'cos-shell-__VERSION__';
-const PRECACHE = ['/pwa/offline', '/manifest.webmanifest', '/static/icon-192.png', '/static/icon.svg'];
+const PRECACHE = ['/pwa/offline', '/manifest.webmanifest', '/static/icon-192.png', '/static/icon.svg', '/static/badge-96.png'];
 const OFFLINE = '/pwa/offline';
 const DATASTAR = 'https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js';
 const LINK_ORIGIN = 'https://git.terrascale.tech';
@@ -52,6 +52,7 @@ async function cacheFirst(req) {
 self.addEventListener('push', (event) => {
   event.waitUntil((async () => {
     const msg = event.data.json();
+    for (const n of await self.registration.getNotifications()) if (msg.close?.includes(n.tag)) n.close();
     if (msg.category === 'chat') {
       const windows = await self.clients.matchAll({type: 'window', includeUncontrolled: true});
       // Browsers let a push skip its notification while a page of this origin is visible.
@@ -63,6 +64,7 @@ self.addEventListener('push', (event) => {
       renotify: !!msg.tag,
       requireInteraction: !!msg.urgent,
       icon: '/static/icon-192.png',
+      badge: '/static/badge-96.png',
       data: {url: msg.url},
     });
   })());
