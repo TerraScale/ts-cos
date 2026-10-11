@@ -18,7 +18,7 @@ import (
 
 // A token budget caps one day's tokens per worker thread and across the fleet. Input,
 // cache writes and output count; cache reads are left out because they run about 20x
-// the volume at 5% of the price. Cost is still shown next to every budget.
+// the volume and count far less against the subscription limits.
 const (
 	// Floors for the defaults; the defaults grow past them from the last 7 days of use.
 	budgetThreadFloor    = 10_000_000
@@ -56,7 +56,6 @@ type budgetData struct {
 	Used    int64          `json:"used"`
 	Limit   int64          `json:"limit"`
 	Percent int64          `json:"percent"`
-	Cost    float64        `json:"cost"`
 	Label   string         `json:"label,omitempty"`
 	Threads []budgetThread `json:"threads,omitempty"`
 }
@@ -150,8 +149,8 @@ func budgetEvent(d budgetData, host, thread, ticket string) (Event, bool) {
 	data, _ := json.Marshal(d)
 	e := Event{ID: NewEventID(SourceBudget, d.Day, d.Scope, strconv.FormatInt(mark, 10), strconv.FormatInt(d.Limit, 10)),
 		Source: SourceBudget, Kind: KindBudgetWarn, Time: time.Now().UTC(), Severity: SeverityWarn,
-		Summary: EventText(fmt.Sprintf("%s used %s of %s tokens today (%d%%). Tokens count against your Claude subscription limits; $%.2f is the API list-price equivalent, not a bill.",
-			d.Label, budgetHuman(d.Used), budgetHuman(d.Limit), d.Percent, d.Cost), eventSummaryMax),
+		Summary: EventText(fmt.Sprintf("%s used %s of %s tokens today (%d%%). Tokens count against your Claude subscription limits.",
+			d.Label, budgetHuman(d.Used), budgetHuman(d.Limit), d.Percent), eventSummaryMax),
 		Host: host, Ticket: ticket, Thread: thread, Data: data}
 	if mark == 100 {
 		e.Kind, e.Severity = KindBudgetExceeded, SeverityUrgent
@@ -170,7 +169,7 @@ func budgetCrossings(totals []UsageTotal, daily UsageTotal, limits budgetLimits,
 	}
 	var out []Event
 	fleet := budgetData{Scope: budgetDaily, Day: day, Used: budgetUsed(daily), Limit: limits.limit(budgetDaily, limits.Daily),
-		Cost: daily.Cost, Label: "All threads", Threads: threads}
+		Label: "All threads", Threads: threads}
 	if e, ok := budgetEvent(fleet, "", "", ""); ok {
 		out = append(out, e)
 	}
@@ -181,7 +180,7 @@ func budgetCrossings(totals []UsageTotal, daily UsageTotal, limits budgetLimits,
 		}
 		scope := budgetScope(t.Key)
 		d := budgetData{Scope: scope, Day: day, Used: budgetUsed(t), Limit: limits.limit(scope, limits.Thread),
-			Cost: t.Cost, Label: cmp.Or(t.Label, scope)}
+			Label: cmp.Or(t.Label, scope)}
 		if e, ok := budgetEvent(d, t.Host, thread, t.Ticket); ok {
 			out = append(out, e)
 		}

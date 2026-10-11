@@ -64,29 +64,12 @@ type UsageRow struct {
 	Last         time.Time      `json:"last"`
 }
 
-type usagePrice struct{ In, Out, Write5m, Write1h, Read float64 }
-
-// shortcut: Haiku 5.5 prompts over 100K tokens bill at $0.50/$2.50; upgrade when transcripts carry the prompt size per request.
-var usagePrices = map[string]usagePrice{
-	"claude-opus-5-5":   {4, 20, 5, 8, 0.20},
-	"claude-sonnet-5-5": {2, 10, 2.5, 4, 0.20},
-	"claude-haiku-5-5":  {0.10, 0.50, 0.125, 0.20, 0.01},
-	"claude-fable-5-1":  {10, 50, 12.5, 20, 0.25},
-	"claude-opus-5":     {5, 25, 6.25, 10, 0.50},
-}
-
 var usageDateSuffix = regexp.MustCompile(`-\d{8}$`)
 
 // usageModel drops the context hint ("[1m]") and the release date from a model ID.
 func usageModel(model string) string {
 	model, _, _ = strings.Cut(model, "[")
 	return usageDateSuffix.ReplaceAllString(model, "")
-}
-
-// Cost is USD at list price. An unknown model costs 0 rather than a guess.
-func (r UsageRow) Cost() float64 {
-	p := usagePrices[usageModel(r.Model)]
-	return (float64(r.Input)*p.In + float64(r.Output)*p.Out + float64(r.CacheWrite5m)*p.Write5m + float64(r.CacheWrite1h)*p.Write1h + float64(r.CacheRead)*p.Read) / 1e6
 }
 
 // usageProject reads the worker or COS agent from Claude's project dir name, which
@@ -109,8 +92,8 @@ func usageTicket(branch, worktree string) string {
 	return strings.ToUpper(ticket)
 }
 
-// usageWorker is a Haiku session; every other model counts as advisor work.
-func usageWorker(model string) bool { return strings.Contains(model, "haiku") }
+// usageWorker is a worker-only model session; every other model counts as advisor work.
+func usageWorker(model string) bool { return CurrentBehavior().Models.WorkerOnlyModel(model) }
 
 type usageEntry struct {
 	Timestamp time.Time `json:"timestamp"`
@@ -634,11 +617,8 @@ type UsageTotal struct {
 	Output        int64          `json:"output"`
 	CacheWrite    int64          `json:"cacheWrite"`
 	CacheRead     int64          `json:"cacheRead"`
-	Cost          float64        `json:"cost"`
 	AdvisorOutput int64          `json:"advisorOutput"`
 	WorkerOutput  int64          `json:"workerOutput"`
-	AdvisorCost   float64        `json:"advisorCost"`
-	WorkerCost    float64        `json:"workerCost"`
 	Workers       int            `json:"workers"`
 	Parallel      int            `json:"parallel"`
 	HaikuShare    int            `json:"haikuShare"`
@@ -668,10 +648,15 @@ func SummarizeUsage(rows []UsageRow, live Live, by string) []UsageTotal {
 		slices.SortFunc(totals, func(a, b UsageTotal) int { return strings.Compare(a.Key, b.Key) })
 	} else {
 		slices.SortFunc(totals, func(a, b UsageTotal) int {
-			return cmp.Or(cmp.Compare(b.Cost, a.Cost), strings.Compare(a.Key, b.Key))
+			return cmp.Or(cmp.Compare(usageTokens(b), usageTokens(a)), strings.Compare(a.Key, b.Key))
 		})
 	}
 	return totals
+}
+
+// usageTokens is what a group costs in the context window: input, cache writes and output.
+func usageTokens(t UsageTotal) int64 {
+	return t.Input + t.CacheWrite + t.Output
 }
 
 func usageGroupKey(r UsageRow, by string) string {
@@ -694,7 +679,6 @@ func usageTotal(key string, rows []UsageRow) UsageTotal {
 	t := UsageTotal{Key: key, Label: key, Ticket: latestUsage(rows).Ticket, Tools: map[string]int{}}
 	spans := map[string]usageSpan{}
 	for _, r := range rows {
-		cost := r.Cost()
 		for k, n := range r.Tools {
 			t.Tools[k] += n
 		}
@@ -702,14 +686,11 @@ func usageTotal(key string, rows []UsageRow) UsageTotal {
 		t.Output += r.Output
 		t.CacheWrite += r.CacheWrite5m + r.CacheWrite1h
 		t.CacheRead += r.CacheRead
-		t.Cost += cost
 		if !usageWorker(r.Model) {
 			t.AdvisorOutput += r.Output
-			t.AdvisorCost += cost
 			continue
 		}
 		t.WorkerOutput += r.Output
-		t.WorkerCost += cost
 		s, seen := spans[r.Session]
 		if !seen || r.First.Before(s.first) {
 			s.first = r.First

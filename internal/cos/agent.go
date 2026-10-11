@@ -28,8 +28,6 @@ const (
 	agentWorkspace    = ".local/share/cos/agent"
 )
 
-var agentModel = modelOpusHigh
-
 // AgentState is the replicated record of the one COS thread, so a new leader can take over.
 type AgentState struct {
 	Host          string            `json:"host"`
@@ -406,7 +404,8 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 	if err != nil {
 		return err
 	}
-	out, err := c.Launch(ctx, map[string]any{"projectId": project, "title": "COS", "modelSelection": agentModel, "message": brief})
+	pol := CurrentBehavior().Models
+	out, err := c.Launch(ctx, map[string]any{"projectId": project, "title": "COS", "modelSelection": pol.Advisor(pol.Leader, false), "message": brief})
 	var missing *T3Error
 	if errors.As(err, &missing) && missing.NotFound() {
 		a.project = "" // the project was deleted (T3 reset): find or recreate it next time

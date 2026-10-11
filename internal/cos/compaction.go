@@ -22,7 +22,6 @@ const (
 	compactSettle   = 5 * time.Minute  // wait after a compaction before judging it
 	compactCooldown = 30 * time.Minute // at most one compaction per thread per window
 	compactPaused   = "compact.paused" // the paused set the previous beat saw
-	compactModel    = "claude-opus-5-5"
 	compactResume   = "RESUME: the ticket is running again. Continue from your handoff."
 )
 
@@ -171,12 +170,14 @@ func (c *Compactor) fresh(ctx context.Context, kv jetstream.KeyValue, host strin
 	if err != nil {
 		return "", err
 	}
+	pol := CurrentBehavior().Models
+	pair := pol.PairOrLeader(t.Model)
 	input, err := json.Marshal(map[string]any{
 		"projectTitle":      t.Project,
 		"title":             title,
-		"modelSelection":    map[string]any{"instanceId": "claudeAgent", "model": compactModel, "options": []map[string]string{{"id": "effort", "value": "high"}}},
+		"modelSelection":    pol.Advisor(pair, false),
 		"workspaceStrategy": map[string]any{"type": "existing_worktree", "worktreePath": path, "branch": branch},
-		"message":           brief,
+		"message":           brief + "\n\n" + pol.BriefLine(pair),
 	})
 	if err != nil {
 		return "", err

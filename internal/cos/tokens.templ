@@ -13,7 +13,7 @@ templ tokensPage(h chatHeader, d tokensPageData) {
 	</html>
 }
 
-// tokens is the live region: window switcher, KPIs, chart, savings and tables.
+// tokens is the live region: window switcher, KPIs, chart and tables.
 templ tokens(d tokensPageData) {
 	<section id="tokens" class="stack" aria-labelledby="tokens-heading">
 		<section class="panel" aria-labelledby="tokens-heading">
@@ -26,23 +26,18 @@ templ tokens(d tokensPageData) {
 				</form>
 			</header>
 			<div class="kpis">
-				@tokenKPI("Cost", usd(d.Total.Cost), "USD", "")
-				@tokenKPI("Tokens", humanTokens(d.Total.Input+d.Total.CacheWrite+d.Total.Output), "in + cache write + out", "")
+				@tokenKPI("Tokens", humanTokens(usageTokens(d.Total)), "in + cache write + out", "")
 				@tokenKPI("Haiku share", integer(d.Total.HaikuShare)+"%", "of output", shareTone(d.Total))
-				@tokenKPI("Opus advisor", usd(d.Total.AdvisorCost), "USD", "")
-				@tokenKPI("Haiku workers", usd(d.Total.WorkerCost), "USD", "")
 				@tokenKPI("Peak Haiku parallel", integer(d.Parallel), "workers at once", "")
-				@tokenKPI("Saved", usd(d.Workers+d.Rules), "USD estimated", "")
 			</div>
 		</section>
 		@tokenChart(d)
-		@tokenSavingsCard(d)
 		if !d.Empty {
 			@tokenThreadTable(d.Threads)
-			@tokenTotalsTable("By ticket", "Ticket", d.Tickets, nil)
-			@tokenTotalsTable("By model", "Model", d.Models, nil)
+			@tokenTotalsTable("By ticket", "Ticket", d.Tickets)
+			@tokenTotalsTable("By model", "Model", d.Models)
 			if d.Window != "today" {
-				@tokenTotalsTable("By day", "Day", d.Days, d.DaySaved)
+				@tokenTotalsTable("By day", "Day", d.Days)
 			}
 		}
 	</section>
@@ -56,7 +51,7 @@ templ tokenKPI(label, value, unit, tone string) {
 	</div>
 }
 
-// tokenChart is one stacked column per UTC day, or per thread for today.
+// tokenChart is one stacked column of output tokens per UTC day, or per thread for today.
 templ tokenChart(d tokensPageData) {
 	<figure class="chart">
 		<figcaption class="chart-head">
@@ -71,9 +66,9 @@ templ tokenChart(d tokensPageData) {
 				<p class="chart-empty">No usage yet in this window.</p>
 			} else {
 				<div class="chart-y">
-					<span>{ money(d.Chart.Max) }</span>
-					<span>{ money(d.Chart.Max / 2) }</span>
-					<span>{ money(0) }</span>
+					<span>{ humanTokens(int64(d.Chart.Max)) }</span>
+					<span>{ humanTokens(int64(d.Chart.Max / 2)) }</span>
+					<span>0</span>
 				</div>
 				<svg viewBox={ d.Chart.ViewBox } preserveAspectRatio="none" role="img" aria-label={ tokenChartTitle(d.Window) }>
 					<g class="chart-grid">
@@ -97,28 +92,6 @@ templ tokenChart(d tokensPageData) {
 	</figure>
 }
 
-templ tokenSavingsCard(d tokensPageData) {
-	<section class="card" aria-labelledby="savings-heading">
-		<header class="card-head"><h3 id="savings-heading">Savings</h3></header>
-		<ul class="list">
-			<li>
-				<span class="row"><span>Haiku workers instead of Opus</span><span>{ money(d.Workers) }</span></span>
-				<span class="sub">Same tokens at Opus 5.5 list price, minus what Haiku cost.</span>
-			</li>
-			<li>
-				<span class="row"><span>Zero-token rule actions (estimated)</span><span>{ money(d.Rules) }</span></span>
-				<span class="sub">{ integer(d.RuleActions) } rule actions × { money(d.AdvisorAvg) } average Opus advisor message.</span>
-			</li>
-			<li><span class="row"><span>Memory retrieval</span><span>{ money(d.Ledger[SavingRetrieval]) }</span></span></li>
-			<li><span class="row"><span>Digest dedup</span><span>{ money(d.Ledger[SavingDedup]) }</span></span></li>
-			<li><span class="row"><span>Digest caps</span><span>{ money(d.Ledger[SavingDigestCap]) }</span></span></li>
-			<li><span class="row"><span>Fresh-brief restarts</span><span>{ money(d.Ledger[SavingFreshBrief]) }</span></span></li>
-			<li><span class="row"><span>Parallel workers, wall-clock saved</span><span>{ clockDuration(d.WallSaved) }</span></span></li>
-			<li><span class="row"><span>Saved { percent(d.SavedPct) } of spend · target { integer(d.SavedTarget) }%</span></span></li>
-		</ul>
-	</section>
-}
-
 templ tokenThreadTable(threads []UsageTotal) {
 	<section class="card" aria-labelledby="threads-heading">
 		<header class="card-head"><h3 id="threads-heading">By thread</h3></header>
@@ -132,7 +105,7 @@ templ tokenThreadTable(threads []UsageTotal) {
 						<th scope="col" class="num">Haiku workers</th>
 						<th scope="col" class="num">Most in parallel</th>
 						<th scope="col" class="num">Haiku share</th>
-						<th scope="col" class="num">Cost</th>
+						<th scope="col" class="num">Tokens</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -149,7 +122,7 @@ templ tokenThreadTable(threads []UsageTotal) {
 							<td class="num">{ integer(t.Workers) }</td>
 							<td class="num">{ integer(t.Parallel) }</td>
 							<td class="num">{ integer(t.HaikuShare) }%</td>
-							<td class="num">{ money(t.Cost) }</td>
+							<td class="num">{ humanTokens(usageTokens(t)) }</td>
 						</tr>
 					}
 				</tbody>
@@ -158,8 +131,7 @@ templ tokenThreadTable(threads []UsageTotal) {
 	</section>
 }
 
-// saved is each row's share of spend avoided, nil when the table has no Saved column.
-templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal, saved map[string]float64) {
+templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal) {
 	<section class="card" aria-labelledby={ "tokens-" + keyHeader }>
 		<header class="card-head"><h3 id={ "tokens-" + keyHeader }>{ title }</h3></header>
 		<div class="table-wrap">
@@ -172,10 +144,7 @@ templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal, saved map[str
 						<th scope="col" class="num">Output</th>
 						<th scope="col" class="num">Cache write</th>
 						<th scope="col" class="num">Cache read</th>
-						<th scope="col" class="num">Cost</th>
-						if saved != nil {
-							<th scope="col" class="num">Saved</th>
-						}
+						<th scope="col" class="num">Tokens</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -186,10 +155,7 @@ templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal, saved map[str
 							<td class="num">{ humanTokens(t.Output) }</td>
 							<td class="num">{ humanTokens(t.CacheWrite) }</td>
 							<td class="num">{ humanTokens(t.CacheRead) }</td>
-							<td class="num">{ money(t.Cost) }</td>
-							if saved != nil {
-								<td class="num">{ percent(saved[t.Key]) }</td>
-							}
+							<td class="num">{ humanTokens(usageTokens(t)) }</td>
 						</tr>
 					}
 				</tbody>

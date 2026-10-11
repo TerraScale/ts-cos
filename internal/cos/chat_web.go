@@ -80,14 +80,14 @@ func tokensValue(k KPIs) string {
 	if !k.UsageSeen {
 		return "—"
 	}
-	return fmt.Sprintf("$%.2f", k.Usage.Cost)
+	return compactTokens(usageTokens(k.Usage))
 }
 
 func tokensSub(k KPIs) string {
 	if !k.UsageSeen {
 		return "no usage yet today"
 	}
-	return fmt.Sprintf("%s out · Haiku %d%% · since 00:00 UTC", compactTokens(k.Usage.Output), k.Usage.HaikuShare)
+	return fmt.Sprintf("Haiku %d%% · since 00:00 UTC", k.Usage.HaikuShare)
 }
 
 func compactTokens(n int64) string {

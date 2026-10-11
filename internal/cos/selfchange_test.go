@@ -96,14 +96,20 @@ func TestSelfCheckValidate(t *testing.T) {
 }
 
 func TestSelfRequestAndGuard(t *testing.T) {
-	r, err := selfRequest(`{"request":"rename the header","summary":"Header reads Fleet","check":{"summary":"h","path":"/","contains":["Fleet"]}}`)
+	r, err := selfRequest(`{"pair":"sol","request":"rename the header","summary":"Header reads Fleet","check":{"summary":"h","path":"/","contains":["Fleet"]}}`)
 	if err != nil || r.State != selfQueued {
 		t.Fatal(r, err)
 	}
-	if selfModel["model"] != "claude-opus-5-5" {
-		t.Fatal("self-change worker is not Opus")
+	if r.Pair != "sol" {
+		t.Fatalf("pair = %q, want sol", r.Pair)
 	}
-	for _, raw := range []string{`{}`, `{"request":"x","summary":"a\nb","check":{"summary":"h","path":"/","contains":["F"]}}`, `{"request":"x","summary":"s","check":{}}`, `{"request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]},"skipGate":true}`} {
+	check := `"check":{"summary":"h","path":"/","contains":["Fleet"]}}`
+	for _, raw := range []string{`{"request":"rename the header","summary":"Header reads Fleet",` + check, `{"pair":"nope","request":"rename the header","summary":"Header reads Fleet",` + check} {
+		if _, err := selfRequest(raw); err == nil || !strings.Contains(err.Error(), `pair must be "opus" (`) {
+			t.Fatalf("pair-less or unknown-pair request = %v, want a pair refusal", err)
+		}
+	}
+	for _, raw := range []string{`{}`, `{"pair":"sol","request":"x","summary":"a\nb","check":{"summary":"h","path":"/","contains":["F"]}}`, `{"pair":"sol","request":"x","summary":"s","check":{}}`, `{"pair":"sol","request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]},"skipGate":true}`} {
 		if _, err := selfRequest(raw); err == nil {
 			t.Errorf("accepted %s", raw)
 		}
@@ -121,7 +127,7 @@ func TestSelfRequestAndGuard(t *testing.T) {
 func TestSelfRequestValidation(t *testing.T) {
 	const check = `"check":{"summary":"h","path":"/","contains":["F"]}`
 	req := func(request, summary string) string {
-		return `{"request":"` + request + `","summary":"` + summary + `",` + check + `}`
+		return `{"pair":"sol","request":"` + request + `","summary":"` + summary + `",` + check + `}`
 	}
 	for i, raw := range []string{
 		req("x", "s") + " {}",
@@ -355,7 +361,7 @@ func TestSelfChangeCIFailureAsksWorkerOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	rig := newSelfTestRig(t, ctx)
-	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	r, err := selfRequest(`{"pair":"sol","request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +394,7 @@ func TestSelfChangeLoopAndUndo(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	rig := newSelfTestRig(t, ctx)
-	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	r, err := selfRequest(`{"pair":"sol","request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +517,7 @@ func TestSelfChangeReviewerWaitIsBounded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	rig := newSelfTestRig(t, ctx)
-	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	r, err := selfRequest(`{"pair":"sol","request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +574,7 @@ func TestSelfChangeMergedPRIsNotFailed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	rig := newSelfTestRig(t, ctx)
-	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	r, err := selfRequest(`{"pair":"sol","request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +594,7 @@ func TestSelfChangeWorkerQuestionBlocks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	rig := newSelfTestRig(t, ctx)
-	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	r, err := selfRequest(`{"pair":"sol","request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +632,7 @@ func TestSelfChangeGuardsAndQueue(t *testing.T) {
 
 	// A check that already passes means there is nothing to change.
 	rig.pass = true
-	r, _ := selfRequest(`{"request":"x","summary":"Already true","check":{"summary":"h","path":"/","contains":["COS"]}}`)
+	r, _ := selfRequest(`{"pair":"sol","request":"x","summary":"Already true","check":{"summary":"h","path":"/","contains":["COS"]}}`)
 	rig.d.store.create(ctx, r)
 	rig.d.step(ctx)
 	rig.d.step(ctx)
@@ -637,7 +643,7 @@ func TestSelfChangeGuardsAndQueue(t *testing.T) {
 	// Touching login is refused before merge.
 	rig.pass = false
 	rig.set(func(f *selfFake) { f.prFiles[7] = []string{"internal/cos/dashboard_auth.go", "checks/TS-901.json"} })
-	r2, _ := selfRequest(`{"request":"y","summary":"Login skips the password","check":{"summary":"h","path":"/","contains":["X"]}}`)
+	r2, _ := selfRequest(`{"pair":"sol","request":"y","summary":"Login skips the password","check":{"summary":"h","path":"/","contains":["X"]}}`)
 	r2.ID = "z" + r2.ID
 	rig.d.store.create(ctx, r2)
 	for range 5 {
@@ -742,7 +748,7 @@ func TestSelfStoreListSeesEveryWrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	rig := newSelfTestRig(t, ctx)
-	first, err := selfRequest(`{"request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]}}`)
+	first, err := selfRequest(`{"pair":"sol","request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -751,7 +757,7 @@ func TestSelfStoreListSeesEveryWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 30 {
-		r, err := selfRequest(`{"request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]}}`)
+		r, err := selfRequest(`{"pair":"sol","request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]}}`)
 		if err != nil {
 			t.Fatal(err)
 		}

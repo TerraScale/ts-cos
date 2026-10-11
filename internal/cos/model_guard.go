@@ -1,13 +1,12 @@
 package cos
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
-// Threads run on Opus 5.5 (user 2026-10-11); Haiku 5.5 only runs as delegate_task
-// subagents inside a thread, so no thread may be launched on or switched to Haiku.
-const haikuThreadError = "threads run on Opus 5.5 (effort high, xhigh for high stakes); Haiku 5.5 is only for delegate_task subagents inside a thread"
-
-// threadModelGuard rejects a Haiku model anywhere in the model selection of a
-// launch, dispatch, model or handoff request.
+// threadModelGuard rejects a worker-only model, or a codex serviceTier other than default, anywhere
+// in the model selection of a launch, dispatch, model or handoff request.
 func threadModelGuard(command string, args []string) error {
 	arg := map[string]int{"launch": 0, "dispatch": 0, "model": 1, "handoff": 1}
 	i, ok := arg[command]
@@ -18,47 +17,79 @@ func threadModelGuard(command string, args []string) error {
 	if err != nil {
 		return nil // the command's own validation reports bad JSON
 	}
-	if haikuModel(value) {
-		return OperationError(haikuThreadError)
+	pol := CurrentBehavior().Models
+	if model, ok := workerOnlyModel(pol, value); ok {
+		return OperationError(fmt.Sprintf("%s is a worker-only model; threads run on an advisor model: %s", model, strings.Join(pol.advisorModels(), ", ")))
+	}
+	if fastTier(value) {
+		return OperationError("codex runs on the Standard tier (serviceTier default), never Fast")
 	}
 	return nil
 }
 
-func haikuModel(v any) bool {
+// workerOnlyModel finds a worker-only model under any "model" key, at any depth.
+func workerOnlyModel(pol ModelPolicy, v any) (string, bool) {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, x := range v {
-			if strings.EqualFold(k, "model") && containsHaiku(x) {
-				return true
+			if strings.EqualFold(k, "model") {
+				if model, ok := anyWorkerOnly(pol, x); ok {
+					return model, true
+				}
 			}
-			if haikuModel(x) {
-				return true
+			if model, ok := workerOnlyModel(pol, x); ok {
+				return model, true
 			}
 		}
 	case []any:
 		for _, x := range v {
-			if haikuModel(x) {
-				return true
+			if model, ok := workerOnlyModel(pol, x); ok {
+				return model, true
 			}
 		}
 	}
-	return false
+	return "", false
 }
 
-// containsHaiku reports whether any string inside v, at any depth, names Haiku.
-func containsHaiku(v any) bool {
+// anyWorkerOnly reports a worker-only name in any string inside v, at any depth.
+func anyWorkerOnly(pol ModelPolicy, v any) (string, bool) {
 	switch v := v.(type) {
 	case string:
-		return strings.Contains(strings.ToLower(v), "haiku")
+		return v, pol.WorkerOnlyModel(v)
 	case map[string]any:
 		for _, x := range v {
-			if containsHaiku(x) {
+			if model, ok := anyWorkerOnly(pol, x); ok {
+				return model, true
+			}
+		}
+	case []any:
+		for _, x := range v {
+			if model, ok := anyWorkerOnly(pol, x); ok {
+				return model, true
+			}
+		}
+	}
+	return "", false
+}
+
+// fastTier reports a serviceTier other than default, as a key or as an option id, anywhere in v.
+func fastTier(v any) bool {
+	switch v := v.(type) {
+	case map[string]any:
+		if tier, ok := v["serviceTier"]; ok && tier != "default" {
+			return true
+		}
+		if v["id"] == "serviceTier" && v["value"] != "default" {
+			return true
+		}
+		for _, x := range v {
+			if fastTier(x) {
 				return true
 			}
 		}
 	case []any:
 		for _, x := range v {
-			if containsHaiku(x) {
+			if fastTier(x) {
 				return true
 			}
 		}

@@ -90,6 +90,7 @@ type Behavior struct {
 	Brief    string `json:"-"`
 	Rules    string `json:"-"`
 	Wake     WakeBudget
+	Models   ModelPolicy
 	files    map[string]string
 	tmpl     *template.Template
 	loadedAt time.Time
@@ -158,6 +159,12 @@ func ParseBehavior(version string, files map[string]string) (*Behavior, error) {
 			if err := dec.Decode(&b.Wake); err != nil {
 				return nil, fmt.Errorf("behavior wake.json: %w", err)
 			}
+		case name == "models.json":
+			models, err := parseModelPolicy(text)
+			if err != nil {
+				return nil, err
+			}
+			b.Models = models
 		case path.Dir(name) == "templates" && path.Ext(name) == ".tmpl":
 			// Parsed alone: a {{define}} in one file must not replace another file's template.
 			own, err := template.New(strings.TrimSuffix(path.Base(name), ".tmpl")).Funcs(funcs).Parse(text)
@@ -175,6 +182,9 @@ func ParseBehavior(version string, files map[string]string) (*Behavior, error) {
 		}
 	}
 	b.tmpl = tmpl
+	if _, ok := files["models.json"]; !ok {
+		return nil, errors.New("behavior models.json: missing")
+	}
 	switch {
 	case size > behaviorMaxBytes:
 		return nil, fmt.Errorf("behavior: %d bytes exceeds %d", size, behaviorMaxBytes)

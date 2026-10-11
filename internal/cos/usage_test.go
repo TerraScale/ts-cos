@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,10 +49,6 @@ func TestUsageTranscriptCountsEachMessageOnce(t *testing.T) {
 	if r.Model != "claude-opus-5-5" || r.Effort != "high" || r.Branch != "cos/ts-826-work-tokens" || r.Ticket != "TS-826" ||
 		r.Kind != "worker" || r.Worktree != "ts-cos-cos-ts-826-work-tokens" || r.Session != "opus-main" || r.Day != "2026-10-10" {
 		t.Fatalf("labels = %+v", r)
-	}
-	wantCost := (10*4 + 100*20 + 50*5 + 1000*0.20) / 1e6
-	if math.Abs(r.Cost()-wantCost) > 1e-12 {
-		t.Fatalf("cost = %v, want %v", r.Cost(), wantCost)
 	}
 }
 
@@ -133,7 +128,7 @@ func TestUsageParallelEndAtStartDoesNotOverlap(t *testing.T) {
 	}
 }
 
-func TestUsageModelAndCost(t *testing.T) {
+func TestUsageModelNames(t *testing.T) {
 	for in, want := range map[string]string{
 		"claude-opus-5-5[1m]":       "claude-opus-5-5",
 		"claude-haiku-5-5-20261001": "claude-haiku-5-5",
@@ -142,12 +137,6 @@ func TestUsageModelAndCost(t *testing.T) {
 		if got := usageModel(in); got != want {
 			t.Fatalf("usageModel(%q) = %q, want %q", in, got, want)
 		}
-	}
-	if got := (UsageRow{Model: "claude-opus-5-5[1m]", Output: 1_000_000}).Cost(); got != 20 {
-		t.Fatalf("1M Opus output cost = %v, want 20", got)
-	}
-	if got := (UsageRow{Model: "claude-unknown", Output: 1_000_000}).Cost(); got != 0 {
-		t.Fatalf("unknown model cost = %v, want 0", got)
 	}
 }
 

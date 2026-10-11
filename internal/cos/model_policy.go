@@ -97,6 +97,7 @@ func usagePolicy(totals []UsageTotal, seen map[string]threadSeen, now time.Time,
 // parent is not on Opus escalates the parent as a Haiku worker without an advisor (once per window).
 // Forks are real threads and switch like top-level ones; only delegate_task subagents stay on Haiku.
 func fleetModelPolicy(live Live, now time.Time, last map[string]time.Time, paused map[string]bool) []Decision {
+	pol := CurrentBehavior().Models
 	var out []Decision
 	for _, h := range live.Fleet {
 		byID := map[string]FleetThread{}
@@ -104,16 +105,16 @@ func fleetModelPolicy(live Live, now time.Time, last map[string]time.Time, pause
 			byID[t.ThreadID] = t
 		}
 		for _, t := range h.Threads {
-			if !strings.Contains(t.Model, "haiku") || pausedThread(paused, t) {
+			if !pol.WorkerOnlyModel(t.Model) || pausedThread(paused, t) {
 				continue
 			}
 			if t.Lineage == nil || t.Lineage.Relation != "subagent" {
 				out = append(out, Decision{Class: ClassAct, Rule: "model-opus-thread", Reason: "threads run Opus 5.5; Haiku 5.5 only as delegate_task subagents",
-					Host: h.Host, Thread: t.ThreadID, Model: modelOpusHigh})
+					Host: h.Host, Thread: t.ThreadID, Model: pol.Advisor(pol.PairOrLeader(t.Model), false)})
 				continue
 			}
 			parent, known := byID[t.Lineage.Parent]
-			if known && !strings.Contains(parent.Model, "opus") && !pausedThread(paused, parent) && now.Sub(last["noadvisor:"+parent.ThreadID]) >= nudgeEvery {
+			if known && !pol.IsAdvisor(parent.Model) && !pausedThread(paused, parent) && now.Sub(last["noadvisor:"+parent.ThreadID]) >= nudgeEvery {
 				out = append(out, Decision{Class: ClassEscalate, Rule: "haiku-without-advisor", Sig: "noadvisor",
 					Reason: fmt.Sprintf("Haiku %s worker under a %s parent; every Haiku worker needs an Opus 5.5 advisor", t.Model, parent.Model),
 					Host:   h.Host, Thread: parent.ThreadID})
@@ -169,7 +170,7 @@ func nudgeTimes(ctx context.Context, kv jetstream.KeyValue, now time.Time, total
 	}
 	for _, h := range live.Fleet {
 		for _, t := range h.Threads {
-			if t.Lineage != nil && strings.Contains(t.Model, "haiku") {
+			if t.Lineage != nil && CurrentBehavior().Models.WorkerOnlyModel(t.Model) {
 				read("noadvisor", t.Lineage.Parent)
 			}
 		}

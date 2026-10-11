@@ -10,30 +10,28 @@ import (
 	"time"
 )
 
-func TestTokensSavingsPage(t *testing.T) {
-	const card = "Memory retrieval Fresh-brief restarts "
+func TestTokensHaikuShare(t *testing.T) {
+	const kpi = `<span class="kpi-label">Haiku share</span>`
 	for _, tc := range []struct {
 		name    string
 		body    string
 		want    int
 		wantErr bool
 	}{
-		{"ok", card + "Saved 42% of spend · target 30%", 42, false},
-		{"missing row", card + "target 30%", 0, true},
-		{"missing target", card + "Saved 42% of spend", 0, true},
-		{"missing memory row", "Fresh-brief restarts Saved 42% of spend · target 30%", 0, true},
-		{"missing fresh-brief row", "Memory retrieval Saved 42% of spend · target 30%", 0, true},
+		{"ok", kpi + "\n\t\t<span class=\"kpi-value\">42%</span>", 42, false},
+		{"missing kpi", `<span class="kpi-label">Tokens</span><span class="kpi-value">42%</span>`, 0, true},
+		{"missing value", kpi, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := tokensSavingsPage(tc.body)
+			got, err := tokensHaikuShare(tc.body)
 			if (err != nil) != tc.wantErr || got != tc.want {
-				t.Fatalf("tokensSavingsPage() = %d, %v; want %d, error %v", got, err, tc.want, tc.wantErr)
+				t.Fatalf("tokensHaikuShare() = %d, %v; want %d, error %v", got, err, tc.want, tc.wantErr)
 			}
 		})
 	}
 }
 
-func TestTokensSavingsPageRenders(t *testing.T) {
+func TestTokensHaikuSharePageRenders(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +48,7 @@ func TestTokensSavingsPageRenders(t *testing.T) {
 	if r.Code != http.StatusOK {
 		t.Fatalf("GET /tokens?w=7d = %d", r.Code)
 	}
-	if _, err := tokensSavingsPage(r.Body.String()); err != nil {
+	if _, err := tokensHaikuShare(r.Body.String()); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -75,11 +75,7 @@ func queueLimitResume(ctx context.Context, bus *Bus, host, thread, title, model 
 	})
 }
 
-// Model rules (user 2026-10-11): threads run Opus 5.5 at high effort; the same failure twice escalates to xhigh, never to Haiku.
-var (
-	modelOpusHigh  = map[string]any{"instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": []any{map[string]any{"id": "effort", "value": "high"}}}
-	modelOpusXHigh = map[string]any{"instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": []any{map[string]any{"id": "effort", "value": "xhigh"}}}
-)
+// Model rules (user 2026-10-11): threads run their pair's advisor at high effort; the same failure twice escalates to high-stakes effort, never to a worker model.
 
 // wakeText renders a wake with the advisor split line; every wake ends with it.
 func wakeText(name string, data any) (string, error) {
@@ -213,9 +209,10 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		return []Decision{d(ClassRecord, rule, why)}
 	}
 	out := []Decision{}
-	if owner != nil && owner.Lineage == nil && strings.Contains(owner.Model, "haiku") {
+	pol := CurrentBehavior().Models
+	if owner != nil && owner.Lineage == nil && pol.WorkerOnlyModel(owner.Model) {
 		x := d(ClassAct, "model-opus-thread", "threads run Opus 5.5; Haiku 5.5 only as delegate_task subagents")
-		x.Model = modelOpusHigh
+		x.Model = pol.Advisor(pol.PairOrLeader(owner.Model), false)
 		out = append(out, x)
 	}
 	wake := func(rule, reason, sha string, data wakeData) []Decision {
@@ -233,7 +230,7 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 			return append(out, d(ClassRecord, rule, "already woken: "+reason))
 		case memory.Sig == x.Sig && memory.Count >= 1:
 			m := d(ClassAct, "escalate-model", "same failure twice: "+reason)
-			m.Model = modelOpusXHigh
+			m.Model = pol.Advisor(pol.PairOrLeader(owner.Model), true)
 			// The model switches first, so the escalated model handles this wake.
 			return append(out, m, x, d(ClassEscalate, "same-failure-twice", reason+" (twice; model escalated)"))
 		}
