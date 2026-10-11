@@ -173,7 +173,12 @@ func e2eClip(s string, n int) string {
 
 func E2E(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	env := &E2EEnv{cfg: cfg, run: cfg.hostRun, main: func(ctx context.Context) (e2eMain, error) { return mainHead(ctx, cfg) }}
-	report := runE2E(ctx, env, e2eChecks(), args)
+	var report E2EReport
+	if slices.Contains(args, "--smoke") {
+		report = runE2E(ctx, env, e2eChecks(), args)
+	} else {
+		report = runFull(ctx, env, e2eChecks(), args)
+	}
 	if len(args) == 0 {
 		publishE2EReport(ctx, cfg, report)
 	}

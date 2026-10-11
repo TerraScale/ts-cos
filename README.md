@@ -371,6 +371,9 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   or remove them (`protected: true` in the report).
 - Per-request acceptance checks register with `RegisterE2E` from an
   `e2e_accept_*.go` init function, IDs `accept.<slug>.<name>`.
+- Full runs wait up to 5 min for the cluster to settle (no rollout, one build, every
+  `/login` 200). If it never settles they report only `cluster.settled`; checks that
+  fail during a mid-run rollout are retried once after it settles.
 
 ## Behavior files
 
