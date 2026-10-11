@@ -80,6 +80,7 @@ type Bus struct {
 	resign      chan struct{}   // closed by Resign
 	resignOnce  sync.Once
 	elected     chan struct{} // closed when elect returns
+	hookSecrets map[string]string
 }
 
 // Fixed COS node settings; the ports stay clear of dev dashboards near 8790 and NATS defaults.
@@ -352,10 +353,14 @@ func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHa
 	}
 	opts := busOptions(cfg, node)
 	credential := busCredential{Port: node.clientPort, Password: opts.Password}
+	hookSecrets := map[string]string{}
+	for source := range hookSources {
+		hookSecrets[source] = derive(node.master, "hook "+source)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	b := &Bus{ctx: ctx, cancel: cancel, done: make(chan struct{}), host: cfg.LocalHost,
 		active: make(map[string]context.CancelFunc), pending: make(map[string]*time.Timer),
-		resign: make(chan struct{}), elected: make(chan struct{})}
+		resign: make(chan struct{}), elected: make(chan struct{}), hookSecrets: hookSecrets}
 	var err error
 	b.server, err = server.NewServer(opts)
 	if err != nil {

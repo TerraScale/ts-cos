@@ -65,12 +65,11 @@ type Auth struct {
 	mu       sync.Mutex
 	users    jetstream.KeyValue // nil until the cluster can store replicated buckets
 	sessions jetstream.KeyValue
-	window   time.Time
-	attempts map[string]int
+	limit    limiter
 }
 
 func NewAuth(home string, js jetstream.JetStream) *Auth {
-	return &Auth{home: home, js: js, attempts: map[string]int{}}
+	return &Auth{home: home, js: js}
 }
 
 // Start waits for cluster quorum, creates the buckets and seeds
@@ -137,14 +136,16 @@ func (a *Auth) kv() (jetstream.KeyValue, jetstream.KeyValue) {
 	return a.users, a.sessions
 }
 
-// Protect serves the login pages and lets only signed-in requests reach next.
-func (a *Auth) Protect(next http.Handler) http.Handler {
+// Protect serves the login pages and the signed webhooks, and lets only signed-in
+// requests reach next.
+func (a *Auth) Protect(next, hooks http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", func(rw http.ResponseWriter, r *http.Request) {
 		renderAuth(rw, r, http.StatusOK, loginPage(""))
 	})
 	mux.HandleFunc("POST /login", a.login)
 	mux.HandleFunc("POST /logout", a.logout)
+	mux.Handle("POST /hooks/{source}", hooks)
 	mux.Handle("GET /password", a.require(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		renderAuth(rw, r, http.StatusOK, passwordPage(""))
 	})))
@@ -246,7 +247,7 @@ func setSessionCookie(rw http.ResponseWriter, r *http.Request, value string, max
 }
 
 func (a *Auth) login(rw http.ResponseWriter, r *http.Request) {
-	if !a.allow(clientIP(r)) {
+	if !a.limit.allow(clientIP(r), loginPerMinute) {
 		renderAuth(rw, r, http.StatusTooManyRequests, loginPage("Too many attempts from your address. Wait a minute."))
 		return
 	}
@@ -329,17 +330,6 @@ func (a *Auth) fail(ctx context.Context, users jetstream.KeyValue, user string) 
 	}
 }
 
-func (a *Auth) allow(ip string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if time.Since(a.window) >= time.Minute {
-		a.window = time.Now()
-		clear(a.attempts)
-	}
-	a.attempts[ip]++
-	return a.attempts[ip] <= loginPerMinute
-}
-
 func (a *Auth) logout(rw http.ResponseWriter, r *http.Request) {
 	_, sessions := a.kv()
 	if cookie, err := r.Cookie(sessionCookie); err == nil && sessions != nil {
@@ -356,7 +346,7 @@ func (a *Auth) logout(rw http.ResponseWriter, r *http.Request) {
 // the user on every node, and keeps this browser signed in.
 func (a *Auth) changePassword(rw http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(authUserKey{}).(string)
-	if !a.allow(clientIP(r)) {
+	if !a.limit.allow(clientIP(r), loginPerMinute) {
 		renderAuth(rw, r, http.StatusTooManyRequests, passwordPage("Too many attempts from your address. Wait a minute."))
 		return
 	}

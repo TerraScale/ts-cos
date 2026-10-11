@@ -83,6 +83,23 @@ exists; the file is never rewritten and the hash is never logged.
 - Cross-site form posts are rejected; pages are `no-store` and cannot be framed.
   Requests from outside loopback and Tailscale are refused.
 
+### Webhook ingress
+
+Forgejo and Ku POST to `https://cos.terrascale.tech/hooks/forgejo` and
+`/hooks/ku` (also served on every tailnet URL), outside the login:
+
+- Forgejo signs with `X-Forgejo-Signature` (hex HMAC-SHA256 of the body), Ku with
+  `X-Webhook-Signature: sha256=<hex>`. The secret per source is derived from the
+  Vault master on every node (`Bus.HookSecret(source)`); TS-814 registers it with
+  the senders. It is never printed.
+- A verified body is stored unchanged on `cos.ingest.forgejo` / `cos.ingest.ku`
+  (stream `COS_INGEST`, created on start) with the request headers (except
+  `Cookie` and `Authorization`) and `Nats-Msg-Id` = Forgejo's delivery UUID or
+  the body's SHA-256, so redeliveries are stored once. The sender gets `202`
+  only after a JetStream quorum stored it, else `503`.
+- Unsigned or wrongly signed: `401`. Bodies over 1 MiB: `413`. More than 300
+  requests per minute from one address on one node: `429`.
+
 Every other HTTP route, including `/status` and `/events`, requires a session.
 
 The CLI connects to **its local** NATS node. Calls to `cos.<host>.<command>` route

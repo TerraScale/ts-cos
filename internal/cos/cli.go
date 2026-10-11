@@ -302,6 +302,9 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	auth := NewAuth(cfg.Home, js)
 	go auth.Start(ctx)
 	w := NewWeb(s, auth)
+	hooks := NewHooks(bus)
+	go hooks.Start(ctx)
+	w.Hooks = hooks
 	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s))
 	if err != nil {
 		return err

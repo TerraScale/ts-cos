@@ -16,6 +16,7 @@ import (
 type Web struct {
 	Store       *Store
 	Autopilot   *Autopilot
+	Hooks       http.Handler
 	auth        *Auth
 	mu          sync.Mutex
 	clients     map[chan struct{}]struct{}
@@ -37,7 +38,7 @@ func (w *Web) Broadcast() {
 	}
 }
 func (w *Web) Handler() http.Handler {
-	return w.auth.Protect(w.routes())
+	return w.auth.Protect(w.routes(), w.Hooks)
 }
 
 // routes are the dashboard pages behind sign-in.

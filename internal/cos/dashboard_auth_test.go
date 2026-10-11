@@ -114,7 +114,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 		go auths[i].Start(ctx)
 		servers[i] = httptest.NewServer(auths[i].Protect(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(rw, "dashboard for ", r.Context().Value(authUserKey{}))
-		})))
+		}), http.NotFoundHandler()))
 		t.Cleanup(servers[i].Close)
 	}
 	deadline := time.Now().Add(40 * time.Second)
@@ -274,7 +274,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 }
 
 func TestAuthStartingAsksToRetry(t *testing.T) {
-	h := NewAuth(t.TempDir(), nil).Protect(http.NotFoundHandler())
+	h := NewAuth(t.TempDir(), nil).Protect(http.NotFoundHandler(), http.NotFoundHandler())
 	for _, path := range []string{"/", "/events", "/password"} {
 		req := httptest.NewRequest("GET", path, nil)
 		req.RemoteAddr = "127.0.0.1:1234"
