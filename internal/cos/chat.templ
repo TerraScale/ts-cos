@@ -9,7 +9,7 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, tabs []ChatTab, tab ChatTab
 			@releaseWatch()
 			@chatHead(h)
 			<div class="app-body">
-				@threadPanel(threads)
+				@threadPanel(threads, recentActions(entries))
 				<nav class="sidebar" aria-label="Sections">
 					<p class="side-title">COS</p>
 					<a class="side-link" href="#pane-chat" title="Chat" data-on:click__prevent="$tab='chat'" data-attr:aria-current="$tab=='chat' ? 'page' : false">@icon("chat")<span>Chat</span></a>
@@ -21,6 +21,7 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, tabs []ChatTab, tab ChatTab
 				<main class="app-main" id="pane-chat">
 					@chatTabs(tabs, tab)
 					@threadToggle()
+					@threadConfirm(tab)
 					@kpiTiles(k)
 					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)

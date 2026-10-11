@@ -34,6 +34,9 @@ func (p panelPR) label() string {
 // ago is the age of the thread's last activity, or a dash when T3 did not say.
 func (t panelThread) ago() string { return agoText(parseUpdated(t.Updated)) }
 
+// openPR reports whether the row's PR is still open, which the merge buttons need.
+func (t panelThread) openPR() bool { return t.PR != nil && t.PR.State == "open" }
+
 func parseUpdated(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339Nano, s)
 	return t

@@ -291,7 +291,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		if err := patchElements(ctx, rw, inbox(v)); err != nil {
 			return err
 		}
-		return patchElements(ctx, rw, threadPanel(tabThreads(v.Live, w.Chat.Tags(tab.ID))))
+		return patchElements(ctx, rw, threadPanel(tabThreads(v.Live, w.Chat.Tags(tab.ID)), recentActions(w.Chat.Entries(tab.ID))))
 	}
 	// tabStrip repaints the tab strip; the current tab's name may have changed meanwhile.
 	tabStrip := func() error {
@@ -327,6 +327,10 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		}
 		return ids
 	}
+	// panel repaints the Threads panel: the tab's live rows and its recent action outcomes.
+	panel := func() error {
+		return patchElements(ctx, rw, threadPanel(tabThreads(w.state(ctx).Live, w.Chat.Tags(tab.ID)), recentActions(w.Chat.Entries(tab.ID))))
+	}
 	update := func(keys []string) error {
 		shown := window()
 		for _, key := range keys {
@@ -340,7 +344,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if strings.HasPrefix(key, chatTagPrefix) {
-				if err := patchElements(ctx, rw, threadPanel(tabThreads(w.state(ctx).Live, w.Chat.Tags(tab.ID)))); err != nil {
+				if err := panel(); err != nil {
 					return err
 				}
 				continue
@@ -348,6 +352,11 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 			e, ok := w.Chat.Entry(key)
 			if ok && e.Tab != tab.ID {
 				continue
+			}
+			if ok && e.Action {
+				if err := panel(); err != nil {
+					return err
+				}
 			}
 			switch {
 			case key == "" || (ok && len(sent) == 0):

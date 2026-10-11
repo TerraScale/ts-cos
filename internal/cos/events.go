@@ -92,7 +92,8 @@ const (
 	// Token budgets, one per crossed mark; Data is budgetData.
 	KindBudgetWarn     EventKind = "budget.warn"
 	KindBudgetExceeded EventKind = "budget.exceeded"
-	KindMergeOrder     EventKind = "merge.order" // Data: {"orders":[...],"reason":...,"sha":...}, a user merge past the gate
+	KindMergeOrder     EventKind = "merge.order"   // Data: {"orders":[...],"reason":...,"sha":...}, a user merge past the gate
+	KindThreadAction   EventKind = "thread.action" // Data: {"tab","host","threadId","op","ok","result"}, a Threads panel button
 
 	// Published by a full `cos e2e` run. Data: {"pass":n,"fail":n,"skip":n,"runner":host}.
 	KindE2EReport EventKind = "e2e.report"
@@ -109,7 +110,7 @@ var eventKinds = map[EventKind]EventSource{
 	KindPROpened: SourceForgejo, KindPRSynchronized: SourceForgejo, KindPRMergeable: SourceForgejo,
 	KindPRConflict: SourceForgejo, KindPRMerged: SourceForgejo, KindPRClosed: SourceForgejo,
 	KindCIStatus: SourceForgejo, KindReview: SourceForgejo, KindPushMain: SourceForgejo,
-	KindChatMessage: SourceUser, KindUserAnswer: SourceUser, KindMergeOrder: SourceUser,
+	KindChatMessage: SourceUser, KindUserAnswer: SourceUser, KindMergeOrder: SourceUser, KindThreadAction: SourceUser,
 	KindInboxItemAdded: SourceInbox, KindInboxClosed: SourceInbox,
 	KindDeployStarted: SourceDeploy, KindNodeUpdated: SourceDeploy, KindGateFailed: SourceDeploy,
 	KindDeployRolledBack: SourceDeploy, KindDeployCompleted: SourceDeploy,
