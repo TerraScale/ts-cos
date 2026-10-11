@@ -158,16 +158,17 @@ func TestSelfUndoOncePerChange(t *testing.T) {
 
 // selfFake is a Forgejo for one ts-cos self-change PR (number 7) and its revert (8).
 type selfFake struct {
-	mu        sync.Mutex
-	files     map[string]map[string]string // ref -> path -> content
-	prOpen    map[int]bool
-	merged    map[int]bool
-	prFiles   map[int][]string
-	ci        string
-	reviewer  string
-	review    string
-	pushed    string // PR 7's head once the worker pushes a fix; "" keeps head7
-	mergeBody map[int]map[string]any
+	mu         sync.Mutex
+	files      map[string]map[string]string // ref -> path -> content
+	prOpen     map[int]bool
+	merged     map[int]bool
+	prFiles    map[int][]string
+	ci         string
+	reviewer   string
+	reviewerAt time.Time
+	review     string
+	pushed     string // PR 7's head once the worker pushes a fix; "" keeps head7
+	mergeBody  map[int]map[string]any
 }
 
 func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +235,11 @@ func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && strings.HasPrefix(p, "/commits/") && strings.HasSuffix(p, "/statuses"):
 		list := []map[string]any{}
 		if f.reviewer != "" {
-			list = append(list, map[string]any{"id": 1, "context": "ts-reviewer", "status": f.reviewer, "creator": map[string]string{"login": "terrascale-bot"}})
+			status := map[string]any{"id": 1, "context": "ts-reviewer", "status": f.reviewer, "creator": map[string]string{"login": "terrascale-bot"}}
+			if !f.reviewerAt.IsZero() {
+				status["created_at"] = f.reviewerAt
+			}
+			list = append(list, status)
 		}
 		forgejoTestJSON(w, list)
 	case r.Method == "GET" && strings.HasSuffix(p, "/comments"):
@@ -499,6 +504,41 @@ func TestSelfChangeLoopAndUndo(t *testing.T) {
 	log := selfLog(func() []selfRecord { l, _ := rig.d.store.list(ctx); return l }(), true, time.Now())
 	if text := log["text"].(string); !strings.Contains(text, "TS-901") || !strings.Contains(text, "(reverted)") {
 		t.Fatalf("changelog text: %q", text)
+	}
+}
+
+func TestSelfChangeReviewerWaitIsBounded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rig := newSelfTestRig(t, ctx)
+	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.d.store.create(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	steps := func(n int) {
+		for range n {
+			rig.d.step(ctx)
+		}
+	}
+	steps(5) // ticket, failing check on branch, worker, PR found, CI running
+	// Green CI and a ts-reviewer status that just started: keep waiting.
+	rig.set(func(f *selfFake) { f.ci, f.reviewer, f.reviewerAt = "success", "pending", time.Now() })
+	steps(3)
+	if got := rig.state(t, ctx, r.ID); got.State != selfGating || got.Note != "ts-reviewer running" || len(rig.e2eRuns) != 0 {
+		t.Fatalf("moved on before ts-reviewer's 30 minutes: %+v %v", got, rig.e2eRuns)
+	}
+	// The same pending review 31 minutes old no longer holds the merge: e2e runs, then merge.
+	rig.set(func(f *selfFake) { f.reviewerAt = time.Now().Add(-31 * time.Minute) })
+	steps(1)
+	if got := rig.state(t, ctx, r.ID); got.State != selfGating || got.Note != "e2e green" || len(rig.e2eRuns) != 1 {
+		t.Fatalf("stale ts-reviewer still holds the merge: %+v %v", got, rig.e2eRuns)
+	}
+	steps(1)
+	if got := rig.state(t, ctx, r.ID); got.State != selfMerged {
+		t.Fatalf("not merged after ts-reviewer timed out: %+v", got)
 	}
 }
 

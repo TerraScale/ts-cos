@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const selfRepo = "ts-cos"
@@ -31,6 +32,9 @@ var selfBlockingFinding = regexp.MustCompile(`(?i)\b(security|secrets?|credentia
 
 // selfReviewerLogin is the bot account that posts ts-reviewer statuses and comments.
 const selfReviewerLogin = "terrascale-bot"
+
+// selfReviewWait bounds the wait for ts-reviewer, which is advisory; COS reads late findings after merge.
+const selfReviewWait = 30 * time.Minute
 
 type selfPR struct {
 	Number    int    `json:"number"`
@@ -206,7 +210,9 @@ func (f Forgejo) selfGate(ctx context.Context, r selfRecord, p selfPR) (wait, bl
 	}
 	switch reviewer {
 	case "", "pending":
-		return "ts-reviewer running", "", nil
+		if bot == nil || bot.CreatedAt.IsZero() || time.Since(bot.CreatedAt) < selfReviewWait {
+			return "ts-reviewer running", "", nil
+		}
 	case "success":
 	case "failure":
 		finding, found, err := f.selfBlockingReview(ctx, p)
