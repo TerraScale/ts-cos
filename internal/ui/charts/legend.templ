@@ -1,0 +1,9 @@
+package charts
+
+templ Legend(data LineData) {
+	<ul class="ts-chart-legend" aria-label="Chart series">
+		for _, path := range data.Paths {
+			<li class="ts-chart-legend-item"><svg class={ "ts-chart-swatch " + path.Class } viewBox="0 0 32 8" aria-hidden="true"><line x1="0" x2="32" y1="4" y2="4" stroke-dasharray={ path.Dash }></line></svg>{ path.Name }</li>
+		}
+	</ul>
+}
