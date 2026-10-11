@@ -48,6 +48,8 @@ type AgentState struct {
 	BriefTokens   int           `json:"briefTokens,omitempty"`
 	CarriedTokens int           `json:"carriedTokens,omitempty"`
 	Orphans       []AgentThread `json:"orphans,omitempty"`
+	// DigestSince is where the next escalation digest starts; it survives a fresh COS thread.
+	DigestSince time.Time `json:"digestSince,omitempty"`
 }
 
 // addReason keeps every pending restart reason, so a failover is never hidden by a later trigger.
@@ -82,9 +84,11 @@ type Agent struct {
 	Savings         jetstream.KeyValue
 	T3              func(context.Context) (agentT3, error)
 	Remote          func(ctx context.Context, host, command string, args []string, out any) error
+	js              jetstream.JetStream
 	project         string
 	shown           map[string]string
 	orphanCheck     time.Time
+	digestCheck     time.Time
 	hot, nextPoll   time.Time
 	saved           string
 }
@@ -123,6 +127,9 @@ func (a *Agent) Run(ctx context.Context, bus *Bus) {
 		}
 		if err == nil {
 			a.Savings, err = openKV(ctx, bus, savingsBucket)
+		}
+		if err == nil {
+			a.js, err = bus.JetStream()
 		}
 		if err == nil {
 			a.KV = kv
@@ -263,6 +270,11 @@ func (a *Agent) Step(ctx context.Context) error {
 		wake = append(wake, "User: "+m.Text)
 		st.Delivered = m.ID
 	}
+	if text, err := a.digestWake(ctx, &st, now); err != nil {
+		slog.Warn("escalation digest", "error", err)
+	} else if text != "" {
+		wake = append(wake, text)
+	}
 	busy := false
 	// Poll T3 every second while COS works or a wake is due, otherwise every 30 seconds.
 	if st.ThreadID != "" && (len(wake) > 0 || now.Before(a.hot) || !now.Before(a.nextPoll)) {
@@ -360,7 +372,7 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 		}
 	}
 	carried, oldBrief, replaced := st.CarriedTokens, st.BriefTokens, st.ThreadID != ""
-	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans}
+	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince}
 	st.BriefTokens = len(brief) / 4
 	if a.Savings != nil {
 		// Savings are best effort: a failed write must never fail the restart that already launched.

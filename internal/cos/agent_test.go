@@ -104,6 +104,7 @@ type agentTestEnv struct {
 	contextKV jetstream.KeyValue
 	memoryKV  jetstream.KeyValue
 	savingsKV jetstream.KeyValue
+	js        jetstream.JetStream
 	store     *Store
 	fake      *agentTestT3
 	remote    []agentTestRemote
@@ -142,6 +143,15 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 	e.contextKV = agentTestOpen(t, ctx, nodes, contextBucket)
 	e.memoryKV = agentTestOpen(t, ctx, nodes, memoryBucket)
 	e.savingsKV = agentTestOpen(t, ctx, nodes, savingsBucket)
+	js, err := nodes[0].JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.js = js
+	// The rules engine's escalation log, created the way the autopilot creates it.
+	if err := (&Autopilot{Host: "delta", js: js}).setup(ctx); err != nil {
+		t.Fatal(err)
+	}
 	return e
 }
 
@@ -169,7 +179,7 @@ func (e *agentTestEnv) reset(t *testing.T) {
 	e.fake = &agentTestT3{projection: `{}`}
 	e.remote = nil
 	e.skipTree = false
-	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV,
+	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV, js: e.js,
 		T3: func(context.Context) (agentT3, error) { return e.fake, nil },
 		Remote: func(_ context.Context, host, command string, args []string, out any) error {
 			e.remote = append(e.remote, agentTestRemote{host, command, args})
