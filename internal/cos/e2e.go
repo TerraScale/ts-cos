@@ -364,7 +364,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "cluster.members", Stream: "TS-810", Smoke: true, Run: checkMembers},
 		E2ECheck{ID: "cluster.jetstream", Stream: "TS-810", Smoke: true, Run: checkJetStream},
 		E2ECheck{ID: "cluster.leader", Stream: "TS-810", Smoke: true, Run: checkLeader},
-		// Restarting cos.service restarts its embedded NATS server too (covers failure.nats-restart).
+		// Restarting cos.service restarts its embedded NATS server too; failure.nats-restart checks that a client survives it.
 		E2ECheck{ID: "cluster.restart", Stream: "TS-810", Chaos: true, Run: checkRestartCatchUp},
 		E2ECheck{ID: "cluster.partition", Stream: "TS-810", Chaos: true, Run: checkPartition},
 		// After cluster.partition, so 60 s have passed since nodes.collector-stop and the alert is already there; never last, where the suite deadline may already be spent.
@@ -382,6 +382,8 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "failure.t3-schema-change", Stream: "TS-812", Run: checkT3Schema},
 		E2ECheck{ID: "failure.forgejo-5xx", Stream: "TS-812", Run: checkForgejo5xx},
 		E2ECheck{ID: "failure.t3-down", Stream: "TS-812", Run: checkT3Down},
+		E2ECheck{ID: "failure.nats-restart", Stream: "TS-810", Chaos: true, Run: checkNATSRestart},
+		E2ECheck{ID: "failure.sqlite-disk-full", Stream: "TS-810", Run: checkSQLiteDiskFull},
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
 		E2ECheck{ID: "memory.recall", Stream: "TS-828", Run: checkMemoryRecall},
 		// These change auth state (failures, lockout, logout, password), so each gets its own throwaway user.
