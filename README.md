@@ -341,6 +341,9 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   KV bucket (node, check, action, time) and a `cos-e2e` journal line on the target.
   `deploy.restarts` counts only automatic restarts with no matching `sigkill` record
   (allowance 0); deploy installs are reported, not counted.
+- Only one e2e run may perturb the cluster at a time: it holds the `lock` key in the
+  `cos_e2e` bucket (host, pid, time) before its first chaos check. A concurrent run
+  skips its chaos checks with the holder in the evidence; a lock older than 10 minutes is stale and taken over.
 - `--smoke` never runs chaos. COS runs `--smoke` every 10 minutes and the full
   suite hourly.
 - `cluster.*`: all three hosts answer micro PING; every JetStream stream is R3 with

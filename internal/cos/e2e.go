@@ -112,6 +112,9 @@ type E2EEnv struct {
 	run  func(ctx context.Context, host, script string) (string, error)
 	main func(ctx context.Context) (e2eMain, error)
 
+	// chaosLock takes the cluster-wide chaos lock; nil takes the real one. Replaceable in tests.
+	chaosLock func(ctx context.Context) (func(), error)
+
 	once       sync.Once
 	mainHead   e2eMain
 	mainErr    error
@@ -258,13 +261,22 @@ func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) 
 	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	report := E2EReport{StartedAt: time.Now().UTC(), Runner: env.cfg.LocalHost, Version: Version, Summary: map[string]int{"pass": 0, "fail": 0, "skip": 0}, Checks: []E2EResult{}}
+	chaos := &chaosLockRun{env: env}
+	defer chaos.close()
 	for _, c := range checks {
 		if smoke && (!c.Smoke || c.Chaos) || len(filter) > 0 && !slicesHasPrefix(filter, c.ID) || c.OnDemand && !slices.Contains(filter, c.ID) {
 			continue
 		}
 		start := time.Now()
 		r := E2EResult{ID: c.ID, Group: e2eGroup(c.ID), Stream: c.Stream, Status: "pass", Protected: slices.Contains(e2eProtected, e2eGroup(c.ID))}
-		evidence, err := c.Run(ctx, env)
+		var evidence string
+		var err error
+		if c.Chaos {
+			err = chaos.take(ctx)
+		}
+		if err == nil {
+			evidence, err = c.Run(ctx, env)
+		}
 		var skip e2eSkip
 		switch {
 		case errors.As(err, &skip):
