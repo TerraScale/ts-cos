@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	sourceRepo = "ssh://git@git.terrascale.tech/TerraScale/ts-cos.git"
-	cosModule  = "git.terrascale.tech/TerraScale/ts-cos"
+	sourceRepo = "ssh://git@github.com/TerraScale/ts-cos.git"
+	cosModule  = "github.com/TerraScale/ts-cos"
 )
 
 // busOps drives hosts through their cos.<host>.release.* endpoints.
