@@ -154,6 +154,18 @@ and marker-file instructions are retired; their existing product-code paths are
 inventoried for a separate removal change. Forgejo's server-side branch
 protections still apply.
 
+## Behavior files
+
+`behavior/` holds what COS says and how often it wakes: `brief.md` and `rules.md`
+(the agent brief), `wake.json` (wake budget) and `templates/*.tmpl` (chat lines
+such as `Updated: ...`). They ship in the binary as a fallback. The JetStream
+meta leader copies `behavior/` from main into the replicated `COS_BEHAVIOR` KV
+bucket within 10 seconds of a merge; every node hot-reloads it without a deploy.
+A bundle that fails validation (unknown file, bad JSON, out-of-range budget,
+template that does not render) is never published and is rejected on load; the
+node keeps its previous behavior. `cos behavior` shows the published version,
+any rejection and the version each node runs.
+
 ## Story and live data
 
 State uses `~/.local/share/cos/cos.db` with WAL and a 5-second busy timeout.

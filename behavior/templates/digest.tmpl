@@ -1,0 +1,3 @@
+Digest: {{len .Items}} item{{if ne (len .Items) 1}}s{{end}} since {{.Since.Format "15:04"}}
+{{range .Items}}- {{.Kind}}: {{.Text}}
+{{end}}

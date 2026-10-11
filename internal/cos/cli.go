@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -34,7 +36,13 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 		for _, k := range sortedCommandNames() {
 			commands = append(commands, localCommands[k].Usage)
 		}
+		for _, k := range slices.Sorted(maps.Keys(cliCommands)) {
+			commands = append(commands, cliCommands[k].Usage)
+		}
 		return output(w, map[string]any{"commands": commands})
+	}
+	if c, ok := cliCommands[command]; ok {
+		return c.Run(ctx, cfg, args, w)
 	}
 	if command == "prs" {
 		if len(args) != 0 {
@@ -320,6 +328,9 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	server := &http.Server{Handler: w.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	pollDone := make(chan struct{})
 	go func() { defer close(pollDone); w.Poll(ctx, cfg, bus) }()
+	behaviorDone := make(chan struct{})
+	go func() { defer close(behaviorDone); RunBehavior(ctx, cfg, bus, behaviors) }()
+	defer func() { cancel(); <-behaviorDone }()
 	go runTunnel(ctx)
 	for _, worker := range serveWorkers {
 		go worker(ctx, cfg, bus)

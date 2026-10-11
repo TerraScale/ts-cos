@@ -1,0 +1,2 @@
+{{if not .}}No self-changes today.{{else}}{{range .}}- {{.At.Format "15:04"}} {{.Summary}} · {{.Ticket}} · {{short .SHA}}{{if .Reverted}} (reverted){{end}}
+{{end}}{{end}}

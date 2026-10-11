@@ -1,0 +1,5 @@
+{
+  "maxWakesPerHour": 6,
+  "digestSeconds": 600,
+  "immediate": ["chat.message", "user.answer", "worker.needs_user", "request.pending"]
+}
