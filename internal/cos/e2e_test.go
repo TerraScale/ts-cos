@@ -235,6 +235,62 @@ func TestAllHealthy(t *testing.T) {
 	}
 }
 
+func TestPreSignalEvidence(t *testing.T) {
+	ok := "beta=ok delta=ok mariogk-dev=ok"
+	bad := "beta=ok delta=unreachable: timeout mariogk-dev=ok"
+	for _, tc := range []struct {
+		name     string
+		ok1, ok2 bool
+		ev1, ev2 string
+		skip     bool
+	}{
+		{"both polls ok", true, true, ok, ok, false},
+		{"second poll fails", true, false, ok, bad, true},
+		{"first poll fails", false, true, bad, ok, true},
+	} {
+		got, err := preSignalEvidence(tc.ok1, tc.ev1, tc.ok2, tc.ev2)
+		var skip e2eSkip
+		if errors.As(err, &skip) != tc.skip {
+			t.Fatalf("%s: err = %v, want skip %v", tc.name, err, tc.skip)
+		}
+		if tc.skip {
+			if !strings.Contains(err.Error(), "poll 1: "+tc.ev1) || !strings.Contains(err.Error(), "poll 2: "+tc.ev2) {
+				t.Errorf("%s: skip %q lacks both polls' status", tc.name, err)
+			}
+			continue
+		}
+		if want := "pre-signal health (2 polls, 5s apart): " + ok + "; " + ok; got != want {
+			t.Errorf("%s: evidence = %q, want %q", tc.name, got, want)
+		}
+	}
+}
+
+func TestRolloutHold(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name  string
+		r     Rollout
+		holds bool
+	}{
+		{"no record", Rollout{}, false},
+		{"gate active", Rollout{ID: "r1", Phase: phaseGate, Since: now.Add(-time.Hour)}, true},
+		{"install active", Rollout{ID: "r1", Phase: phaseInstall, Since: now}, true},
+		{"rollback active", Rollout{ID: "r1", Phase: phaseRollback, Since: now.Add(-time.Hour)}, true},
+		{"completed 30s ago", Rollout{ID: "r1", Phase: phaseCompleted, Since: now.Add(-30 * time.Second)}, true},
+		{"rolled back 119s ago", Rollout{ID: "r1", Phase: phaseRolledBack, Since: now.Add(-119 * time.Second)}, true},
+		{"completed 2m ago", Rollout{ID: "r1", Phase: phaseCompleted, Since: now.Add(-rolloutSettle)}, false},
+		{"rolled back long ago", Rollout{ID: "r1", Phase: phaseRolledBack, Since: now.Add(-time.Hour)}, false},
+	} {
+		reason := rolloutHold(tc.r, now)
+		if (reason != "") != tc.holds {
+			t.Errorf("%s: hold = %q, want holds %v", tc.name, reason, tc.holds)
+		}
+		if tc.holds && !strings.Contains(reason, "not perturbing") {
+			t.Errorf("%s: reason %q lacks 'not perturbing'", tc.name, reason)
+		}
+	}
+}
+
 func TestStreamSummary(t *testing.T) {
 	a := streamRow{line: "A", ok: true, lag: 3}
 	b := streamRow{line: "B", ok: true}

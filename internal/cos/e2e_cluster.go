@@ -394,6 +394,83 @@ func allHealthy(status map[string]string) (bool, string) {
 	return ok, strings.Join(parts, " ")
 }
 
+// hostStatus reads every host's health once and reports whether all are ok, with the per-host evidence.
+func (e *E2EEnv) hostStatus(ctx context.Context, bus *Bus) (bool, string) {
+	status := make(map[string]string, len(e2eHosts))
+	for _, h := range e2eHosts {
+		call, cancel := context.WithTimeout(ctx, 5*time.Second)
+		status[h] = nodeStatus(call, bus.conn, h)
+		cancel()
+	}
+	return allHealthy(status)
+}
+
+// rolloutSettle is how long after a rollout finishes its last gate still counts as fresh (TS-816).
+const rolloutSettle = 2 * time.Minute
+
+// rolloutHold returns why the last rollout stops a perturbation now, or "" when none does. A rollout
+// restarts nodes while it is active, and right after it ends the cluster may still be settling.
+func rolloutHold(r Rollout, now time.Time) string {
+	if r.ID == "" {
+		return ""
+	}
+	age := now.Sub(r.Since).Round(time.Second)
+	terminal := r.Phase == phaseCompleted || r.Phase == phaseRolledBack
+	if terminal && age >= rolloutSettle {
+		return ""
+	}
+	return fmt.Sprintf("rollout %s %s (%s ago), not perturbing", r.ID, r.Phase, age)
+}
+
+// noRollout skips the check while the last rollout is active or only just finished (TS-816).
+func (e *E2EEnv) noRollout(ctx context.Context, bus *Bus) error {
+	js, err := bus.JetStream()
+	if err != nil {
+		return err
+	}
+	kv, err := deployKV(ctx, js)
+	if err != nil {
+		return err
+	}
+	r, _, err := loadRollout(ctx, kv)
+	if err != nil {
+		return err
+	}
+	if reason := rolloutHold(r, time.Now()); reason != "" {
+		return e2eSkip(reason)
+	}
+	return nil
+}
+
+// preSignalEvidence decides the two pre-signal polls: every node must be ok at both, else skip with
+// both readings. A single good poll can land between two restarts, so one is not enough (TS-816).
+func preSignalEvidence(ok1 bool, ev1 string, ok2 bool, ev2 string) (string, error) {
+	if !ok1 || !ok2 {
+		return "", e2eSkip(fmt.Sprintf("JetStream not fully current on every node at both pre-signal polls, not perturbing: poll 1: %s; poll 2: %s",
+			e2eClip(ev1, 300), e2eClip(ev2, 300)))
+	}
+	return fmt.Sprintf("pre-signal health (2 polls, 5s apart): %s; %s", ev1, ev2), nil
+}
+
+// preSignal is the last look before a perturbation: no rollout, and every node current on two polls
+// 5 s apart. It returns the health evidence for the check's pass line.
+func (e *E2EEnv) preSignal(ctx context.Context, bus *Bus) (string, error) {
+	if err := e.noRollout(ctx, bus); err != nil {
+		return "", err
+	}
+	ok1, ev1 := e.hostStatus(ctx, bus)
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(5 * time.Second):
+	}
+	if err := e.noRollout(ctx, bus); err != nil {
+		return "", err
+	}
+	ok2, ev2 := e.hostStatus(ctx, bus)
+	return preSignalEvidence(ok1, ev1, ok2, ev2)
+}
+
 // allCurrent waits until every node reports JetStream current on its own, so a perturbation never
 // lands on a cluster still catching up from the last one (TS-816). It skips, not fails, on timeout.
 // Call it before choosing the target: a leader picked earlier can move while this waits.
@@ -401,13 +478,7 @@ func (e *E2EEnv) allCurrent(ctx context.Context, bus *Bus, step string) (time.Du
 	start := time.Now()
 	deadline := start.Add(120 * time.Second)
 	for {
-		status := make(map[string]string, len(e2eHosts))
-		for _, h := range e2eHosts {
-			call, cancel := context.WithTimeout(ctx, 5*time.Second)
-			status[h] = nodeStatus(call, bus.conn, h)
-			cancel()
-		}
-		ok, evidence := allHealthy(status)
+		ok, evidence := e.hostStatus(ctx, bus)
 		if ok {
 			return time.Since(start), nil
 		}
@@ -433,6 +504,9 @@ func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
+	if err := e.noRollout(ctx, bus); err != nil {
+		return "", err
+	}
 	gate, err := e.allCurrent(ctx, bus, "cluster.restart")
 	if err != nil {
 		return "", err
@@ -444,6 +518,10 @@ func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 	if _, _, err := waitCluster(ctx, bus.conn, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("cluster unhealthy before restart, not perturbing it: %w", err)
 	}
+	pre, err := e.preSignal(ctx, bus)
+	if err != nil {
+		return "", err
+	}
 	if err := e.chaos(ctx, bus, target, "cluster.restart", "restart"); err != nil {
 		return "", err
 	}
@@ -454,7 +532,7 @@ func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s restarted but did not catch up: %w", target, err)
 	}
-	return fmt.Sprintf("%s restarted and caught up in %s; %s; %s", target, took.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
+	return fmt.Sprintf("%s restarted and caught up in %s; %s; %s; %s", target, took.Round(100*time.Millisecond), summary, gateEvidence(gate), pre), nil
 }
 
 // e2eHeal removes every cos-e2e firewall rule; it is idempotent and also runs from a root timer.
@@ -503,6 +581,9 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
+	if err := e.noRollout(ctx, bus); err != nil {
+		return "", err
+	}
 	gate, err := e.allCurrent(ctx, bus, "cluster.partition")
 	if err != nil {
 		return "", err
@@ -543,6 +624,10 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 			}
 		}
 	}
+	pre, err := e.preSignal(ctx, bus)
+	if err != nil {
+		return "", err
+	}
 	if err := e.chaos(ctx, bus, target, "cluster.partition", "partition"); err != nil {
 		return "", err
 	}
@@ -581,6 +666,6 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 	if _, views, err := e.agreedLeader(ctx, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("split brain after healing %s: %w (views %v)", target, err, views)
 	}
-	return fmt.Sprintf("partitioned %s: %v served after %s (%s); %s; rejoined in %s (%s); one leader after heal; %s",
-		target, rest, tookSplit.Round(100*time.Millisecond), split, lead, tookHeal.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
+	return fmt.Sprintf("partitioned %s: %v served after %s (%s); %s; rejoined in %s (%s); one leader after heal; %s; %s",
+		target, rest, tookSplit.Round(100*time.Millisecond), split, lead, tookHeal.Round(100*time.Millisecond), summary, gateEvidence(gate), pre), nil
 }

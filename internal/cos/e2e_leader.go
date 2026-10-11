@@ -118,6 +118,9 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 			bus.Close()
 		}
 	}()
+	if err := e.noRollout(ctx, bus); err != nil {
+		return "", err
+	}
 	// shortcut: a fixed settle of one lease period after the earlier chaos checks; without it a kill
 	// right after the partition heal took over 30 s to hand over. Replace with a JetStream meta-health
 	// probe if TS-810 exposes one.
@@ -138,6 +141,10 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	revision, err := leaseRevision(ctx, bus)
+	if err != nil {
+		return "", err
+	}
+	pre, err := e.preSignal(ctx, bus)
 	if err != nil {
 		return "", err
 	}
@@ -197,8 +204,8 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 	if _, views, err := e.agreedLeader(ctx, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("after the leader kill: %w (views %v)", err, views)
 	}
-	return fmt.Sprintf("killed leader %s; %s %s in %s; cluster recovered %s later (%s); %s",
-		leader, next, how, took.Round(100*time.Millisecond), rejoin.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
+	return fmt.Sprintf("killed leader %s; %s %s in %s; cluster recovered %s later (%s); %s; %s",
+		leader, next, how, took.Round(100*time.Millisecond), rejoin.Round(100*time.Millisecond), summary, gateEvidence(gate), pre), nil
 }
 
 // reconnect waits for the runner's restarted node to accept connections again.
@@ -256,6 +263,9 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 			bus.Close()
 		}
 	}()
+	if err := e.noRollout(ctx, bus); err != nil {
+		return "", err
+	}
 	gate, err := e.allCurrent(ctx, bus, "cluster.leader-freeze")
 	if err != nil {
 		return "", err
@@ -264,6 +274,10 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", fmt.Errorf("cluster unhealthy before freezing the leader, not perturbing it: %w", err)
 	}
 	leader, err := leaderOf(ctx, bus)
+	if err != nil {
+		return "", err
+	}
+	pre, err := e.preSignal(ctx, bus)
 	if err != nil {
 		return "", err
 	}
@@ -332,8 +346,8 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 	} else if n > 0 {
 		overlap = fmt.Sprintf("%d heartbeat(s) from it after resume (overlap)", n)
 	}
-	return fmt.Sprintf("froze leader %s for %s; %s took over after %s; resumed %s named %s within %s; %s; cluster caught up %s after resume (%s); %s",
-		leader, e2eFreeze, next, took.Round(100*time.Millisecond), leader, next, stepDown.Round(10*time.Millisecond), overlap, caughtUp.Round(100*time.Millisecond), summary, gateEvidence(gate)), nil
+	return fmt.Sprintf("froze leader %s for %s; %s took over after %s; resumed %s named %s within %s; %s; cluster caught up %s after resume (%s); %s; %s",
+		leader, e2eFreeze, next, took.Round(100*time.Millisecond), leader, next, stepDown.Round(10*time.Millisecond), overlap, caughtUp.Round(100*time.Millisecond), summary, gateEvidence(gate), pre), nil
 }
 
 // beatsSince counts autopilot heartbeats host logged after since (singleton work that should have stopped).
