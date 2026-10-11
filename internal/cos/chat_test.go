@@ -513,7 +513,7 @@ func TestRenderMarkdownLinkSchemes(t *testing.T) {
 	})
 
 	safeCases := []struct{ name, markdown, want string }{
-		{"https link", "[ok](https://git.terrascale.tech/TerraScale/ts-cos/pulls/8)", `href="https://git.terrascale.tech/TerraScale/ts-cos/pulls/8"`},
+		{"https link", "[ok](https://github.com/TerraScale/ts-cos/pulls/8)", `href="https://github.com/TerraScale/ts-cos/pulls/8"`},
 		{"mailto link", "[mail](mailto:a@b.c)", `href="mailto:a@b.c"`},
 		{"anchor link", "[anchor](#inbox)", `href="#inbox"`},
 		{"root relative link", "[rel](/status)", `href="/status"`},

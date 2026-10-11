@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.terrascale.tech/TerraScale/ts-cos/behavior"
+	"github.com/TerraScale/ts-cos/behavior"
 )
 
 // freshPolicy parses the embedded models.json anew, so a test can break its own copy.
