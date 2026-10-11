@@ -73,6 +73,9 @@ func TestChatSSEHeaderFollowsState(t *testing.T) {
 	if inboxPane := readEvent(); !strings.Contains(inboxPane, `id="inbox"`) {
 		t.Fatal(inboxPane)
 	}
+	if threads := readEvent(); !strings.Contains(threads, `id="thread-panel"`) {
+		t.Fatal(threads)
+	}
 	if messages := readEvent(); !strings.Contains(messages, `<div id="messages"`) {
 		t.Fatal(messages)
 	}

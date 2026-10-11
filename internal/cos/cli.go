@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -117,7 +118,22 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	if err := bus.Call(ctx, host, command, args[1:], &v); err != nil {
 		return err
 	}
+	if tab := os.Getenv("COS_TAB"); command == "launch" && tab != "" {
+		if err := tagLaunch(ctx, bus, host, tab, v); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: launched thread is not tagged for its chat tab:", err)
+		}
+	}
 	return output(w, v)
+}
+
+// tagLaunch tags the thread a launch returned, so the tab's Threads panel lists it.
+func tagLaunch(ctx context.Context, bus *Bus, host, tab string, out any) error {
+	launched, _ := out.(map[string]any)
+	id, _ := launched["threadId"].(string)
+	if id == "" {
+		return errors.New("launch returned no thread ID")
+	}
+	return TagThread(ctx, bus, ChatTag{ThreadID: id, Host: host, Tab: tab, At: time.Now().UTC()})
 }
 func sortedCommandNames() []string {
 	m := map[string]any{}

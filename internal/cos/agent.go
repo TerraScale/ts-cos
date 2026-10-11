@@ -486,6 +486,10 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 	if id == "" {
 		return errors.New("T3 launch returned no COS thread")
 	}
+	// The tag is what the panel and the launch tagging read: a failed write must never fail the restart that launched.
+	if err := a.Chat.PutTag(ctx, ChatTag{ThreadID: id, Host: a.Host, Tab: a.Tab.ID, COS: true, At: now}); err != nil {
+		slog.Warn("tag COS thread", "error", err)
+	}
 	if st.ThreadID != "" {
 		// A thread that could not be deleted (still running, T3 error) is retried with the orphans.
 		if res, err := c.CloseTree(ctx, st.ThreadID, true); err != nil || len(res.Skipped) > 0 {
@@ -537,7 +541,7 @@ func (a *Agent) ensureProject(ctx context.Context, c agentT3) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(CurrentBehavior().AgentBrief()), 0600); err != nil {
 		return "", err
 	}
-	wrapper := fmt.Sprintf("#!/bin/sh\nHOME=%s exec %s \"$@\"\n", shellQuote(a.Home), shellQuote(a.Exe))
+	wrapper := fmt.Sprintf("#!/bin/sh\n# COS_TAB names the chat tab whose COS runs this wrapper. It is identity, not a switch.\nCOS_TAB=%s HOME=%s exec %s \"$@\"\n", shellQuote(a.Tab.ID), shellQuote(a.Home), shellQuote(a.Exe))
 	if err := os.WriteFile(filepath.Join(dir, "cos"), []byte(wrapper), 0700); err != nil {
 		return "", err
 	}

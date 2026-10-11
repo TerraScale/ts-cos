@@ -213,7 +213,8 @@ func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
 	h := headerOf(v)
 	b, ok := w.homeBoard(r.Context())
 	nodes, nodesOK := w.homeNodes(r.Context())
-	if err := chatPage(h, w.kpis(h), v, openTabs(w.Chat.Tabs()), tab, w.Chat.Entries(tab.ID), b, ok, nodes, nodesOK, r.URL.Query().Get("notice")).Render(r.Context(), rw); err != nil {
+	threads := tabThreads(v.Live, w.Chat.Tags(tab.ID))
+	if err := chatPage(h, w.kpis(h), v, openTabs(w.Chat.Tabs()), tab, w.Chat.Entries(tab.ID), threads, b, ok, nodes, nodesOK, r.URL.Query().Get("notice")).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render chat", err)
 	}
 }
@@ -287,7 +288,10 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		if err := patchElements(ctx, rw, workPane(b, ok)); err != nil {
 			return err
 		}
-		return patchElements(ctx, rw, inbox(v))
+		if err := patchElements(ctx, rw, inbox(v)); err != nil {
+			return err
+		}
+		return patchElements(ctx, rw, threadPanel(tabThreads(v.Live, w.Chat.Tags(tab.ID))))
 	}
 	// tabStrip repaints the tab strip; the current tab's name may have changed meanwhile.
 	tabStrip := func() error {
@@ -331,6 +335,12 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 					return err
 				}
 				if err := closedNotice(); err != nil {
+					return err
+				}
+				continue
+			}
+			if strings.HasPrefix(key, chatTagPrefix) {
+				if err := patchElements(ctx, rw, threadPanel(tabThreads(w.state(ctx).Live, w.Chat.Tags(tab.ID)))); err != nil {
 					return err
 				}
 				continue
