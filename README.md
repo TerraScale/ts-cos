@@ -519,6 +519,8 @@ Answering emits a `user.answer` event on `cos.events.>`.
 - `cos memory`: typed entries. Recall returns pinned entries, then BM25/FTS5
   matches, then recent ones, under a 1,500-token cap. Shared context files are
   read as entries.
+- `BuildDigest`: a capped 4 KiB wake digest with dedup, coalescing, and priority
+  ordering. Wired into the COS agent in slice 2.
 
 ## TS-769 slices
 
