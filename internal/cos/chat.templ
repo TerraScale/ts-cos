@@ -87,7 +87,7 @@ templ workPane(b workBoard, ok bool) {
 	if ok {
 		@workSummary(b)
 	} else {
-		@skeletonPane("pane-work", "Work", "Work board unavailable")
+		@skeletonPane("pane-work", "Work queue", "Work board unavailable")
 	}
 }
 
@@ -115,7 +115,7 @@ templ nodesSummary(cards []NodeCard, ok bool) {
 // workSummary shows the stage counts beside the chat; the full table stays on /work.
 templ workSummary(b workBoard) {
 	<section id="pane-work" class="pane panel" aria-labelledby="pane-work-heading">
-		<header class="panel-head"><h2 id="pane-work-heading">Work <span class="badge badge-accent">{ integer(b.Total) }</span></h2></header>
+		<header class="panel-head"><h2 id="pane-work-heading">Work queue <span class="badge badge-accent">{ integer(b.Total) }</span></h2></header>
 		if b.Total == 0 {
 			<p class="empty">No work yet.</p>
 		} else {

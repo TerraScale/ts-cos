@@ -424,7 +424,7 @@ func workPane(b workBoard, ok bool) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = skeletonPane("pane-work", "Work", "Work board unavailable").Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = skeletonPane("pane-work", "Work queue", "Work board unavailable").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -600,14 +600,14 @@ func workSummary(b workBoard) templ.Component {
 			templ_7745c5c3_Var21 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<section id=\"pane-work\" class=\"pane panel\" aria-labelledby=\"pane-work-heading\"><header class=\"panel-head\"><h2 id=\"pane-work-heading\">Work <span class=\"badge badge-accent\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<section id=\"pane-work\" class=\"pane panel\" aria-labelledby=\"pane-work-heading\"><header class=\"panel-head\"><h2 id=\"pane-work-heading\">Work queue <span class=\"badge badge-accent\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(integer(b.Total))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 118, Col: 112}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/chat.templ`, Line: 118, Col: 118}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
