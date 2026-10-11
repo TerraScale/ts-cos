@@ -49,15 +49,24 @@ var dummyHash = sync.OnceValue(func() []byte {
 	return hash
 })
 
+// authUser is the "uid.<ULID>" record. Its Bcrypt never leaves the server, never goes into a User or a session.
 type authUser struct {
-	Bcrypt string `json:"bcrypt"`
+	Name       string    `json:"name"`
+	Role       string    `json:"role"`
+	Bcrypt     string    `json:"bcrypt"`
+	DisabledAt time.Time `json:"disabledAt,omitzero"` // when an admin disabled the account; zero means active
+	Created    time.Time `json:"created"`
+}
+
+// sessionRecord is the value stored under each session key.
+type sessionRecord struct {
+	At   string `json:"at"`
+	User User   `json:"user"`
 }
 
 type lockoutCount struct {
 	Failures int `json:"failures"`
 }
-
-type authUserKey struct{}
 
 type Auth struct {
 	home string
@@ -79,8 +88,8 @@ func NewAuth(home string, js jetstream.JetStream) *Auth {
 	return a
 }
 
-// Start waits for cluster quorum, creates the buckets and seeds
-// ~/.config/cos/admin.json once; a user already in KV is never overwritten.
+// Start waits for cluster quorum, creates the buckets and bootstraps the first admin from
+// ~/.config/cos/admin.json on an empty cluster.
 func (a *Auth) Start(ctx context.Context) {
 	for {
 		users, sessions, lockouts, err := a.open(ctx)
@@ -133,12 +142,76 @@ func (a *Auth) seed(ctx context.Context, users jetstream.KeyValue) {
 		slog.Error("COS admin.json needs a valid user and bcrypt hash; not seeded")
 		return
 	}
-	value, _ := json.Marshal(authUser{Bcrypt: admin.Bcrypt})
-	if _, err := users.Create(ctx, "user."+admin.User, value); err == nil {
-		slog.Info("COS admin user seeded from admin.json", "user", admin.User)
-	} else if !errors.Is(err, jetstream.ErrKeyExists) {
-		slog.Error("COS admin user seeding failed", "error", err)
+	// Leader reads, and "bootstrapped" is written last: a crash part way converges on the next start,
+	// and a deleted first admin is never resurrected.
+	if _, ok, err := firstAdmin(ctx, a.nc); err != nil || ok {
+		if err != nil {
+			slog.Error("COS first admin bootstrap failed", "error", err)
+		}
+		return
 	}
+	id, err := a.adminID(ctx, users, admin.User)
+	if err != nil {
+		slog.Error("COS first admin bootstrap failed", "error", err)
+		return
+	}
+	legacyKey := "user." + admin.User
+	hash := admin.Bcrypt
+	// The one-time migration of the pre-TS-831 single login: keep a password changed on the old dashboard.
+	if value, _, found, err := leaderGet(ctx, a.nc, authBucket, legacyKey); err == nil && found {
+		var legacy authUser
+		if json.Unmarshal(value, &legacy) == nil {
+			if _, costErr := bcrypt.Cost([]byte(legacy.Bcrypt)); costErr == nil {
+				hash = legacy.Bcrypt
+			}
+		}
+	}
+	value, _ := json.Marshal(authUser{Name: admin.User, Role: roleAdmin, Bcrypt: hash, Created: time.Now().UTC()})
+	if _, err := users.Create(ctx, "uid."+id, value); err == nil {
+		slog.Info("COS first admin bootstrapped", "user", admin.User)
+	} else if !errors.Is(err, jetstream.ErrKeyExists) { // a racing node wrote the same record
+		slog.Error("COS first admin bootstrap failed", "error", err)
+		return
+	}
+	if _, err := users.Put(ctx, "bootstrapped", []byte(id)); err != nil {
+		slog.Error("COS first admin bootstrap failed", "error", err)
+		return
+	}
+	_ = users.Delete(ctx, legacyKey)
+}
+
+// firstAdmin is the ULID in "bootstrapped", read through the stream leader; ok is false before the bootstrap.
+func firstAdmin(ctx context.Context, nc *nats.Conn) (id string, ok bool, err error) {
+	value, _, found, err := leaderGet(ctx, nc, authBucket, "bootstrapped")
+	if err != nil || !found {
+		return "", false, err
+	}
+	if !ulidPattern.Match(value) {
+		return "", false, errors.New("bootstrapped marker is not a ULID")
+	}
+	return string(value), true, nil
+}
+
+// adminID returns the ID of the admin's login name, creating the name on the first bootstrap.
+func (a *Auth) adminID(ctx context.Context, users jetstream.KeyValue, name string) (string, error) {
+	value, _, found, err := leaderGet(ctx, a.nc, authBucket, "name."+name)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		id := newULID()
+		if _, err := users.Create(ctx, "name."+name, []byte(id)); err == nil {
+			value = []byte(id)
+		} else if !errors.Is(err, jetstream.ErrKeyExists) {
+			return "", err
+		} else if value, _, found, err = leaderGet(ctx, a.nc, authBucket, "name."+name); err != nil || !found { // another node created it first
+			return "", errors.Join(err, errors.New("admin login name vanished during bootstrap"))
+		}
+	}
+	if !ulidPattern.Match(value) {
+		return "", errors.New("admin login name index is not a ULID")
+	}
+	return string(value), nil
 }
 
 func (a *Auth) kv() (jetstream.KeyValue, jetstream.KeyValue, jetstream.KeyValue) {
@@ -184,8 +257,8 @@ func (a *Auth) require(next http.Handler) http.Handler {
 			http.Error(rw, "COS is starting; retry in a moment", http.StatusServiceUnavailable)
 			return
 		}
-		user := a.sessionUser(r)
-		if user == "" {
+		u, ok := a.sessionUser(r)
+		if !ok {
 			if r.Method == http.MethodGet && r.Header.Get("Datastar-Request") == "" && strings.Contains(r.Header.Get("Accept"), "text/html") {
 				http.Redirect(rw, r, "/login", http.StatusSeeOther)
 				return
@@ -193,41 +266,43 @@ func (a *Auth) require(next http.Handler) http.Handler {
 			http.Error(rw, "Sign in at /login", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(rw, r.WithContext(context.WithValue(r.Context(), authUserKey{}, user)))
+		next.ServeHTTP(rw, r.WithContext(WithUser(r.Context(), u)))
 	})
 }
 
-// sessionUser returns the user of a valid session cookie ("<user>.<token>").
-func (a *Auth) sessionUser(r *http.Request) string {
+// sessionUser returns the user of a valid session cookie ("<ULID>.<token>").
+func (a *Auth) sessionUser(r *http.Request) (User, bool) {
 	_, sessions, _ := a.kv()
 	cookie, err := r.Cookie(sessionCookie)
 	if sessions == nil || err != nil {
-		return ""
+		return User{}, false
 	}
-	user, token, ok := strings.Cut(cookie.Value, ".")
-	key, valid := sessionKey(user, token)
+	id, token, ok := strings.Cut(cookie.Value, ".")
+	key, valid := sessionKey(id, token)
 	if !ok || !valid {
-		return ""
+		return User{}, false
 	}
 	// The leader decides validity so logout and password change revoke at once; a local hit
 	// still signs in while the session stream re-elects; a local miss (fresh session on a
 	// lagging node, or a forged cookie) is capped per address before it may reach the leader.
-	_, err = sessions.Get(r.Context(), key)
-	local := err == nil
-	if !local && !a.limit.allow("session-miss:"+clientIP(r), sessionMissPerMinute) {
-		return ""
+	local, localErr := sessions.Get(r.Context(), key)
+	if localErr != nil && !a.limit.allow("session-miss:"+clientIP(r), sessionMissPerMinute) {
+		return User{}, false
 	}
-	_, _, found, err := leaderGet(r.Context(), a.nc, sessionBucket, key)
+	value, _, found, err := leaderGet(r.Context(), a.nc, sessionBucket, key)
 	if err != nil {
-		if !local {
-			return ""
+		if localErr != nil {
+			return User{}, false
 		}
-		return user
+		value = local.Value()
+	} else if !found {
+		return User{}, false
 	}
-	if !found {
-		return ""
+	var rec sessionRecord
+	if json.Unmarshal(value, &rec) != nil || rec.User.ID != id {
+		return User{}, false
 	}
-	return user
+	return rec.User, true
 }
 
 // untilRevoked retries op every 100 ms for up to 5 seconds and reports whether it succeeded.
@@ -242,24 +317,47 @@ func untilRevoked(op func() bool) bool {
 	}
 }
 
-func sessionKey(user, token string) (string, bool) {
+// sessionKey is "<ULID>.<sha256 of the raw token>", so the store never holds a usable token.
+func sessionKey(id, token string) (string, bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil || len(raw) != 32 || !authUserPattern.MatchString(user) {
+	if err != nil || len(raw) != 32 || !ulidPattern.MatchString(id) {
 		return "", false
 	}
 	sum := sha256.Sum256(raw)
-	return user + "." + hex.EncodeToString(sum[:]), true
+	return id + "." + hex.EncodeToString(sum[:]), true
 }
 
-func (a *Auth) startSession(rw http.ResponseWriter, r *http.Request, sessions jetstream.KeyValue, user string) error {
+func sessionValue(u User) []byte {
+	value, _ := json.Marshal(sessionRecord{At: time.Now().UTC().Format(time.RFC3339), User: u})
+	return value
+}
+
+// revokeSessions deletes every session of user id on every node and reports whether all are gone.
+func revokeSessions(ctx context.Context, sessions jetstream.KeyValue, id string) bool {
+	return untilRevoked(func() bool {
+		keys, err := sessions.ListKeysFiltered(ctx, id+".*")
+		if err != nil {
+			return false
+		}
+		ok := true
+		for key := range keys.Keys() {
+			if sessions.Delete(ctx, key) != nil {
+				ok = false
+			}
+		}
+		return ok
+	})
+}
+
+func (a *Auth) startSession(rw http.ResponseWriter, r *http.Request, sessions jetstream.KeyValue, u User) error {
 	raw := make([]byte, 32)
 	rand.Read(raw)
 	token := base64.RawURLEncoding.EncodeToString(raw)
-	key, _ := sessionKey(user, token)
-	if _, err := sessions.Put(r.Context(), key, []byte(time.Now().UTC().Format(time.RFC3339))); err != nil {
+	key, _ := sessionKey(u.ID, token)
+	if _, err := sessions.Put(r.Context(), key, sessionValue(u)); err != nil {
 		return err
 	}
-	setSessionCookie(rw, r, user+"."+token, int(sessionTTL.Seconds()))
+	setSessionCookie(rw, r, u.ID+"."+token, int(sessionTTL.Seconds()))
 	return nil
 }
 
@@ -272,13 +370,12 @@ func (a *Auth) ProbeSession(ctx context.Context) (cookie string, end func(), err
 	}
 	raw := make([]byte, 32)
 	rand.Read(raw)
-	cookie = "cos-probe." + base64.RawURLEncoding.EncodeToString(raw)
-	_, token, _ := strings.Cut(cookie, ".")
-	key, _ := sessionKey("cos-probe", token)
-	if _, err := sessions.Put(ctx, key, []byte(time.Now().UTC().Format(time.RFC3339))); err != nil {
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	key, _ := sessionKey(probeUserID, token)
+	if _, err := sessions.Put(ctx, key, sessionValue(probeUser)); err != nil {
 		return "", nil, err
 	}
-	return cookie, func() { _ = sessions.Delete(context.Background(), key) }, nil
+	return probeUserID + "." + token, func() { _ = sessions.Delete(context.Background(), key) }, nil
 }
 
 func setSessionCookie(rw http.ResponseWriter, r *http.Request, value string, maxAge int) {
@@ -292,13 +389,12 @@ func (a *Auth) login(rw http.ResponseWriter, r *http.Request) {
 		renderAuth(rw, r, http.StatusServiceUnavailable, loginPage("COS is starting. Try again in a minute."))
 		return
 	}
-	user := r.PostFormValue("user")
-	_, notice, status := a.verify(r.Context(), lockouts, user, r.PostFormValue("password"), clientIP(r))
+	u, _, notice, status := a.verify(r.Context(), lockouts, r.PostFormValue("user"), r.PostFormValue("password"), clientIP(r))
 	if notice != "" {
 		renderAuth(rw, r, status, loginPage(notice))
 		return
 	}
-	if err := a.startSession(rw, r, sessions, user); err != nil {
+	if err := a.startSession(rw, r, sessions, u); err != nil {
 		renderAuth(rw, r, http.StatusServiceUnavailable, loginPage("Could not start a session. Try again."))
 		return
 	}
@@ -307,53 +403,67 @@ func (a *Auth) login(rw http.ResponseWriter, r *http.Request) {
 
 // verify checks a password against the account and client-address lockouts; notice is empty on success.
 // Both locks are checked before the password, so the right password is refused while locked.
-func (a *Auth) verify(ctx context.Context, lockouts jetstream.KeyValue, user, password, ip string) (uint64, string, int) {
+func (a *Auth) verify(ctx context.Context, lockouts jetstream.KeyValue, name, password, ip string) (User, uint64, string, int) {
 	const wrong = "Wrong username or password."
 	const locked = "Too many failed attempts. Try again in 15 minutes."
 	const unreadable = "COS cannot read its users right now. Try again."
 	ipKey := lockoutIPKey(ip)
 	keys := []string{ipKey}
-	valid := authUserPattern.MatchString(user)
+	valid := authUserPattern.MatchString(name)
 	if valid {
-		keys = append(keys, "acct."+user)
+		keys = append(keys, "acct."+name)
 	}
 	for _, key := range keys {
 		failures, err := a.failures(ctx, key)
 		if err != nil {
-			return 0, unreadable, http.StatusServiceUnavailable
+			return User{}, 0, unreadable, http.StatusServiceUnavailable
 		}
 		if failures >= lockAfter {
-			return 0, locked, http.StatusTooManyRequests
+			return User{}, 0, locked, http.StatusTooManyRequests
 		}
 	}
 	if !valid {
 		_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password))
 		a.fail(ctx, lockouts, ipKey)
-		return 0, wrong, http.StatusUnauthorized
+		return User{}, 0, wrong, http.StatusUnauthorized
 	}
-	acctKey := "acct." + user
-	value, revision, found, err := leaderGet(ctx, a.nc, authBucket, "user."+user)
-	var stored authUser
-	if err == nil && found {
-		err = json.Unmarshal(value, &stored)
-	}
+	acctKey := "acct." + name
+	u, rec, revision, found, err := a.account(ctx, name)
 	if err != nil {
 		_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password))
-		return 0, unreadable, http.StatusServiceUnavailable
+		return User{}, 0, unreadable, http.StatusServiceUnavailable
 	}
-	if !found {
+	// Unknown, disabled and invite-pending accounts fail exactly like a wrong password.
+	if !found || !rec.DisabledAt.IsZero() || rec.Bcrypt == "" {
 		_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password))
 		a.fail(ctx, lockouts, ipKey)
-		return 0, wrong, http.StatusUnauthorized
+		return User{}, 0, wrong, http.StatusUnauthorized
 	}
-	if len(password) > passwordMax || bcrypt.CompareHashAndPassword([]byte(stored.Bcrypt), []byte(password)) != nil {
+	if len(password) > passwordMax || bcrypt.CompareHashAndPassword([]byte(rec.Bcrypt), []byte(password)) != nil {
 		a.fail(ctx, lockouts, ipKey)
 		a.fail(ctx, lockouts, acctKey)
-		return 0, wrong, http.StatusUnauthorized
+		return User{}, 0, wrong, http.StatusUnauthorized
 	}
 	_ = lockouts.Delete(ctx, ipKey)
 	_ = lockouts.Delete(ctx, acctKey)
-	return revision, "", http.StatusOK
+	return u, revision, "", http.StatusOK
+}
+
+// account reads a login name's record through the stream leader. found is false for an unknown
+// name, a malformed index or a missing record; revision is the record's, for a CAS update.
+func (a *Auth) account(ctx context.Context, name string) (u User, rec authUser, revision uint64, found bool, err error) {
+	index, _, found, err := leaderGet(ctx, a.nc, authBucket, "name."+name)
+	if err != nil || !found || !ulidPattern.Match(index) {
+		return User{}, authUser{}, 0, false, err
+	}
+	value, revision, found, err := leaderGet(ctx, a.nc, authBucket, "uid."+string(index))
+	if err != nil || !found {
+		return User{}, authUser{}, 0, false, err
+	}
+	if err := json.Unmarshal(value, &rec); err != nil {
+		return User{}, authUser{}, 0, false, err
+	}
+	return User{ID: string(index), Name: name, Role: rec.Role}, rec, revision, true, nil
 }
 
 // lockoutIPKey keeps every client address a valid KV key (IPv6 colons and zones, empty input).
@@ -467,9 +577,9 @@ func leaderGet(ctx context.Context, nc *nats.Conn, bucket, key string) (value []
 func (a *Auth) logout(rw http.ResponseWriter, r *http.Request) {
 	_, sessions, _ := a.kv()
 	if cookie, err := r.Cookie(sessionCookie); err == nil && sessions != nil {
-		user, token, _ := strings.Cut(cookie.Value, ".")
-		if key, ok := sessionKey(user, token); ok && !untilRevoked(func() bool { return sessions.Delete(r.Context(), key) == nil }) {
-			slog.Error("COS session revocation failed", "user", user)
+		id, token, _ := strings.Cut(cookie.Value, ".")
+		if key, ok := sessionKey(id, token); ok && !untilRevoked(func() bool { return sessions.Delete(r.Context(), key) == nil }) {
+			slog.Error("COS session revocation failed", "user", id)
 		}
 	}
 	setSessionCookie(rw, r, "", -1)
@@ -479,7 +589,11 @@ func (a *Auth) logout(rw http.ResponseWriter, r *http.Request) {
 // changePassword replaces the bcrypt hash in KV, signs out every other session of
 // the user on every node, and keeps this browser signed in.
 func (a *Auth) changePassword(rw http.ResponseWriter, r *http.Request) {
-	user := r.Context().Value(authUserKey{}).(string)
+	u, err := UserFrom(r.Context())
+	if err != nil {
+		http.Error(rw, "Sign in at /login", http.StatusUnauthorized)
+		return
+	}
 	next := r.PostFormValue("new")
 	if next != r.PostFormValue("confirm") {
 		renderAuth(rw, r, http.StatusBadRequest, passwordPage("The new passwords do not match."))
@@ -490,7 +604,10 @@ func (a *Auth) changePassword(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	users, sessions, lockouts := a.kv()
-	revision, notice, status := a.verify(r.Context(), lockouts, user, r.PostFormValue("current"), clientIP(r))
+	verified, revision, notice, status := a.verify(r.Context(), lockouts, u.Name, r.PostFormValue("current"), clientIP(r))
+	if notice == "" && verified.ID != u.ID {
+		notice, status = "The current password is wrong.", http.StatusUnauthorized
+	}
 	if notice != "" {
 		if status == http.StatusUnauthorized {
 			notice = "The current password is wrong."
@@ -503,30 +620,24 @@ func (a *Auth) changePassword(rw http.ResponseWriter, r *http.Request) {
 		renderAuth(rw, r, http.StatusBadRequest, passwordPage("That password cannot be used."))
 		return
 	}
-	value, _ := json.Marshal(authUser{Bcrypt: string(hash)})
-	if _, err := users.Update(r.Context(), "user."+user, value, revision); err != nil {
+	// Keep the record's other fields; the CAS on revision still fails if it changed since verify.
+	got, rec, current, found, err := a.account(r.Context(), u.Name)
+	if err != nil || !found || got.ID != u.ID || current != revision {
 		renderAuth(rw, r, http.StatusConflict, passwordPage("The password changed elsewhere meanwhile. Reload and try again."))
 		return
 	}
-	revoked := untilRevoked(func() bool {
-		keys, err := sessions.ListKeysFiltered(r.Context(), user+".*")
-		if err != nil {
-			return false
-		}
-		ok := true
-		for key := range keys.Keys() {
-			if sessions.Delete(r.Context(), key) != nil {
-				ok = false
-			}
-		}
-		return ok
-	})
-	if !revoked {
-		slog.Error("COS session revocation failed", "user", user)
+	rec.Bcrypt = string(hash)
+	value, _ := json.Marshal(rec)
+	if _, err := users.Update(r.Context(), "uid."+u.ID, value, revision); err != nil {
+		renderAuth(rw, r, http.StatusConflict, passwordPage("The password changed elsewhere meanwhile. Reload and try again."))
+		return
+	}
+	if !revokeSessions(r.Context(), sessions, u.ID) {
+		slog.Error("COS session revocation failed", "user", u.Name)
 		renderAuth(rw, r, http.StatusServiceUnavailable, passwordPage("Password changed, but other sessions could not be signed out. Try again in a minute."))
 		return
 	}
-	if err := a.startSession(rw, r, sessions, user); err != nil {
+	if err := a.startSession(rw, r, sessions, u); err != nil {
 		renderAuth(rw, r, http.StatusOK, passwordPage("Password changed. Sign in again."))
 		return
 	}
