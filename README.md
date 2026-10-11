@@ -140,8 +140,9 @@ back on a given build. A host never activates a build its watchdog reverted; onl
 
 ### Rolling deploys (TS-818)
 
-The leader checks main every minute. When main's head has a green combined CI
-status and some host does not run it, and every host answers healthy with none
+The leader checks main every minute. When the newest main commit with a green
+combined CI status (it walks back from the head, which is usually still in CI
+during a merge train, and never past the build the cluster runs) and some host does not run it, and every host answers healthy with none
 on trial, it builds that commit once (git checkout in `~/.local/share/cos/src`,
 `go build -trimpath`, build time stamped) into the three-replica `cos_builds`
 object store (newest three kept) and rolls it out one host at a time:

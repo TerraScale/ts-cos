@@ -16,6 +16,8 @@ rm -f "$dir/trial" "$dir/trial.next" "$dir/reverted"
 ln -sfn "builds/$revision" "$dir/good"
 ln -sfn "builds/$revision" "$dir/current"
 ln -sfn "$dir/current/cos" "$HOME/.local/bin/cos"
+# Keep 3 builds: this one and the two newest others.
+ls -1t "$dir/builds" | grep -vx "$revision" | tail -n +3 | while read -r b; do rm -rf "$dir/builds/$b"; done
 install -Dm644 deploy/cos.service "$HOME/.config/systemd/user/cos.service"
 systemctl --user daemon-reload
 systemctl --user enable cos.service

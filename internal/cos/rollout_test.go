@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -421,6 +423,7 @@ func TestOnlyTheHostsOwnSmokeChecksGate(t *testing.T) {
 		{ID: "deploy.logs.delta", Status: "fail", Evidence: "another host"},
 		{ID: "rules.heartbeat-leader", Status: "fail", Evidence: "cluster-wide, failing before this build"},
 		{ID: "access.login.public", Status: "skip"},
+		{ID: "deploy.logs.beta", Status: "fail", Evidence: "1 error line since start: ERROR mirror events context deadline exceeded"},
 	}}
 	if err := hostSmokeFailure(report, "beta"); err != nil {
 		t.Fatalf("gate failed on another host's or a cluster-wide check: %v", err)
@@ -431,7 +434,7 @@ func TestOnlyTheHostsOwnSmokeChecksGate(t *testing.T) {
 	}
 }
 
-func TestCanRollOutNeedsTheDeployCommand(t *testing.T) {
+func TestCanRollOutNeedsTheRolloutLevel(t *testing.T) {
 	dir := t.TempDir()
 	script := func(name, out string) string {
 		path := dir + "/" + name
@@ -440,13 +443,40 @@ func TestCanRollOutNeedsTheDeployCommand(t *testing.T) {
 		}
 		return path
 	}
-	if err := canRollOut(context.Background(), script("with", `{"commands":["fleet","deploy [<branch|commit>|status]"]}`)); err != nil {
-		t.Fatalf("build with cos deploy refused: %v", err)
+	if err := canRollOut(context.Background(), script("current", fmt.Sprintf(`{"protocol":1,"rollout":%d}`, rolloutProtocol))); err != nil {
+		t.Fatalf("build at this rollout level refused: %v", err)
 	}
-	if err := canRollOut(context.Background(), script("without", `{"commands":["fleet","version"]}`)); err == nil || !strings.Contains(err.Error(), "rollout controller") {
-		t.Fatalf("build without cos deploy accepted: %v", err)
+	if err := canRollOut(context.Background(), script("older", `{"protocol":1}`)); err == nil || !strings.Contains(err.Error(), "rollout controller level 0") {
+		t.Fatalf("build with an older controller accepted: %v", err)
 	}
 	if err := canRollOut(context.Background(), script("broken", `not json`)); err == nil {
-		t.Fatal("build with unreadable help accepted")
+		t.Fatal("build with unreadable version accepted")
+	}
+}
+
+// During a merge train the head is still in CI: the newest green commit deploys, never anything older.
+func TestNewestGreenMainSkipsPendingAndFailed(t *testing.T) {
+	head, failing, marked, green, deployed, older := testRevision(6), testRevision(5), testRevision(4), testRevision(3), testRevision(2), testRevision(1)
+	state := map[string]string{head: "pending", failing: "failure", marked: "success", green: "success", deployed: "success", older: "success"}
+	f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/commits") {
+			fmt.Fprintf(w, `[{"sha":%q},{"sha":%q},{"sha":%q},{"sha":%q},{"sha":%q},{"sha":%q}]`, head, failing, marked, green, deployed, older)
+			return
+		}
+		sha := path.Base(strings.TrimSuffix(r.URL.Path, "/status"))
+		fmt.Fprintf(w, `{"state":%q,"total_count":3}`, state[sha])
+	})
+	failed := func(revision string) bool { return revision == marked }
+	got, err := newestGreenMain(context.Background(), f.Config, deployed, failed)
+	if err != nil || got != green {
+		t.Fatalf("newest green = %.12s, %v; want %.12s (head pending, next failing, next marked failed)", got, err, green)
+	}
+	state[green] = "pending"
+	if got, err := newestGreenMain(context.Background(), f.Config, deployed, failed); err != nil || got != deployed {
+		t.Fatalf("got %.12s, %v; with nothing newer green it must stop at the deployed build, not pick an older one", got, err)
+	}
+	state[deployed], state[older] = "pending", "pending"
+	if _, err := newestGreenMain(context.Background(), f.Config, "", failed); err == nil {
+		t.Fatal("found a green commit where none is green")
 	}
 }

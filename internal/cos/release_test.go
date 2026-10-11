@@ -251,8 +251,8 @@ func TestPruneKeepsLastThreeAndPinned(t *testing.T) {
 	for _, e := range entries {
 		kept = append(kept, e.Name()[:1])
 	}
-	if strings.Join(kept, "") != "1456" {
-		t.Fatalf("kept builds %v, want the good build 1 and the newest 4, 5, 6", kept)
+	if strings.Join(kept, "") != "156" {
+		t.Fatalf("kept builds %v, want 3: the good build 1 and the newest 5, 6", kept)
 	}
 }
 

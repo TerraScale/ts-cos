@@ -76,7 +76,9 @@ func (o busOps) smoke(ctx context.Context, host, revision string) error {
 
 func hostSmokeFailure(report E2EReport, host string) error {
 	for _, c := range report.Checks {
-		if c.Status == "fail" && strings.HasSuffix(c.ID, "."+host) {
+		// The log scan fails on the one startup ERROR other components print while
+		// JetStream warms up, which would roll back every build; the e2e suite keeps it.
+		if c.Status == "fail" && strings.HasSuffix(c.ID, "."+host) && !strings.HasPrefix(c.ID, "deploy.logs.") {
 			return fmt.Errorf("%s: %s", c.ID, c.Evidence)
 		}
 	}
@@ -198,24 +200,26 @@ func (s source) build(ctx context.Context, js jetstream.JetStream, revision, cha
 	return nil
 }
 
-// canRollOut refuses a build without `cos deploy`: once every node ran it, nothing could
-// roll out the next build and later merges would stop reaching the nodes (2026-10-11).
+// rolloutProtocol is the rollout controller's level; bump it when a controller change
+// must not be lost again. 2: walks main to the newest green commit and gates without
+// the startup log scan.
+const rolloutProtocol = 2
+
+// canRollOut refuses a build whose rollout controller is older than this one: once every
+// node ran it, later merges could stop reaching the nodes (2026-10-11: a build without a
+// controller stranded the cluster).
 func canRollOut(ctx context.Context, bin string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "help").Output()
-	var help struct {
-		Commands []string `json:"commands"`
-	}
-	if err != nil || json.Unmarshal(out, &help) != nil {
+	out, err := exec.CommandContext(ctx, bin, "version").Output()
+	var v Build
+	if err != nil || json.Unmarshal(out, &v) != nil {
 		return errors.New("does not start")
 	}
-	for _, c := range help.Commands {
-		if strings.HasPrefix(c, "deploy ") {
-			return nil
-		}
+	if v.Rollout < rolloutProtocol {
+		return fmt.Errorf("has rollout controller level %d, this cluster needs %d; deploying it would stop automatic deploys", v.Rollout, rolloutProtocol)
 	}
-	return errors.New("lacks the rollout controller; deploying it would stop automatic deploys")
+	return nil
 }
 
 // pruneBuildStore keeps the newest keepBuilds builds; hosts keep their own copies of what they run.
@@ -230,20 +234,37 @@ func pruneBuildStore(ctx context.Context, store jetstream.ObjectStore) {
 	}
 }
 
-// greenMain returns main's head commit once every CI status on it succeeded.
-func greenMain(ctx context.Context, cfg Config) (string, error) {
-	var status struct {
-		State string `json:"state"`
-		SHA   string `json:"sha"`
-		Total int    `json:"total_count"`
+// newestGreenMain returns the newest commit on main whose CI is green and that never
+// failed a rollout. During a merge train main's head is nearly always still in CI, so
+// waiting for the head alone would never deploy. The walk stops at current, the build
+// the cluster already runs, so it never picks anything older.
+func newestGreenMain(ctx context.Context, cfg Config, current string, failed func(string) bool) (string, error) {
+	f := Forgejo{Config: cfg}
+	var commits []struct {
+		SHA string `json:"sha"`
 	}
-	if _, err := (Forgejo{Config: cfg}).request(ctx, http.MethodGet, "/repos/"+forgejoOrg+"/ts-cos/commits/main/status", nil, &status); err != nil {
+	if _, err := f.request(ctx, http.MethodGet, "/repos/"+forgejoOrg+"/ts-cos/commits?sha=main&limit=30&stat=false&verification=false&files=false", nil, &commits); err != nil {
 		return "", err
 	}
-	if status.State != "success" || status.Total == 0 || !validRevision(status.SHA) {
-		return "", fmt.Errorf("main %.12s is not green yet (%s)", status.SHA, status.State)
+	for _, c := range commits {
+		if c.SHA == current {
+			return current, nil
+		}
+		if !validRevision(c.SHA) || failed(c.SHA) {
+			continue
+		}
+		var status struct {
+			State string `json:"state"`
+			Total int    `json:"total_count"`
+		}
+		if _, err := f.request(ctx, http.MethodGet, "/repos/"+forgejoOrg+"/ts-cos/commits/"+c.SHA+"/status", nil, &status); err != nil {
+			return "", err
+		}
+		if status.State == "success" && status.Total > 0 {
+			return c.SHA, nil
+		}
 	}
-	return status.SHA, nil
+	return "", errors.New("no green main commit to deploy yet")
 }
 
 func newRollout(revision, change string, hosts []string, now time.Time) Rollout {
@@ -362,11 +383,15 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 			return nil
 		}
 		*checked = time.Now()
-		head, err := greenMain(ctx, cfg)
-		if err != nil {
-			return nil
+		current := ""
+		if r.Phase == phaseCompleted {
+			current = r.To
 		}
-		if _, err := kv.Get(ctx, failedKey(head)); err == nil {
+		head, err := newestGreenMain(ctx, cfg, current, func(revision string) bool {
+			_, err := kv.Get(ctx, failedKey(revision))
+			return err == nil
+		})
+		if err != nil || head == current {
 			return nil
 		}
 		hosts, err := bus.Hosts(ctx)

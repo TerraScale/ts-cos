@@ -190,7 +190,7 @@ func (r releases) restore(revision string) error {
 	return r.remove("trial")
 }
 
-// prune keeps the newest keepBuilds builds and anything current, good or on trial points at.
+// prune keeps keepBuilds builds: whatever current, good or a trial points at, then the newest others.
 func (r releases) prune() error {
 	entries, err := os.ReadDir(r.path("builds"))
 	if err != nil {
@@ -212,11 +212,22 @@ func (r releases) prune() error {
 		}
 	}
 	slices.SortFunc(builds, func(a, b build) int { return b.at.Compare(a.at) })
-	for i, b := range builds {
-		if i >= keepBuilds && !slices.Contains(pinned, b.name) {
-			if err := os.RemoveAll(r.path("builds", b.name)); err != nil {
-				return err
-			}
+	kept := 0
+	for _, b := range builds {
+		if slices.Contains(pinned, b.name) {
+			kept++
+		}
+	}
+	for _, b := range builds {
+		if slices.Contains(pinned, b.name) {
+			continue
+		}
+		if kept < keepBuilds {
+			kept++
+			continue
+		}
+		if err := os.RemoveAll(r.path("builds", b.name)); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -16,7 +16,8 @@ var buildTime string
 
 // Build identifies the running build. Revision and Modified keep the shape `cos e2e` reads.
 type Build struct {
-	Protocol int    `json:"protocol"` // releaseProtocol: this build speaks READY and cos.<host>.release.*
+	Protocol int    `json:"protocol"`          // releaseProtocol: this build speaks READY and cos.<host>.release.*
+	Rollout  int    `json:"rollout,omitempty"` // rolloutProtocol: what this build's rollout controller can do
 	Host     string `json:"host"`
 	Revision string `json:"revision"`
 	Modified bool   `json:"modified"`
@@ -28,7 +29,7 @@ type Build struct {
 }
 
 func CurrentBuild(cfg Config) Build {
-	v := Build{Protocol: releaseProtocol, Host: cfg.LocalHost, Built: buildTime}
+	v := Build{Protocol: releaseProtocol, Rollout: rolloutProtocol, Host: cfg.LocalHost, Built: buildTime}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range info.Settings {
 			switch s.Key {
