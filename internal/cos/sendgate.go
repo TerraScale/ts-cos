@@ -461,6 +461,18 @@ func p0SolInbox(host, ticket string) InboxInput {
 		Title: oneLine(fmt.Sprintf("P0 %s moved to Sol: no Opus headroom for 30 min", ticket), inboxTitleMax)}
 }
 
+// p0FailedInbox files a P0 whose move to Sol failed after its marker was stored.
+func p0FailedInbox(host, thread, ticket string, cause error) InboxInput {
+	return InboxInput{Kind: "fyi", Source: "cos", Key: "p0-sol-failed:" + ticket, Host: host, Thread: thread, Ticket: ticket,
+		Title: oneLine(fmt.Sprintf("P0 %s could not move to Sol: %s", ticket, publicText(cause)), inboxTitleMax)}
+}
+
+// p0Moved reports whether the thread's move marker is stored. A read error counts as moved, so nothing moves on a bad read.
+func p0Moved(ctx context.Context, kv jetstream.KeyValue, thread string) bool {
+	_, err := kv.Get(ctx, sendMarkerKey("p0moved.", thread))
+	return err == nil || !errors.Is(err, jetstream.ErrKeyNotFound)
+}
+
 // handoff refuses a cooling target, and a cooling current model when the handoff compacts first. The brief goes through Send.
 func (g *Gate) handoff(ctx context.Context, args []string) (any, error) {
 	sel, err := localObjectJSON(args[1])
@@ -766,6 +778,10 @@ func (d *sendDeliverer) moveStalledP0(ctx context.Context, kv jetstream.KeyValue
 		if pair, _ := pol.PairOf(e.Model); pair != pol.Leader || now.Sub(e.Queued) <= p0Wait || hasRoom(limits, e.Model, now) || !hasRoom(limits, pol.Pairs[solPair].Advisor.Model, now) {
 			continue
 		}
+		// A ticket only in the branch is not seen here: the entry's title is the cheap check before the thread call.
+		if !isP0(pol, ticketOf(e.Title, "")) || p0Moved(ctx, kv, e.Thread) {
+			continue
+		}
 		if err := d.moveP0(ctx, kv, h.key, e, now); err != nil {
 			logErr(ctx, slog.LevelWarn, "COS P0 to Sol", err, "thread", e.Thread)
 		}
@@ -790,24 +806,31 @@ func (d *sendDeliverer) moveP0(ctx context.Context, kv jetstream.KeyValue, key s
 	if stored, err := putOnce(ctx, kv, sendMarkerKey("p0moved.", e.Thread), now); err != nil || !stored {
 		return err
 	}
+	// The marker is stored, so a failure from here is final: it is filed once and never retried.
+	fail := func(cause error) error {
+		if ferr := d.File(ctx, p0FailedInbox(e.Host, e.Thread, ticket, cause)); ferr != nil {
+			logErr(ctx, slog.LevelWarn, "COS P0 to Sol inbox", ferr, "ticket", ticket)
+		}
+		return cause
+	}
 	brief := func(lastReply string) (string, error) {
 		return p0MovedLine + "\n\nLast reply of the Opus thread:\n" + lastReply + "\n\nHeld messages:\n" + strings.Join(e.Texts, "\n\n"), nil
 	}
 	id, _, ok, err := launchSuccessor(ctx, d.Call, e.Host, FleetThread{ThreadID: e.Thread, Title: title, Branch: branch}, solPair, brief)
 	switch {
 	case err != nil:
-		return err
+		return fail(err)
 	case !ok:
-		return fmt.Errorf("P0 %s has no worktree to move to Sol", ticket)
+		return fail(errors.New("the thread has no worktree"))
 	case id == "":
-		return fmt.Errorf("P0 %s: the Sol successor launched without a thread id", ticket)
+		return fail(errors.New("the Sol successor launched without a thread id"))
 	}
 	if err := d.Call(ctx, e.Host, "settle", []string{e.Thread}, nil); err != nil {
-		return err
+		return fail(err)
 	}
 	queued := e.Queued
 	if err := casSend(ctx, kv, key, func(cur *queuedSend, found bool) bool { return found && !cur.Queued.Equal(queued) }); err != nil {
-		return err
+		return fail(err)
 	}
 	slog.Info("COS moved a P0 to Sol", "ticket", ticket, "thread", e.Thread, "successor", id)
 	return d.File(ctx, p0SolInbox(e.Host, ticket))

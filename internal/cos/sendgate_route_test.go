@@ -169,17 +169,23 @@ func TestGateLaunchMovesStalledP0ToSol(t *testing.T) {
 
 // p0Calls fakes the bus calls a stall-step tick makes: thread info per thread, and the launches and settles it records.
 type p0Calls struct {
-	infos    map[string]map[string]any
-	launches []string
-	settles  []string
+	infos     map[string]map[string]any
+	launchErr error // what launch returns after recording the call
+	n         int   // bus calls made
+	launches  []string
+	settles   []string
 }
 
 func (c *p0Calls) call(_ context.Context, _, cmd string, args []string, out any) error {
+	c.n++
 	switch cmd {
 	case "thread":
 		*out.(*map[string]any) = c.infos[args[0]]
 	case "launch":
 		c.launches = append(c.launches, args[0])
+		if c.launchErr != nil {
+			return c.launchErr
+		}
 		*out.(*map[string]any) = map[string]any{"threadId": fmt.Sprintf("succ-%d", len(c.launches))}
 	case "settle":
 		c.settles = append(c.settles, args[0])
@@ -205,6 +211,9 @@ func stallEnv(t *testing.T) (*sendTestEnv, *p0Calls) {
 	for _, id := range []string{"p0", "other", "child"} {
 		e.addThread(id, "")
 	}
+	e.setTitle("p0", "TS-830 gate")
+	e.setTitle("other", "TS-900 gate")
+	e.setTitle("child", "TS-830 child")
 	e.setRoom(false, true)
 	e.mustSend("p0", "held text", "queue")
 	e.mustSend("other", "other text", "queue")
@@ -215,6 +224,72 @@ func stallEnv(t *testing.T) (*sendTestEnv, *p0Calls) {
 		"other": threadInfo("TS-900 gate", "cos/ts-900", ""),
 		"child": threadInfo("TS-830 child", "cos/ts-830-child", "p0"),
 	}}
+}
+
+// setTitle renames a test thread; a queue entry takes its title from the thread when it is queued.
+func (e *sendTestEnv) setTitle(id, title string) {
+	p := e.t3.proj[id]
+	p.Thread.Title = title
+	e.t3.proj[id] = p
+}
+
+// Cheap checks come before any bus call: a non-P0 entry, or a thread whose move marker exists, costs no call.
+func TestStalledP0SkipsWithoutBusCall(t *testing.T) {
+	e := newSendTestEnv(t)
+	pol := CurrentBehavior().Models
+	pol.Priority = []string{"TS-830"}
+	withPriority(t, pol)
+	e.addThread("other", "")
+	e.setTitle("other", "TS-900 gate")
+	e.addThread("p0", "")
+	e.setTitle("p0", "TS-830 gate")
+	e.setRoom(false, true)
+	e.mustSend("other", "other text", "queue")
+	e.mustSend("p0", "held text", "queue")
+	e.advance(31 * time.Minute)
+	if _, err := putOnce(e.ctx, e.kv, sendMarkerKey("p0moved.", "p0"), e.now); err != nil {
+		t.Fatal(err)
+	}
+	calls := &p0Calls{infos: map[string]map[string]any{"other": threadInfo("TS-900 gate", "cos/ts-900", "")}}
+	d := e.deliverer()
+	d.Call = calls.call
+	if err := d.tick(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if calls.n != 0 {
+		t.Fatalf("%d bus calls, want none", calls.n)
+	}
+	if _, found := e.entry("p0"); !found {
+		t.Fatal("p0 entry was removed")
+	}
+}
+
+// A launch that fails after the marker is final: one Inbox item, and later ticks make no bus call.
+func TestStalledP0LaunchFailureFilesOnce(t *testing.T) {
+	e, calls := stallEnv(t)
+	calls.launchErr = errors.New("bus timeout")
+	d := e.deliverer()
+	d.Call = calls.call
+	if err := d.tick(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls.launches) != 1 || len(calls.settles) != 0 {
+		t.Fatalf("launches %d settles %d, want one failed launch and no settle", len(calls.launches), len(calls.settles))
+	}
+	if len(e.files) != 1 || e.files[0].Key != "p0-sol-failed:TS-830" || !strings.Contains(e.files[0].Title, "bus timeout") {
+		t.Fatalf("inbox %+v, want one p0-sol-failed item with the cause", e.files)
+	}
+	before := calls.n
+	// The child carries a P0 title, so it still makes its lineage call; the p0 entry must make none.
+	e.advance(sendTick)
+	d = e.deliverer()
+	d.Call = calls.call
+	if err := d.tick(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if calls.n != before+1 || len(e.files) != 1 || len(calls.launches) != 1 {
+		t.Fatalf("later tick made %d bus calls, %d launches and %d inbox items, want only the child's lineage call", calls.n-before, len(calls.launches), len(e.files))
+	}
 }
 
 func TestStalledP0MovesOnceToSol(t *testing.T) {
