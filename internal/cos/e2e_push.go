@@ -63,6 +63,13 @@ func (e *E2EEnv) sessionUser() string {
 	return e.sess.user.name
 }
 
+// sessionID is the signed-in user's ULID, which keys every per-user store entry.
+func (e *E2EEnv) sessionID() string {
+	e.sessMu.Lock()
+	defer e.sessMu.Unlock()
+	return e.sess.user.user.ID
+}
+
 // pushGet fetches target with an optional session cookie and reads at most 64 KiB of the body.
 func pushGet(ctx context.Context, target, cookie string) (*http.Response, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -169,6 +176,7 @@ func checkPushSubscribe(ctx context.Context, e *E2EEnv, bus *Bus, urls []string)
 		return "", err
 	}
 	user := e.sessionUser()
+	id := e.sessionID()
 	raw := make([]byte, 8)
 	_, _ = rand.Read(raw)
 	sub, _, _, err := newPushSubscription("https://fcm.googleapis.com/fcm/send/cos-e2e-" + hex.EncodeToString(raw))
@@ -179,7 +187,7 @@ func checkPushSubscribe(ctx context.Context, e *E2EEnv, bus *Bus, urls []string)
 	if err != nil {
 		return "", err
 	}
-	key := pushSubKey(sub.Endpoint)
+	key := User{ID: id}.Key(pushSubKey(sub.Endpoint))
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -193,8 +201,8 @@ func checkPushSubscribe(ctx context.Context, e *E2EEnv, bus *Bus, urls []string)
 		return "", fmt.Errorf("subscription not in %s on the bus: %w", pushBucket, err)
 	}
 	var stored pushSub
-	if err := json.Unmarshal(value, &stored); err != nil || stored.User != user {
-		return "", fmt.Errorf("stored subscription belongs to %q, want %q: %v", stored.User, user, err)
+	if err := json.Unmarshal(value, &stored); err != nil || stored.Sub.Endpoint != sub.Endpoint {
+		return "", fmt.Errorf("subscription under %q's key is not the one posted: %v", user, err)
 	}
 	if status, err := pushPost(ctx, urls[1]+"/push/unsubscribe", cookie, map[string]string{"endpoint": sub.Endpoint}); err != nil || status != http.StatusNoContent {
 		return "", fmt.Errorf("unsubscribe on %s: HTTP %d %v", urls[1], status, err)

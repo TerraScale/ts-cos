@@ -73,7 +73,7 @@ func View(ctx context.Context, store *Store) (Dashboard, error) {
 		return Dashboard{}, err
 	}
 	v := Dashboard{Story: story, Live: live, Tasks: []Task{}, Autopilot: autopilot}
-	if v.Inbox, v.History, err = store.Inbox(ctx); err != nil {
+	if v.Inbox, v.History, err = inboxFor(ctx, store); err != nil {
 		return Dashboard{}, err
 	}
 	v.History = v.History[:min(len(v.History), inboxHistoryMax)]

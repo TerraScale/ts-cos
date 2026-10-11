@@ -350,7 +350,7 @@ func rolledBackFYI(ctx context.Context, bus *Bus, host string, r Rollout) error 
 		restored = append(restored, fmt.Sprintf("%s on %.12s", h, revision))
 	}
 	slices.Sort(restored)
-	_, err = inbox.Add(ctx, InboxInput{Kind: "fyi", Source: "deploy", Key: "deploy:" + r.ID,
+	_, err = inbox.addNode(ctx, InboxInput{Kind: "fyi", Source: "deploy", Key: "deploy:" + r.ID,
 		Title: deployLine("Deploy rolled back: "+r.Change, inboxTitleMax),
 		Context: fmt.Sprintf("Build %.12s failed its health gate: %s.\nRestored: %s. Nothing to do: the next main build deploys by itself.",
 			r.To, deployLine(r.Failure, 1000), strings.Join(restored, ", "))})

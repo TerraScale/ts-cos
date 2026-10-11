@@ -13,9 +13,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"git.terrascale.tech/TerraScale/ts-cos/internal/webpush"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -24,7 +26,8 @@ const (
 	pushSubject    = "https://cos.terrascale.tech"
 	pushVAPIDKey   = "vapid"
 	pushSubPrefix  = "sub."
-	pushPrefPrefix = "prefs."
+	pushPrefPrefix = "prefs." // pre-TS-831 prefs, keyed by login name
+	pushPrefsKey   = "prefs"  // a user's prefs, under their own key prefix
 	pushTitleMax   = 80
 	pushBodyMax    = 300
 	pushAgentMax   = 120
@@ -58,12 +61,17 @@ type Push struct {
 	chat   *Chat
 }
 
-// pushSub is one device's subscription, stored under pushSubKey(endpoint).
+// pushSub is one device's subscription, stored under the owner's pushSubKey(endpoint).
 type pushSub struct {
 	Sub     webpush.Subscription `json:"sub"`
-	User    string               `json:"user"`
 	Agent   string               `json:"agent,omitempty"`
 	Created time.Time            `json:"created"`
+}
+
+// pushDevice is one stored subscription: owner is the ULID in its key, key the name under it.
+type pushDevice struct {
+	owner, key string
+	sub        pushSub
 }
 
 // pushPrefs lists the categories a user turned off; a category not listed is on.
@@ -71,7 +79,8 @@ type pushPrefs struct {
 	Off []string `json:"off"`
 }
 
-// Notice is one notification. An empty User sends to every subscribed user.
+// Notice is one notification. User is the ULID it goes to; an empty User is only for the cluster categories
+// "done" and "node", which go to every user.
 type Notice struct {
 	Category, Title, Body, URL, Tag string
 	Urgent                          bool
@@ -168,7 +177,14 @@ func RunPush(ctx context.Context, bus *Bus, chat *Chat, ready func(*Push)) {
 	slog.Info("COS push ready")
 	p.chat = chat
 	ready(p)
-	bus.Lead(ctx, p.notify)
+	bus.Lead(ctx, func(ctx context.Context) {
+		var migrating sync.WaitGroup
+		defer migrating.Wait()
+		migrating.Go(func() {
+			migrateEvery(ctx, "push migration to the first admin", func(ctx context.Context) (int, error) { return p.migrate(ctx, bus) })
+		})
+		p.notify(ctx)
+	})
 }
 
 // pushSubKey names a subscription by a hash of its endpoint: endpoints are long and hold characters KV keys reject.
@@ -199,55 +215,62 @@ func pushHost(endpoint string) string {
 	return u.Hostname()
 }
 
-// Subscribe stores or refreshes one device's subscription for user.
-func (p *Push) Subscribe(ctx context.Context, user, agent string, sub webpush.Subscription) error {
-	data, err := json.Marshal(pushSub{Sub: sub, User: user, Agent: clipRunes(agent, pushAgentMax), Created: time.Now().UTC()})
+// Subscribe stores or refreshes the caller's subscription for one device. A device belongs to the last user who
+// subscribed it, so other users' copies of this endpoint are deleted.
+func (p *Push) Subscribe(ctx context.Context, agent string, sub webpush.Subscription) error {
+	mine, err := UserKey(ctx, pushSubKey(sub.Endpoint))
 	if err != nil {
 		return err
 	}
-	_, err = p.kv.Put(ctx, pushSubKey(sub.Endpoint), data)
-	return err
-}
-
-// Unsubscribe deletes a subscription only for the user who owns it; anyone else's request does nothing.
-func (p *Push) Unsubscribe(ctx context.Context, user, endpoint string) error {
-	key := pushSubKey(endpoint)
-	entry, err := p.kv.Get(ctx, key)
-	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		return nil
-	}
+	data, err := json.Marshal(pushSub{Sub: sub, Agent: clipRunes(agent, pushAgentMax), Created: time.Now().UTC()})
 	if err != nil {
 		return err
 	}
-	var s pushSub
-	if err := json.Unmarshal(entry.Value(), &s); err != nil {
+	if _, err := p.kv.Put(ctx, mine, data); err != nil {
 		return err
 	}
-	if s.User != user {
-		return nil
-	}
-	return p.kv.Delete(ctx, key)
-}
-
-// Devices counts user's subscriptions.
-func (p *Push) Devices(ctx context.Context, user string) (int, error) {
-	subs, err := p.subs(ctx)
+	others, err := p.kv.ListKeysFiltered(ctx, "u.*."+pushSubKey(sub.Endpoint))
 	if err != nil {
-		return 0, err
+		return err
 	}
-	n := 0
-	for _, s := range subs {
-		if s.User == user {
-			n++
+	for key := range others.Keys() {
+		if key != mine {
+			if err := p.kv.Delete(ctx, key); err != nil {
+				return err
+			}
 		}
 	}
-	return n, nil
+	return nil
+}
+
+// Unsubscribe deletes the caller's subscription for endpoint; another user's copy is not visible to the caller.
+func (p *Push) Unsubscribe(ctx context.Context, endpoint string) error {
+	kv, err := UserKV(ctx, p.kv)
+	if err != nil {
+		return err
+	}
+	return kv.Delete(ctx, pushSubKey(endpoint))
+}
+
+// Devices counts the caller's subscriptions.
+func (p *Push) Devices(ctx context.Context) (int, error) {
+	devices, err := p.devices(ctx)
+	return len(devices), err
 }
 
 // Send pushes n to every matching device and returns how many accepted it. Dead subscriptions are deleted.
 // The first error is returned only when nothing was sent.
 func (p *Push) Send(ctx context.Context, n Notice) (int, error) {
-	subs, err := p.subs(ctx)
+	if err := n.audience(); err != nil {
+		return 0, err
+	}
+	var devices []pushDevice
+	var err error
+	if n.User != "" {
+		devices, err = p.devices(WithUser(ctx, User{ID: n.User}))
+	} else {
+		devices, err = p.allDevices(ctx)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -263,11 +286,9 @@ func (p *Push) Send(ctx context.Context, n Notice) (int, error) {
 		msg.Topic = n.Tag
 	}
 	sent, first := 0, error(nil)
-	for key, s := range subs {
-		if n.User != "" && s.User != n.User {
-			continue
-		}
-		off, err := p.off(ctx, s.User)
+	for _, d := range devices {
+		owned := WithUser(ctx, User{ID: d.owner}) // each device's prefs and deletes are its owner's
+		off, err := p.off(owned)
 		if err != nil {
 			first = cmp.Or(first, err)
 			continue
@@ -275,17 +296,17 @@ func (p *Push) Send(ctx context.Context, n Notice) (int, error) {
 		if n.Category != "test" && off[n.Category] {
 			continue
 		}
-		switch err := p.vapid.Send(ctx, p.client, s.Sub, payload, msg); {
+		switch err := p.vapid.Send(ctx, p.client, d.sub.Sub, payload, msg); {
 		case err == nil:
 			sent++
 		case errors.Is(err, webpush.ErrGone):
-			_ = p.kv.Delete(ctx, key)
+			_ = p.forget(owned, d)
 		default:
 			var uerr *url.Error // its message carries the endpoint, which is a credential
 			if errors.As(err, &uerr) {
 				err = uerr.Err
 			}
-			slog.Warn("COS push send failed", "host", pushHost(s.Sub.Endpoint), "error", err)
+			slog.Warn("COS push send failed", "host", pushHost(d.sub.Sub.Endpoint), "error", err)
 			first = cmp.Or(first, err)
 		}
 	}
@@ -295,14 +316,65 @@ func (p *Push) Send(ctx context.Context, n Notice) (int, error) {
 	return 0, first
 }
 
-// subs reads every subscription by KV key; an entry that fails to decode is skipped so one bad device cannot stop the rest.
-func (p *Push) subs(ctx context.Context) (map[string]pushSub, error) {
-	lister, err := p.kv.ListKeysFiltered(ctx, pushSubPrefix+"*")
+// audience says who may receive n: the user named in it, or for the cluster categories every user's devices.
+// Anything else without a user is refused, so a notice never reaches an account it was not meant for.
+func (n Notice) audience() error {
+	switch {
+	case n.User != "":
+		if !ulidPattern.MatchString(n.User) {
+			return errors.New("push notice names an invalid user")
+		}
+	case n.Category == "done" || n.Category == "node":
+	default:
+		return errors.New("push " + n.Category + " notice has no user")
+	}
+	return nil
+}
+
+// devices lists the caller's subscriptions; the owner is the caller, never a field of the stored value.
+func (p *Push) devices(ctx context.Context) ([]pushDevice, error) {
+	u, err := UserFrom(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]pushSub{}
+	kv, err := UserKV(ctx, p.kv)
+	if err != nil {
+		return nil, err
+	}
+	lister, err := kv.ListKeysFiltered(ctx, pushSubPrefix+"*")
+	if err != nil {
+		return nil, err
+	}
+	out := []pushDevice{}
 	for key := range lister.Keys() {
+		entry, err := kv.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var s pushSub
+		if json.Unmarshal(entry.Value(), &s) == nil {
+			out = append(out, pushDevice{owner: u.ID, key: key, sub: s})
+		}
+	}
+	return out, nil
+}
+
+// allDevices lists every user's subscriptions. Only Send uses it, to reach the audience of a cluster notice.
+// An entry that fails to decode is skipped so one bad device cannot stop the rest.
+func (p *Push) allDevices(ctx context.Context) ([]pushDevice, error) {
+	lister, err := p.kv.ListKeysFiltered(ctx, "u.*."+pushSubPrefix+"*")
+	if err != nil {
+		return nil, err
+	}
+	out := []pushDevice{}
+	for key := range lister.Keys() {
+		owner, bare, ok := splitUserKey(key)
+		if !ok {
+			continue
+		}
 		entry, err := p.kv.Get(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			continue
@@ -312,16 +384,29 @@ func (p *Push) subs(ctx context.Context) (map[string]pushSub, error) {
 		}
 		var s pushSub
 		if json.Unmarshal(entry.Value(), &s) == nil {
-			out[key] = s
+			out = append(out, pushDevice{owner: owner, key: bare, sub: s})
 		}
 	}
 	return out, nil
 }
 
-// off returns the categories user turned off; no prefs yet means everything is on.
-func (p *Push) off(ctx context.Context, user string) (map[string]bool, error) {
+// forget deletes one of the owner's subscriptions, for a device the push service reports gone.
+func (p *Push) forget(ctx context.Context, d pushDevice) error {
+	kv, err := UserKV(ctx, p.kv)
+	if err != nil {
+		return err
+	}
+	return kv.Delete(ctx, d.key)
+}
+
+// off returns the categories the caller turned off; no prefs yet means everything is on.
+func (p *Push) off(ctx context.Context) (map[string]bool, error) {
 	off := map[string]bool{}
-	entry, err := p.kv.Get(ctx, pushPrefPrefix+user)
+	kv, err := UserKV(ctx, p.kv)
+	if err != nil {
+		return nil, err
+	}
+	entry, err := kv.Get(ctx, pushPrefsKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return off, nil
 	}
@@ -338,14 +423,16 @@ func (p *Push) off(ctx context.Context, user string) (map[string]bool, error) {
 	return off, nil
 }
 
-// SetPref turns one category on or off for user. The write is compare-and-set, so concurrent toggles never drop each other.
-func (p *Push) SetPref(ctx context.Context, user, category string, on bool) error {
-	key := pushPrefPrefix + user
-	var err error
+// SetPref turns one category on or off for the caller. The write is compare-and-set, so concurrent toggles never drop each other.
+func (p *Push) SetPref(ctx context.Context, category string, on bool) error {
+	kv, err := UserKV(ctx, p.kv)
+	if err != nil {
+		return err
+	}
 	for range 5 {
 		var prefs pushPrefs
 		var rev uint64
-		if entry, getErr := p.kv.Get(ctx, key); getErr == nil {
+		if entry, getErr := kv.Get(ctx, pushPrefsKey); getErr == nil {
 			rev = entry.Revision()
 			if err := json.Unmarshal(entry.Value(), &prefs); err != nil {
 				return err
@@ -356,9 +443,9 @@ func (p *Push) SetPref(ctx context.Context, user, category string, on bool) erro
 		prefs.Off = pushToggle(prefs.Off, category, on)
 		data, _ := json.Marshal(prefs)
 		if rev == 0 {
-			_, err = p.kv.Create(ctx, key, data)
+			_, err = kv.Create(ctx, pushPrefsKey, data)
 		} else {
-			_, err = p.kv.Update(ctx, key, data, rev)
+			_, err = kv.Update(ctx, pushPrefsKey, data, rev)
 		}
 		if err == nil {
 			return nil
@@ -383,6 +470,64 @@ func pushToggle(off []string, category string, on bool) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// migrate moves the pre-TS-831 subscriptions and the first admin's prefs under the first admin, then deletes other
+// users' legacy prefs, which no account owns. vapid and last.inbox are shared and never touched.
+func (p *Push) migrate(ctx context.Context, bus *Bus) (int, error) {
+	admin, err := nodeUser(ctx, bus)
+	if err != nil {
+		return 0, err
+	}
+	name, err := firstAdminName(ctx, bus.conn, admin.ID)
+	if err != nil {
+		return 0, err
+	}
+	moved, err := moveKeys(ctx, p.kv, func(key string) (string, bool) {
+		switch {
+		case strings.HasPrefix(key, pushSubPrefix):
+			return admin.Key(key), true
+		case key == pushPrefPrefix+name:
+			return admin.Key(pushPrefsKey), true
+		}
+		return "", false
+	})
+	if err != nil {
+		return moved, err
+	}
+	// What is left under prefs. is another user's legacy copy. The admin's own copy stays while a conflict keeps it.
+	stale, err := p.kv.ListKeysFiltered(ctx, pushPrefPrefix+"*")
+	if err != nil {
+		return moved, err
+	}
+	var others []string
+	for key := range stale.Keys() {
+		if key != pushPrefPrefix+name {
+			others = append(others, key)
+		}
+	}
+	for _, key := range others {
+		if err := p.kv.Delete(ctx, key); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+			return moved, err
+		}
+	}
+	return moved, nil
+}
+
+// firstAdminName is the first admin's login name, which keyed the legacy prefs.
+func firstAdminName(ctx context.Context, nc *nats.Conn, id string) (string, error) {
+	value, _, found, err := leaderGet(ctx, nc, authBucket, "uid."+id)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", errors.New("first admin account is missing")
+	}
+	var account authUser
+	if err := json.Unmarshal(value, &account); err != nil {
+		return "", err
+	}
+	return account.Name, nil
 }
 
 // clipRunes keeps the first n runes; notification text is user-visible, so no byte-level cuts.

@@ -98,16 +98,6 @@ func chatID(at time.Time) string {
 	return fmt.Sprintf("%016x-%s", at.UnixNano(), uuid()[:8])
 }
 
-// splitChatKey reads a stored "u.<ULID>.<chatID>" key; ok is false for legacy keys, which wait for migrateToUser.
-func splitChatKey(key string) (owner, id string, ok bool) {
-	rest, ok := strings.CutPrefix(key, "u.")
-	if !ok {
-		return "", "", false
-	}
-	owner, id, ok = strings.Cut(rest, ".")
-	return owner, id, ok && ulidPattern.MatchString(owner) && id != ""
-}
-
 // openKV binds a replicated bucket. Only the JetStream meta leader creates it:
 // concurrent creates from several nodes can wedge the stream assignment.
 func openKV(ctx context.Context, b *Bus, bucket string) (jetstream.KeyValue, error) {
@@ -274,7 +264,7 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 		c.notify("")
 		return
 	}
-	owner, rest, ok := splitChatKey(u.Key())
+	owner, rest, ok := splitUserKey(u.Key())
 	if !ok { // a legacy key; migrateToUser moves it under its owner
 		return
 	}
@@ -325,7 +315,7 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 
 // notify records a changed key ("" repaints everything) and wakes every subscriber.
 func (c *Chat) notify(key string) {
-	owner, _, _ := splitChatKey(key)
+	owner, _, _ := splitUserKey(key)
 	for s := range c.subs {
 		if key != "" && !s.all && s.owner != owner {
 			continue
@@ -370,7 +360,7 @@ func (c *Chat) Changed(s *chatSub) []string {
 		return keys
 	}
 	for i, key := range keys {
-		if _, id, ok := splitChatKey(key); ok {
+		if _, id, ok := splitUserKey(key); ok {
 			keys[i] = id
 		}
 	}

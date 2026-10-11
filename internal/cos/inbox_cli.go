@@ -20,10 +20,13 @@ func inboxCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 	if len(args) == 0 {
 		return usage
 	}
+	if want := map[string]int{"list": 1, "history": 1, "add": 2, "dismiss": 2, "answer": 3}[args[0]]; len(args) != want {
+		return usage
+	}
+	if _, err := UserFrom(ctx); err != nil {
+		return errors.New("cos inbox needs --user <name>")
+	}
 	if args[0] == "list" || args[0] == "history" {
-		if len(args) != 1 {
-			return usage
-		}
 		s, err := stateStore(cfg)
 		if err != nil {
 			return err
@@ -37,9 +40,6 @@ func inboxCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 			return output(w, open)
 		}
 		return output(w, history[:min(len(history), inboxHistoryMax)])
-	}
-	if want := map[string]int{"add": 2, "dismiss": 2, "answer": 3}[args[0]]; len(args) != want {
-		return usage
 	}
 	var input InboxInput
 	if args[0] == "add" {
@@ -69,7 +69,11 @@ func inboxCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 		item, err = in.Dismiss(ctx, args[1])
 	case "answer":
 		answer := AnswerData{Text: args[2]}
-		if entry, getErr := in.kv.Get(ctx, args[1]); getErr == nil {
+		view, err := UserKV(ctx, in.kv)
+		if err != nil {
+			return err
+		}
+		if entry, getErr := view.Get(ctx, args[1]); getErr == nil {
 			var cur InboxItem
 			if json.Unmarshal(entry.Value(), &cur) == nil && slices.Contains(cur.Options, strings.TrimSpace(args[2])) {
 				answer = AnswerData{Option: strings.TrimSpace(args[2])}

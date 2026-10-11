@@ -612,7 +612,7 @@ func (d *selfDriver) closeOut(ctx context.Context, r selfRecord) {
 	if r.State == selfBlocked || r.State == selfFailed {
 		in, err := OpenInbox(ctx, d.bus, d.cfg.LocalHost, false)
 		if err == nil {
-			_, err = in.Add(ctx, InboxInput{Kind: "blocker", Source: "cos", Key: "selfchange:" + r.ID, Ticket: r.Ticket,
+			_, err = in.addNode(ctx, InboxInput{Kind: "blocker", Source: "cos", Key: "selfchange:" + r.ID, Ticket: r.Ticket,
 				Title:   oneLine("Self-change "+r.State+": "+r.Summary, inboxTitleMax),
 				Context: r.Note + "\n\nYou asked: " + r.Request, Links: slices.DeleteFunc([]string{r.PRURL}, func(s string) bool { return s == "" }),
 				Options: []string{"Open a normal reviewed PR (Recommended)", "Drop it"}})

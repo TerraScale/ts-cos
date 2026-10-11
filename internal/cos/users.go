@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"regexp"
 	"slices"
@@ -342,28 +343,47 @@ func (l *userLister) Stop() error {
 	return l.w.Stop()
 }
 
-// migrateToUser moves every key of kv that is not already per-user ("u.*") under id's prefix: Create the new key,
-// then delete the old key at the revision it copied. When the new key already exists the newer of the two values
-// wins. A key that changed meanwhile is skipped and the next run moves it. It returns how many keys moved.
+// splitUserKey splits a per-user key "u.<ULID>.<name>"; ok is false for any other key, such as a legacy key that
+// migrateToUser has not moved yet.
+func splitUserKey(key string) (owner, name string, ok bool) {
+	rest, found := strings.CutPrefix(key, "u.")
+	if !found {
+		return "", "", false
+	}
+	owner, name, found = strings.Cut(rest, ".")
+	if !found || !ulidPattern.MatchString(owner) || name == "" {
+		return "", "", false
+	}
+	return owner, name, true
+}
+
+// migrateToUser moves every key of kv that is not already per-user ("u.*") under id's prefix; see moveKeys.
 func migrateToUser(ctx context.Context, kv jetstream.KeyValue, id string) (int, error) {
 	if !ulidPattern.MatchString(id) {
 		return 0, errors.New("refusing to migrate to a user without a ULID")
 	}
+	prefix := "u." + id + "."
+	return moveKeys(ctx, kv, func(key string) (string, bool) {
+		return prefix + key, !strings.HasPrefix(key, "u.")
+	})
+}
+
+// moveKeys copies each key that rename maps to a new name under that name, then deletes the old key at the revision
+// it copied, so a write that lands meanwhile is never lost. When the new key already exists the newer of the two
+// values wins. A key that changed meanwhile is skipped and the next run moves it. It returns how many keys moved.
+func moveKeys(ctx context.Context, kv jetstream.KeyValue, rename func(key string) (newKey string, ok bool)) (int, error) {
 	lister, err := kv.ListKeys(ctx)
 	if err != nil {
 		return 0, err
 	}
-	var keys []string
+	moves := map[string]string{}
 	for key := range lister.Keys() {
-		if !strings.HasPrefix(key, "u.") {
-			keys = append(keys, key)
+		if newKey, ok := rename(key); ok {
+			moves[key] = newKey
 		}
 	}
-	slices.Sort(keys)
-	keys = slices.Compact(keys)
-	prefix := "u." + id + "."
 	moved := 0
-	for _, key := range keys {
+	for _, key := range slices.Sorted(maps.Keys(moves)) {
 		legacy, err := kv.Get(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) { // deleted since the listing
 			continue
@@ -371,7 +391,7 @@ func migrateToUser(ctx context.Context, kv jetstream.KeyValue, id string) (int, 
 		if err != nil {
 			return moved, err
 		}
-		newKey := prefix + key
+		newKey := moves[key]
 		if _, err = kv.Create(ctx, newKey, legacy.Value()); errors.Is(err, jetstream.ErrKeyExists) {
 			// The newer write wins: a legacy value written after the new key replaces it.
 			current, err := kv.Get(ctx, newKey)

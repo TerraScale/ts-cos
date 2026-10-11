@@ -24,13 +24,14 @@ import (
 // replicated COS_INBOX bucket, where compare-and-set gives every item exactly one
 // answer cluster-wide; every node mirrors the bucket into its SQLite state.
 const (
-	inboxBucket     = "COS_INBOX"
-	inboxReplicas   = 3
-	inboxTitleMax   = 200
-	inboxTextMax    = 4000
-	inboxAnswerMax  = 3500 // fits the event data limit with its JSON envelope
-	inboxHistoryMax = 50
-	inboxRepublish  = time.Hour // re-emits inside the event dedup window are dropped
+	inboxBucket       = "COS_INBOX"
+	inboxReplicas     = 3
+	inboxTitleMax     = 200
+	inboxTextMax      = 4000
+	inboxAnswerMax    = 3500 // fits the event data limit with its JSON envelope
+	inboxHistoryMax   = 50
+	inboxRepublish    = time.Hour // re-emits inside the event dedup window are dropped
+	inboxMigrateEvery = 10 * time.Minute
 )
 
 var inboxKinds = []string{"question", "approval", "decision", "blocker", "fyi"}
@@ -54,6 +55,7 @@ type InboxInput struct {
 
 type InboxItem struct {
 	ID           string      `json:"id"`
+	Owner        string      `json:"-"` // the ULID in the item's KV key, set on every read; never stored in the payload
 	Kind         string      `json:"kind"`
 	Title        string      `json:"title"`
 	Context      string      `json:"context,omitempty"`
@@ -171,7 +173,7 @@ func (in InboxInput) item(now time.Time) (InboxItem, error) {
 // itemEvent is the event for the item's current state; its ID is stable per state.
 func itemEvent(item InboxItem) Event {
 	e := Event{Source: SourceInbox, Kind: KindInboxItemAdded, Time: item.Created, Severity: SeverityWarn,
-		Summary: oneLine(item.Title, eventSummaryMax), Host: item.Host, Ticket: item.Ticket, Thread: item.Thread, Item: item.ID,
+		Summary: oneLine(item.Title, eventSummaryMax), Host: item.Host, Ticket: item.Ticket, Thread: item.Thread, Item: item.ID, User: item.Owner,
 		ID: fmt.Sprintf("inbox:added:%s:%d", item.ID, item.Created.UnixNano())}
 	if item.Urgent || item.Kind == "approval" {
 		e.Severity = SeverityUrgent
@@ -182,11 +184,11 @@ func itemEvent(item InboxItem) Event {
 	switch item.Status {
 	case "open":
 	case "answered":
-		e.Source, e.Kind, e.Severity, e.Time = SourceUser, KindUserAnswer, SeverityUrgent, item.Closed
+		e.Source, e.Kind, e.Severity, e.Time, e.User = SourceUser, KindUserAnswer, SeverityUrgent, item.Closed, item.Owner
 		e.ID = fmt.Sprintf("user:answer:%s:%d", item.ID, item.Closed.UnixNano())
 		e.Data, _ = json.Marshal(item.Answer)
 	default:
-		e.Kind, e.Severity, e.Time = KindInboxClosed, SeverityInfo, item.Closed
+		e.Kind, e.Severity, e.Time, e.User = KindInboxClosed, SeverityInfo, item.Closed, item.Owner
 		e.ID = fmt.Sprintf("inbox:closed:%s:%d", item.ID, item.Closed.UnixNano())
 		e.Data, _ = json.Marshal(map[string]string{"status": item.Status, "note": oneLine(item.Note, inboxTitleMax)})
 	}
@@ -224,12 +226,20 @@ func OpenInbox(ctx context.Context, bus *Bus, host string, create bool) (*Inbox,
 	return in, nil
 }
 
-// update applies fn under compare-and-set; fn reports whether to write.
+// update applies fn to the caller's item under compare-and-set; fn reports whether to write.
 func (in *Inbox) update(ctx context.Context, id string, fn func(item *InboxItem, exists bool) (bool, error)) (InboxItem, bool, error) {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return InboxItem{}, false, err
+	}
+	kv, err := UserKV(ctx, in.kv)
+	if err != nil {
+		return InboxItem{}, false, err
+	}
 	for range 10 {
-		var item InboxItem
+		item := InboxItem{Owner: u.ID}
 		var revision uint64
-		entry, err := in.kv.Get(ctx, id)
+		entry, err := kv.Get(ctx, id)
 		if err == nil {
 			revision = entry.Revision()
 			if err := json.Unmarshal(entry.Value(), &item); err != nil {
@@ -239,6 +249,7 @@ func (in *Inbox) update(ctx context.Context, id string, fn func(item *InboxItem,
 			return item, false, err
 		}
 		write, err := fn(&item, revision != 0)
+		item.Owner = u.ID // fn may replace the whole item
 		if err != nil || !write {
 			return item, false, err
 		}
@@ -247,9 +258,9 @@ func (in *Inbox) update(ctx context.Context, id string, fn func(item *InboxItem,
 			return item, false, err
 		}
 		if revision == 0 {
-			_, err = in.kv.Create(ctx, id, data)
+			_, err = kv.Create(ctx, id, data)
 		} else {
-			_, err = in.kv.Update(ctx, id, data, revision)
+			_, err = kv.Update(ctx, id, data, revision)
 		}
 		if err == nil {
 			return item, true, nil
@@ -314,7 +325,10 @@ func (in *Inbox) Add(ctx context.Context, input InboxInput) (InboxItem, error) {
 	return item, nil
 }
 
-var errInboxClosed = OperationError("inbox item is already closed")
+var (
+	errInboxClosed   = OperationError("inbox item is already closed")
+	errInboxNotFound = OperationError("no inbox item") // also what another user's item ID returns
+)
 
 func (in *Inbox) close(ctx context.Context, id, status string, answer *AnswerData, note string) (InboxItem, error) {
 	if !validInboxID(id) {
@@ -322,7 +336,7 @@ func (in *Inbox) close(ctx context.Context, id, status string, answer *AnswerDat
 	}
 	item, _, err := in.update(ctx, id, func(cur *InboxItem, exists bool) (bool, error) {
 		if !exists {
-			return false, OperationError("no inbox item " + id)
+			return false, errInboxNotFound
 		}
 		if cur.Status != "open" {
 			return false, fmt.Errorf("%w: %s on %s", errInboxClosed, cur.Status, cur.ClosedOn)
@@ -378,6 +392,7 @@ func answerText(a *AnswerData) string {
 // reconcilers send it once; a failed send releases the claim for a retry.
 // shortcut: a crash between claim and send loses the forward; record a send ID if that shows up.
 func (in *Inbox) forward(ctx context.Context, item InboxItem) InboxItem {
+	ctx = WithUser(ctx, User{ID: item.Owner})
 	claimed, ok, err := in.update(ctx, item.ID, func(cur *InboxItem, _ bool) (bool, error) {
 		if cur.Status != "answered" || cur.Forwarded || cur.Thread == "" {
 			return false, nil
@@ -420,6 +435,28 @@ func askInput(a Ask) InboxInput {
 	return input
 }
 
+// nodeUser is the first admin, who owns everything COS produces from node T3s and COS events. It errors
+// until the bootstrap has run, so nothing is ever filed unowned.
+func nodeUser(ctx context.Context, bus *Bus) (User, error) {
+	id, ok, err := firstAdmin(ctx, bus.conn)
+	if err != nil {
+		return User{}, err
+	}
+	if !ok {
+		return User{}, errors.New("COS first admin is not bootstrapped yet")
+	}
+	return User{ID: id, Role: roleAdmin}, nil
+}
+
+// addNode files an item from node T3 data or a COS event, as the first admin.
+func (in *Inbox) addNode(ctx context.Context, input InboxInput) (InboxItem, error) {
+	admin, err := nodeUser(ctx, in.bus)
+	if err != nil {
+		return InboxItem{}, err
+	}
+	return in.Add(WithUser(ctx, admin), input)
+}
+
 // fileNeedsUser files a worker.needs_user event as soon as T3 ingestion sees it.
 func (in *Inbox) fileNeedsUser(ctx context.Context, e Event) error {
 	var a Ask
@@ -427,7 +464,7 @@ func (in *Inbox) fileNeedsUser(ctx context.Context, e Event) error {
 		return fmt.Errorf("malformed worker.needs_user event %s", e.ID)
 	}
 	a.Host, a.ThreadID = e.Host, e.Thread
-	_, err := in.Add(ctx, askInput(a))
+	_, err := in.addNode(ctx, askInput(a))
 	return err
 }
 
@@ -435,6 +472,10 @@ func (in *Inbox) fileNeedsUser(ctx context.Context, e Event) error {
 // consumer resumes where the previous leader stopped.
 // A fixed start time, unlike DeliverNew, does not depend on when the first pull happens; later leaders resume the durable.
 func (in *Inbox) consumeNeedsUser(ctx context.Context) error {
+	// Waiting for the first admin costs no redeliveries; the loop in RunInbox retries.
+	if _, err := nodeUser(ctx, in.bus); err != nil {
+		return err
+	}
 	consumer, err := in.js.Consumer(ctx, EventsStream, "cos-inbox-needs-user")
 	if errors.Is(err, jetstream.ErrConsumerNotFound) {
 		start := time.Now()
@@ -472,6 +513,10 @@ func (in *Inbox) SyncAsks(ctx context.Context, live Live, open []InboxItem) erro
 	if live.At == "" || live.Errors["asks"] != "" || live.Errors["fleet"] != "" {
 		return nil // no complete snapshot yet
 	}
+	admin, err := nodeUser(ctx, in.bus)
+	if err != nil {
+		return err
+	}
 	asked := map[string]bool{}
 	failed := map[string]bool{}
 	for _, a := range live.Asks {
@@ -483,7 +528,7 @@ func (in *Inbox) SyncAsks(ctx context.Context, live Live, open []InboxItem) erro
 		if a.Kind != "marker" || a.Stale {
 			continue
 		}
-		item, err := in.Add(ctx, askInput(a))
+		item, err := in.Add(WithUser(ctx, admin), askInput(a))
 		if err != nil {
 			return err
 		}
@@ -499,10 +544,10 @@ func (in *Inbox) SyncAsks(ctx context.Context, live Live, open []InboxItem) erro
 	}
 	for _, item := range open {
 		thread := item.Host + "/" + item.Thread
-		if item.Source != "worker" || item.Status != "open" || asked[item.ID] || !seen[item.Host] || failed[item.Host] || failed[thread] || active(threads[thread]) {
+		if item.Owner != admin.ID || item.Source != "worker" || item.Status != "open" || asked[item.ID] || !seen[item.Host] || failed[item.Host] || failed[thread] || active(threads[thread]) {
 			continue
 		}
-		_, err := in.close(ctx, item.ID, "superseded", nil, "The worker no longer asks this (answered in T3, replaced by a newer question, or the thread closed).")
+		_, err := in.close(WithUser(ctx, admin), item.ID, "superseded", nil, "The worker no longer asks this (answered in T3, replaced by a newer question, or the thread closed).")
 		if err != nil && !errors.Is(err, errInboxClosed) {
 			return err
 		}
@@ -513,7 +558,7 @@ func (in *Inbox) SyncAsks(ctx context.Context, live Live, open []InboxItem) erro
 // reconcile re-emits recent events, retries forwards and syncs worker asks;
 // the leader runs it, and every step is idempotent across a leader handover.
 func (in *Inbox) reconcile(ctx context.Context, store *Store) error {
-	open, history, err := store.Inbox(ctx)
+	open, history, err := store.allInbox(ctx)
 	if err != nil {
 		return err
 	}
@@ -558,11 +603,15 @@ func (in *Inbox) Mirror(ctx context.Context, store *Store) error {
 				}
 				continue
 			}
+			owner, id, ok := parseInboxKey(entry.Key())
+			if !ok {
+				continue // a pre-TS-831 key; the leader's migration moves it to the first admin
+			}
 			if seen != nil {
 				seen[entry.Key()] = true
 			}
 			if entry.Operation() != jetstream.KeyValuePut {
-				if err := store.DeleteInboxItem(ctx, entry.Key()); err != nil {
+				if err := store.DeleteInboxItem(ctx, owner, id); err != nil {
 					return err
 				}
 				continue
@@ -572,11 +621,40 @@ func (in *Inbox) Mirror(ctx context.Context, store *Store) error {
 				slog.Error("skip corrupt inbox item", "key", entry.Key(), "error", err)
 				continue
 			}
+			item.Owner = owner
 			if err := store.SaveInboxItem(ctx, item); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// migrateEvery runs migrate until ctx ends: at once, then every 10 minutes, and backs off while it fails.
+func migrateEvery(ctx context.Context, what string, migrate func(context.Context) (int, error)) {
+	failures := inboxFailures{what: what}
+	for ctx.Err() == nil {
+		moved, err := migrate(ctx)
+		if moved > 0 {
+			slog.Info("COS migration moved keys", "what", what, "keys", moved)
+		}
+		wait := failures.observe(err)
+		if wait == 0 {
+			wait = inboxMigrateEvery
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+	}
+}
+
+// migrate moves items filed before per-user Inboxes under the first admin. COS_INBOX holds only item keys.
+func (in *Inbox) migrate(ctx context.Context) (int, error) {
+	admin, err := nodeUser(ctx, in.bus)
+	if err != nil {
+		return 0, err
+	}
+	return migrateToUser(ctx, in.kv, admin.ID)
 }
 
 // inboxFailures turns repeated errors of one background loop into one WARN and,
@@ -640,9 +718,10 @@ func RunInbox(ctx context.Context, bus *Bus, host string, store *Store, ready fu
 	defer lead.Wait()
 	lead.Go(func() {
 		bus.Lead(ctx, func(ctx context.Context) {
-			var consumer sync.WaitGroup
-			defer consumer.Wait()
-			consumer.Go(func() {
+			var loops sync.WaitGroup
+			defer loops.Wait()
+			loops.Go(func() { migrateEvery(ctx, "inbox migration to the first admin", in.migrate) })
+			loops.Go(func() {
 				questions := inboxFailures{what: "inbox worker-question consumer"}
 				for ctx.Err() == nil {
 					var wait time.Duration
@@ -691,32 +770,41 @@ func RunInbox(ctx context.Context, bus *Bus, host string, store *Store, ready fu
 	}
 }
 
+// parseInboxKey splits a COS_INBOX key "u.<ULID>.<item ID>"; any other key is pre-TS-831 and not mirrored.
+func parseInboxKey(key string) (owner, id string, ok bool) {
+	owner, id, ok = splitUserKey(key)
+	return owner, id, ok && validInboxID(id)
+}
+
 func (s *Store) SaveInboxItem(ctx context.Context, item InboxItem) error {
+	if !ulidPattern.MatchString(item.Owner) {
+		return errors.New("inbox item has no owner")
+	}
 	data, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
 	return s.change(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO inbox VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, item.ID, string(data))
+		_, err := tx.ExecContext(ctx, `INSERT INTO user_inbox VALUES(?,?,?) ON CONFLICT(owner,id) DO UPDATE SET payload=excluded.payload`, item.Owner, item.ID, string(data))
 		return err
 	})
 }
-func (s *Store) DeleteInboxItem(ctx context.Context, id string) error {
+func (s *Store) DeleteInboxItem(ctx context.Context, owner, id string) error {
 	return s.change(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `DELETE FROM inbox WHERE id=?`, id)
+		_, err := tx.ExecContext(ctx, `DELETE FROM user_inbox WHERE owner=? AND id=?`, owner, id)
 		return err
 	})
 }
 
-// PruneInbox drops local items the bucket no longer has after a catch-up.
+// PruneInbox drops local items the bucket no longer has after a catch-up; keep holds "u.<owner>.<id>" keys.
 func (s *Store) PruneInbox(ctx context.Context, keep map[string]bool) error {
-	open, history, err := s.Inbox(ctx)
+	open, history, err := s.allInbox(ctx)
 	if err != nil {
 		return err
 	}
 	for _, item := range append(open, history...) {
-		if !keep[item.ID] {
-			if err := s.DeleteInboxItem(ctx, item.ID); err != nil {
+		if !keep[User{ID: item.Owner}.Key(item.ID)] {
+			if err := s.DeleteInboxItem(ctx, item.Owner, item.ID); err != nil {
 				return err
 			}
 		}
@@ -724,10 +812,32 @@ func (s *Store) PruneInbox(ctx context.Context, keep map[string]bool) error {
 	return nil
 }
 
-// Inbox returns open items, urgent then newest first, and the latest closed items.
+// Inbox returns the signed-in user's open items, urgent then newest first, and their latest closed items.
+// A context without a user is an error: no handler or CLI command reads another user's items.
 func (s *Store) Inbox(ctx context.Context) (open, history []InboxItem, err error) {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return []InboxItem{}, []InboxItem{}, err
+	}
+	return s.inbox(ctx, `SELECT owner, payload FROM user_inbox WHERE owner=?`, u.ID)
+}
+
+// inboxFor is the caller's Inbox; a context without a user (a CLI command run without --user) has none.
+func inboxFor(ctx context.Context, store *Store) (open, history []InboxItem, err error) {
+	if _, err := UserFrom(ctx); err != nil {
+		return []InboxItem{}, []InboxItem{}, nil
+	}
+	return store.Inbox(ctx)
+}
+
+// allInbox is every user's items for the node loops that file, answer and republish them. Handlers use Inbox.
+func (s *Store) allInbox(ctx context.Context) (open, history []InboxItem, err error) {
+	return s.inbox(ctx, `SELECT owner, payload FROM user_inbox`)
+}
+
+func (s *Store) inbox(ctx context.Context, query string, args ...any) (open, history []InboxItem, err error) {
 	open, history = []InboxItem{}, []InboxItem{}
-	rows, err := s.DB.QueryContext(ctx, `SELECT payload FROM inbox`)
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return open, history, err
 	}
@@ -735,7 +845,7 @@ func (s *Store) Inbox(ctx context.Context) (open, history []InboxItem, err error
 	for rows.Next() {
 		var raw string
 		var item InboxItem
-		if err := rows.Scan(&raw); err != nil {
+		if err := rows.Scan(&item.Owner, &raw); err != nil {
 			return open, history, err
 		}
 		if err := json.Unmarshal([]byte(raw), &item); err != nil {

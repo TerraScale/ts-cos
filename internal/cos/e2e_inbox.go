@@ -35,6 +35,9 @@ func inboxCheck(run func(ctx context.Context, in *Inbox, bus *Bus, urls []string
 		if err != nil {
 			return "", err
 		}
+		if ctx, err = e2eNodeContext(ctx, bus); err != nil {
+			return "", err
+		}
 		return run(ctx, in, bus, urls, e)
 	}
 }
@@ -55,19 +58,36 @@ func e2eInboxInput(name string, extra InboxInput) InboxInput {
 	return in
 }
 
-// purgeE2EInbox removes probe items from every node's mirror; a fresh context lets a cancelled run still clean up.
-func purgeE2EInbox(in *Inbox, ids ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// e2eNodeContext files probe items as the first admin, who owns node-produced items, so the Inbox checks see them as COS does.
+func e2eNodeContext(ctx context.Context, bus *Bus) (context.Context, error) {
+	admin, err := nodeUser(ctx, bus)
+	if err != nil {
+		return ctx, err
+	}
+	return WithUser(ctx, admin), nil
+}
+
+// purgeE2EInbox removes probe items from the caller's Inbox on every node's mirror; a fresh context lets a cancelled run still clean up.
+func purgeE2EInbox(ctx context.Context, in *Inbox, ids ...string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
+	kv, err := UserKV(ctx, in.kv)
+	if err != nil {
+		return err
+	}
 	var errs []error
 	for _, id := range ids {
-		errs = append(errs, in.kv.Purge(ctx, id))
+		errs = append(errs, kv.Purge(ctx, id))
 	}
 	return errors.Join(errs...)
 }
 
 func e2eInboxItem(ctx context.Context, in *Inbox, id string) (InboxItem, error) {
-	entry, err := in.kv.Get(ctx, id)
+	kv, err := UserKV(ctx, in.kv)
+	if err != nil {
+		return InboxItem{}, err
+	}
+	entry, err := kv.Get(ctx, id)
 	if err != nil {
 		return InboxItem{}, err
 	}
@@ -137,7 +157,7 @@ func pollE2E(ctx context.Context, timeout, every time.Duration, check func(conte
 
 func checkInboxAddVisible(ctx context.Context, in *Inbox, _ *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
-	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
+	defer func() { err = errors.Join(err, purgeE2EInbox(ctx, in, ids...)) }()
 	cookie, err := e.session(ctx, urls[0])
 	if err != nil {
 		return "", err
@@ -159,7 +179,7 @@ func checkInboxAddVisible(ctx context.Context, in *Inbox, _ *Bus, urls []string,
 
 func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
-	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
+	defer func() { err = errors.Join(err, purgeE2EInbox(ctx, in, ids...)) }()
 	cookie, err := e.session(ctx, urls[0])
 	if err != nil {
 		return "", err
@@ -199,7 +219,7 @@ func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []str
 
 func checkInboxConcurrentAnswer(ctx context.Context, in *Inbox, _ *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
-	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
+	defer func() { err = errors.Join(err, purgeE2EInbox(ctx, in, ids...)) }()
 	cookie, err := e.session(ctx, urls[0])
 	if err != nil {
 		return "", err
@@ -249,7 +269,7 @@ func checkInboxConcurrentAnswer(ctx context.Context, in *Inbox, _ *Bus, urls []s
 
 func checkInboxDedup(ctx context.Context, in *Inbox, _ *Bus, _ []string, _ *E2EEnv) (evidence string, err error) {
 	var ids []string
-	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
+	defer func() { err = errors.Join(err, purgeE2EInbox(ctx, in, ids...)) }()
 	first := e2eInboxInput("dedup", InboxInput{Context: "first"})
 	old, err := in.Add(ctx, first)
 	if err != nil {
@@ -307,7 +327,7 @@ func checkInboxNeedsUserForward(ctx context.Context, in *Inbox, bus *Bus, urls [
 			errs = append(errs, bus.Call(cctx, host, "delete", []string{threadID}, nil))
 		}
 		if itemID != "" {
-			errs = append(errs, purgeE2EInbox(in, itemID))
+			errs = append(errs, purgeE2EInbox(ctx, in, itemID))
 		}
 		err = errors.Join(err, errors.Join(errs...))
 	}()
@@ -324,7 +344,11 @@ func checkInboxNeedsUserForward(ctx context.Context, in *Inbox, bus *Bus, urls [
 	start := time.Now()
 	// Found by thread, not by a precomputed ID: the model may not echo the question byte for byte.
 	err = pollE2E(ctx, 3*time.Minute, 2*time.Second, func(ctx context.Context) (bool, error) {
-		keys, err := in.kv.ListKeys(ctx)
+		kv, err := UserKV(ctx, in.kv)
+		if err != nil {
+			return false, err
+		}
+		keys, err := kv.ListKeys(ctx)
 		if errors.Is(err, jetstream.ErrNoKeysFound) {
 			return false, nil
 		}

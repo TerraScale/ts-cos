@@ -155,6 +155,10 @@ func noticeFor(e Event) (Notice, bool) {
 		if e.Severity == SeverityInfo {
 			return Notice{}, false
 		}
+		if e.User == "" {
+			slog.Warn("push dropped an inbox event without its user", "event", e.ID)
+			return Notice{}, false
+		}
 		var data struct {
 			Kind string `json:"kind"`
 		}
@@ -163,7 +167,7 @@ func noticeFor(e Event) (Notice, bool) {
 		if t, ok := inboxTitles[data.Kind]; ok {
 			title = t
 		}
-		return Notice{Category: "inbox", Title: title, Body: e.Summary, URL: "/inbox#inbox-" + e.Item, Tag: "inbox-" + e.Item, Urgent: e.Severity == SeverityUrgent}, true
+		return Notice{Category: "inbox", User: e.User, Title: title, Body: e.Summary, URL: "/inbox#inbox-" + e.Item, Tag: "inbox-" + e.Item, Urgent: e.Severity == SeverityUrgent}, true
 	case e.Kind == "deploy.completed":
 		return Notice{Category: "done", Title: "Updated", Body: e.Summary, URL: "/", Tag: "deploy"}, true
 	case e.Kind == "deploy.rolled_back":
@@ -196,11 +200,23 @@ func (p *Push) chatReplies(ctx context.Context) {
 				continue
 			}
 			seen[key] = true
-			if _, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: firstLine(e.Text), URL: "/#m-" + e.ID, Tag: "chat"}); err != nil {
+			n, ok := chatReplyNotice(e)
+			if !ok {
+				continue
+			}
+			if _, err := p.Send(ctx, n); err != nil {
 				logErr(ctx, slog.LevelError, "push COS reply", err)
 			}
 		}
 	}
+}
+
+// chatReplyNotice is the push for a COS reply to its owner. A reply without an owner is not pushed to anyone.
+func chatReplyNotice(e ChatEntry) (Notice, bool) {
+	if e.owner == "" {
+		return Notice{}, false
+	}
+	return Notice{Category: "chat", User: e.owner, Title: "COS", Body: firstLine(e.Text), URL: "/#m-" + e.ID, Tag: "chat"}, true
 }
 
 // firstLine is the first non-empty line of a reply, without the markdown markers that lead it.
