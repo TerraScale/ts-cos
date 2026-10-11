@@ -509,10 +509,10 @@ func TestE2EProtectedChecksStay(t *testing.T) {
 	want := []string{
 		"access.login.tailnet", "access.login.public", "access.wrong-password", "access.lockout",
 		"access.session-cross-node", "access.logout", "access.password-change",
-		"deploy.canary", "deploy.rollback", "deploy.watchdog", "deploy.reconnect", "gate.self-change",
+		"deploy.canary", "deploy.rollback", "deploy.reconnect", "gate.self-change",
 	}
 	for _, h := range e2eHosts {
-		want = append(want, "deploy.unit."+h, "deploy.version."+h, "deploy.restarts."+h, "deploy.logs."+h)
+		want = append(want, "deploy.unit."+h, "deploy.version."+h, "deploy.restarts."+h, "deploy.logs."+h, "deploy.watchdog."+h)
 	}
 	for _, id := range want {
 		if !ids[id] {

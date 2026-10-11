@@ -243,6 +243,13 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   leader. Finally, the leader is SIGKILLed and the survivors must agree on a new
   one within 30 s.
 - `rules.heartbeat-leader`: the autopilot heartbeat runs on the cluster leader.
+- `deploy.watchdog.<host>` (TS-818): `cos.service` is the build-store unit (notify, 60 s start
+  timeout, trial revert in ExecStartPre and ExecStopPost), `current` and `good` point at
+  `builds/<40-hex>`, idle means no trial and no rollout, `cos version` reports protocol 1,
+  and at most three builds (plus pinned). A rollout in progress skips.
+- `deploy.reconnect` (TS-818): on each node `/version` reports the host, protocol and one
+  shared revision, `/release` streams its `_release` signal (or `: release unknown`), and
+  the dashboard renders `releaseWatch`. It skips until `/version` is served.
 - `--smoke` runs the fast health-gate subset (under 25 s). The rollout gate calls
   `E2ESmoke(ctx, cfg, host, revision)`: smoke checks for that host plus cluster-wide
   ones, with `deploy.version` expecting the rolled-out revision.

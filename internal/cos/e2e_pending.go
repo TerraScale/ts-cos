@@ -32,8 +32,6 @@ var e2ePending = func() []E2ECheck {
 		{"failure.sqlite-disk-full", "TS-810", "deployed cluster"},
 		{"deploy.canary", "TS-818", "rolling canary deploy"},
 		{"deploy.rollback", "TS-818", "automatic rollback"},
-		{"deploy.watchdog", "TS-818", "last-known-good watchdog"},
-		{"deploy.reconnect", "TS-818", "zero-downtime reconnect and browser reload"},
 	}
 	checks := make([]E2ECheck, len(rows))
 	for i, r := range rows {

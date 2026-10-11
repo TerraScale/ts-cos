@@ -234,6 +234,7 @@ func e2eChecks() []E2ECheck {
 			E2ECheck{ID: "deploy.version." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkVersion(ctx, e, h) }},
 			E2ECheck{ID: "deploy.restarts." + h, Stream: "TS-810", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkRestarts(ctx, e, h) }},
 			E2ECheck{ID: "deploy.logs." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkLogs(ctx, e, h) }},
+			E2ECheck{ID: "deploy.watchdog." + h, Stream: "TS-818", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkWatchdog(ctx, e, h) }},
 		)
 	}
 	for _, h := range e2eHosts {
@@ -260,6 +261,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "access.session-cross-node", Stream: "TS-810", Run: accessCheck(checkSessionCrossNode)},
 		E2ECheck{ID: "access.logout", Stream: "TS-810", Run: accessCheck(checkLogout)},
 		E2ECheck{ID: "access.password-change", Stream: "TS-810", Run: accessCheck(checkPasswordChange)},
+		E2ECheck{ID: "deploy.reconnect", Stream: "TS-818", Run: accessCheck(checkReconnect)},
 		E2ECheck{ID: "gate.self-change", Stream: "TS-817", Run: checkSelfGate},
 	)
 	return append(append(checks, e2ePending...), e2eRegistered...)
