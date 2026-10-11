@@ -17,7 +17,7 @@ func TestContextCommand(t *testing.T) {
 	nodes, configs := chatTestCluster(t, ctx)
 	// Only the JetStream meta leader creates buckets, so try every node until one succeeds.
 	owner := -1
-	chatTestWait(t, "context bucket created", func() bool {
+	busTestReady(t, "context bucket created", func() bool {
 		for i, bus := range nodes {
 			if _, err := openKV(ctx, bus, contextBucket); err == nil {
 				owner = i
@@ -29,7 +29,7 @@ func TestContextCommand(t *testing.T) {
 	bindKV := func(bus *Bus) jetstream.KeyValue {
 		t.Helper()
 		var kv jetstream.KeyValue
-		chatTestWait(t, "context bucket bound", func() bool {
+		busTestReady(t, "context bucket bound", func() bool {
 			var err error
 			kv, err = openKV(ctx, bus, contextBucket)
 			return err == nil
@@ -61,7 +61,7 @@ func TestContextCommand(t *testing.T) {
 		t.Fatal(out)
 	}
 
-	chatTestWait(t, "context file replicated", func() bool {
+	busTestReady(t, "context file replicated", func() bool {
 		out, err = run(replica, "get", "user-prefs")
 		return err == nil
 	})
@@ -71,12 +71,13 @@ func TestContextCommand(t *testing.T) {
 		t.Fatal(out)
 	}
 
-	out, err = run(kv, "list")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// ListKeys can miss a just-written key while the replica catches up, so poll instead of asserting on the first read.
 	var files []ContextFile
-	decode(out, &files)
+	busTestReady(t, "context list shows user-prefs", func() bool {
+		out, err = run(kv, "list")
+		files = nil
+		return err == nil && json.Unmarshal([]byte(out), &files) == nil && len(files) == 1
+	})
 	if len(files) != 1 || files[0].Name != "user-prefs" || files[0].Bytes != len("Prefer Haiku 5.5") {
 		t.Fatal(out)
 	}
