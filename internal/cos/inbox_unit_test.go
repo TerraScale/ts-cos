@@ -3,11 +3,14 @@ package cos
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -306,5 +309,89 @@ func TestInboxUnitRegisteredCommand(t *testing.T) {
 	err := Run(context.Background(), Config{Home: t.TempDir()}, []string{"inbox", "nope"}, io.Discard)
 	if err == nil || !strings.HasPrefix(err.Error(), "usage: cos inbox") {
 		t.Fatalf("dispatch: %v", err)
+	}
+}
+
+// inboxLogs records "LEVEL message" for each slog record.
+type inboxLogs struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *inboxLogs) Enabled(context.Context, slog.Level) bool { return true }
+
+func (l *inboxLogs) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, r.Level.String()+" "+r.Message)
+	return nil
+}
+
+func (l *inboxLogs) WithAttrs([]slog.Attr) slog.Handler { return l }
+
+func (l *inboxLogs) WithGroup(string) slog.Handler { return l }
+
+func (l *inboxLogs) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.lines)
+}
+
+func TestInboxFailuresLogOnce(t *testing.T) {
+	logs := &inboxLogs{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	f := inboxFailures{what: "test loop"}
+	fail := errors.New("context deadline exceeded")
+
+	if got := f.observe(fail); got != 2*time.Second {
+		t.Fatalf("first backoff = %v, want 2s", got)
+	}
+	if got, want := logs.all(), []string{"WARN test loop failed; retrying"}; !slices.Equal(got, want) {
+		t.Fatalf("first failure logs = %q, want %q", got, want)
+	}
+
+	for _, want := range []time.Duration{4 * time.Second, 8 * time.Second, 16 * time.Second} {
+		if got := f.observe(fail); got != want {
+			t.Fatalf("backoff = %v, want %v", got, want)
+		}
+	}
+	if got := logs.all(); len(got) != 1 {
+		t.Fatalf("repeat failures logged %q, want only the first WARN", got)
+	}
+
+	f.since = time.Now().Add(-6 * time.Minute)
+	f.observe(fail)
+	if got, want := logs.all(), []string{
+		"WARN test loop failed; retrying",
+		"ERROR test loop still failing",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("persisted failure logs = %q, want %q", got, want)
+	}
+	f.observe(fail)
+	if got := logs.all(); len(got) != 2 {
+		t.Fatalf("second persisted failure logged %q, want no new record", got)
+	}
+
+	var last time.Duration
+	for range 10 {
+		last = f.observe(fail)
+	}
+	if last != time.Minute {
+		t.Fatalf("capped backoff = %v, want 1m", last)
+	}
+
+	before := len(logs.all())
+	if got := f.observe(nil); got != 0 {
+		t.Fatalf("recovery backoff = %v, want 0", got)
+	}
+	if got := logs.all(); len(got) != before+1 || got[len(got)-1] != "INFO test loop recovered" {
+		t.Fatalf("recovery logs = %q, want one INFO recovered", got)
+	}
+	f.observe(fail)
+	if got := logs.all(); got[len(got)-1] != "WARN test loop failed; retrying" {
+		t.Fatalf("failure after recovery logged %q, want WARN", got[len(got)-1])
 	}
 }

@@ -167,6 +167,21 @@ func TestInboxClusterLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A worker.needs_user event from T3 ingestion is filed by the leader's consumer.
+	busTestReady(t, "needs-user consumer", func() bool {
+		_, err := delta.inbox.js.Consumer(ctx, EventsStream, "cos-inbox-needs-user")
+		return err == nil
+	})
+	needsUser, _ := json.Marshal(map[string]any{"title": "TS-816 e2e worker", "question": "Run the slow suite?", "options": []string{"Yes", "No"}, "why": "CI time."})
+	if _, err := PublishEvent(ctx, beta.inbox.js, Event{ID: "t3:run-1:needs-user:0", Source: SourceT3, Kind: KindNeedsUser, Time: time.Now(),
+		Severity: SeverityUrgent, Summary: "NEEDS-USER Run the slow suite?", Host: "beta", Thread: "thread-event", Data: needsUser}); err != nil {
+		t.Fatal(err)
+	}
+	evented, _ := askInput(Ask{Host: "beta", ThreadID: "thread-event", Title: "TS-816 e2e worker", Question: "Run the slow suite?", Options: []string{"Yes", "No"}, Why: "CI time."}).item(time.Now())
+	waitInbox(t, nodes, evented.ID, func(i InboxItem) bool {
+		return i.Source == "worker" && i.Ticket == "TS-816" && i.Blocks == "TS-816 e2e worker" && len(i.Options) == 2
+	})
+
 	// Worker NEEDS-USER blocks become items; answers are forwarded to the worker.
 	live := Live{
 		At: time.Now().UTC().Format(time.RFC3339),
@@ -178,7 +193,7 @@ func TestInboxClusterLifecycle(t *testing.T) {
 		},
 		Fleet: []HostFleet{
 			{Host: "delta", Threads: []FleetThread{{ThreadID: "thread-1", Status: "completed"}, {ThreadID: "thread-retry", Status: "completed"}}},
-			{Host: "beta", Threads: []FleetThread{{ThreadID: "thread-busy", Status: "running"}, {ThreadID: "thread-idle", Status: "completed"}}},
+			{Host: "beta", Threads: []FleetThread{{ThreadID: "thread-busy", Status: "running"}, {ThreadID: "thread-idle", Status: "completed"}, {ThreadID: "thread-event", Status: "running"}}},
 		},
 	}
 	if err := dev.inbox.SyncAsks(ctx, live, nil); err != nil {
@@ -248,8 +263,8 @@ func TestInboxClusterLifecycle(t *testing.T) {
 			answer = e
 		}
 	}
-	// Added: q, old, newer, fyi, 4 worker asks. Answered: q, worker, retry. Closed: old, newer, fyi, idle.
-	if kinds[KindInboxItemAdded] != 8 || kinds[KindUserAnswer] != 3 || kinds[KindInboxClosed] != 4 {
+	// Added: q, old, newer, fyi, evented, 4 worker asks. Answered: q, worker, retry. Closed: old, newer, fyi, idle.
+	if kinds[KindInboxItemAdded] != 9 || kinds[KindUserAnswer] != 3 || kinds[KindInboxClosed] != 4 {
 		t.Fatalf("event counts %v", kinds)
 	}
 	var data AnswerData

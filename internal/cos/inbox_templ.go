@@ -403,313 +403,315 @@ func inbox(v Dashboard) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				if url := ticketURL(v, item.Ticket); url != "" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "<a href=\"")
+				if item.Ticket != "" {
+					var templ_7745c5c3_Var22 string
+					templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(item.Ticket)
 					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var22 templ.SafeURL
-					templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(url))
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 66, Col: 34}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 66, Col: 23}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "\">")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var23 string
-					templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(item.Ticket)
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 66, Col: 50}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</a> ")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, " ")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
 				for _, link := range item.Links {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "<a href=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "<a href=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					var templ_7745c5c3_Var24 templ.SafeURL
-					templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(link))
+					var templ_7745c5c3_Var23 templ.SafeURL
+					templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(link))
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 69, Col: 35}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "\">")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var24 string
+					templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(link)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 69, Col: 44}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "</a>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					var templ_7745c5c3_Var25 string
-					templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(link)
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</p>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				if item.Kind != "fyi" {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "<form class=\"stack inbox-answer\" method=\"post\" action=\"")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 69, Col: 44}
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var25 templ.SafeURL
+					templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/inbox/" + item.ID + "/answer"))
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 73, Col: 111}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "</a>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "\" data-on:submit=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "</p>")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				if item.Kind != "fyi" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "<form class=\"stack inbox-answer\" method=\"post\" action=\"")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var26 templ.SafeURL
-					templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/inbox/" + item.ID + "/answer"))
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 73, Col: 111}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "\" data-on:submit=\"")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var27 string
-					templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.ResolveAttributeValue("@post('/inbox/" + item.ID + "/answer', {contentType: 'form'})")
+					var templ_7745c5c3_Var26 string
+					templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.ResolveAttributeValue("@post('/inbox/" + item.ID + "/answer', {contentType: 'form'})")
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 73, Col: 194}
 					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var27)
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var26)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					if len(item.Options) > 0 {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<div class=\"inbox-options\" role=\"group\" aria-label=\"Options\">")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<div class=\"inbox-options\" role=\"group\" aria-label=\"Options\">")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						for i, option := range item.Options {
 							if i == 0 && item.Kind == "question" {
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "<button class=\"btn-primary\" type=\"submit\" name=\"option\" value=\"")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<button class=\"btn-primary\" type=\"submit\" name=\"option\" value=\"")
+								if templ_7745c5c3_Err != nil {
+									return templ_7745c5c3_Err
+								}
+								var templ_7745c5c3_Var27 string
+								templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.ResolveAttributeValue(option)
+								if templ_7745c5c3_Err != nil {
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 78, Col: 84}
+								}
+								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var27)
+								if templ_7745c5c3_Err != nil {
+									return templ_7745c5c3_Err
+								}
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "\">")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
 								var templ_7745c5c3_Var28 string
-								templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.ResolveAttributeValue(option)
-								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 78, Col: 84}
-								}
-								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var28)
-								if templ_7745c5c3_Err != nil {
-									return templ_7745c5c3_Err
-								}
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "\">")
-								if templ_7745c5c3_Err != nil {
-									return templ_7745c5c3_Err
-								}
-								var templ_7745c5c3_Var29 string
-								templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(option)
+								templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(option)
 								if templ_7745c5c3_Err != nil {
 									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 79, Col: 23}
 								}
-								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
+								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, " <span class=\"tag\">Recommended</span></button>")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, " <span class=\"tag\">Recommended</span></button>")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
 							} else {
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "<button type=\"submit\" name=\"option\" value=\"")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "<button type=\"submit\" name=\"option\" value=\"")
+								if templ_7745c5c3_Err != nil {
+									return templ_7745c5c3_Err
+								}
+								var templ_7745c5c3_Var29 string
+								templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue(option)
+								if templ_7745c5c3_Err != nil {
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 83, Col: 64}
+								}
+								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
+								if templ_7745c5c3_Err != nil {
+									return templ_7745c5c3_Err
+								}
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "\">")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
 								var templ_7745c5c3_Var30 string
-								templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.ResolveAttributeValue(option)
-								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 83, Col: 64}
-								}
-								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var30)
-								if templ_7745c5c3_Err != nil {
-									return templ_7745c5c3_Err
-								}
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\">")
-								if templ_7745c5c3_Err != nil {
-									return templ_7745c5c3_Err
-								}
-								var templ_7745c5c3_Var31 string
-								templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(option)
+								templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(option)
 								if templ_7745c5c3_Err != nil {
 									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 83, Col: 75}
 								}
-								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
+								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "</button>")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "</button>")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
 							}
 						}
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "</div>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "</div>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<label class=\"field\"><span class=\"field-label\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "<label class=\"field\"><span class=\"field-label\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					var templ_7745c5c3_Var32 string
-					templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(inboxTextLabel(item))
+					var templ_7745c5c3_Var31 string
+					templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(inboxTextLabel(item))
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 89, Col: 59}
 					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "</span> <textarea name=\"text\" rows=\"2\" maxlength=\"3000\"></textarea></label><div class=\"row\"><button type=\"submit\">Send</button></div></form>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "</span> <textarea name=\"text\" rows=\"2\" maxlength=\"3000\"></textarea></label><div class=\"row\"><button type=\"submit\">Send</button></div></form>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
 				if item.Kind == "decision" || item.Kind == "blocker" || item.Kind == "fyi" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "<form method=\"post\" action=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<form method=\"post\" action=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					var templ_7745c5c3_Var33 templ.SafeURL
-					templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/inbox/" + item.ID + "/dismiss"))
+					var templ_7745c5c3_Var32 templ.SafeURL
+					templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/inbox/" + item.ID + "/dismiss"))
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 96, Col: 85}
 					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 59, "\" data-on:submit=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "\" data-on:submit=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					var templ_7745c5c3_Var34 string
-					templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.ResolveAttributeValue("@post('/inbox/" + item.ID + "/dismiss', {contentType: 'form'})")
+					var templ_7745c5c3_Var33 string
+					templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue("@post('/inbox/" + item.ID + "/dismiss', {contentType: 'form'})")
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 96, Col: 169}
 					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var34)
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "\"><button class=\"btn-ghost\" type=\"submit\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "\"><button class=\"btn-ghost\" type=\"submit\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					if item.Kind == "decision" {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "Keep this decision")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 59, "Keep this decision")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 					} else {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 62, "Got it")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "Got it")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "</button></form>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "</button></form>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "</article></li>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 62, "</article></li>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "</ol></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "</ol></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
 		if len(v.History) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 66, "<details class=\"disclosure inbox-history\"><summary>History (")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, "<details class=\"disclosure inbox-history\"><summary>History (")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var35 string
-			templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(integer(len(v.History)))
+			var templ_7745c5c3_Var34 string
+			templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(integer(len(v.History)))
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 114, Col: 47}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 67, ")</summary><ol class=\"list history-list\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, ")</summary><ol class=\"list history-list\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			for _, item := range v.History {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 68, "<li><div class=\"row\"><span class=\"tag\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 66, "<li><div class=\"row\"><span class=\"tag\">")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var35 string
+				templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(item.Status)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 118, Col: 55}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 67, "</span><span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var36 string
-				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(item.Status)
+				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 118, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 118, Col: 82}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "</span><span>")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				var templ_7745c5c3_Var37 string
-				templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 118, Col: 82}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 70, "</span></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 68, "</span></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				if item.Answer != nil {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "<p class=\"sub inbox-text\">Answer: ")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 69, "<p class=\"sub inbox-text\">Answer: ")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var37 string
+					templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(answerText(item.Answer))
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 120, Col: 67}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 70, "</p>")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+				}
+				if item.Note != "" {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "<p class=\"sub\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var38 string
-					templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(answerText(item.Answer))
+					templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(item.Note)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 120, Col: 67}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 123, Col: 34}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 					if templ_7745c5c3_Err != nil {
@@ -720,81 +722,62 @@ func inbox(v Dashboard) templ.Component {
 						return templ_7745c5c3_Err
 					}
 				}
-				if item.Note != "" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 73, "<p class=\"sub\">")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var39 string
-					templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(item.Note)
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 123, Col: 34}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "</p>")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 73, "<p class=\"sub\">")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 75, "<p class=\"sub\">")
+				var templ_7745c5c3_Var39 string
+				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(age(item.Closed))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 126, Col: 26}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, " ago on ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var40 string
-				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(age(item.Closed))
+				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(item.ClosedOn)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 126, Col: 26}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 126, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, " ago on ")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				var templ_7745c5c3_Var41 string
-				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(item.ClosedOn)
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 126, Col: 51}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, " ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 75, " ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				if item.ForwardError != "" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "· forward to worker failed, retrying: ")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, "· forward to worker failed, retrying: ")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					var templ_7745c5c3_Var42 string
-					templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(item.ForwardError)
+					var templ_7745c5c3_Var41 string
+					templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(item.ForwardError)
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/inbox.templ`, Line: 128, Col: 67}
 					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 79, "</p></li>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, "</p></li>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 80, "</ol></details>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "</ol></details>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 81, "</section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 79, "</section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

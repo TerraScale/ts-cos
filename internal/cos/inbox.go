@@ -264,7 +264,7 @@ func (in *Inbox) update(ctx context.Context, id string, fn func(item *InboxItem,
 func (in *Inbox) publish(ctx context.Context, item InboxItem) {
 	if _, err := PublishEvent(ctx, in.js, itemEvent(item)); err != nil {
 		// The reconciler re-emits recent items, so a lost publish is retried.
-		slog.Error("publish inbox event", "item", item.ID, "error", err)
+		slog.Warn("publish inbox event", "item", item.ID, "error", err)
 	}
 }
 
@@ -399,6 +399,69 @@ func (in *Inbox) forward(ctx context.Context, item InboxItem) InboxItem {
 	return released
 }
 
+// askInput maps a worker NEEDS-USER block to an item; the asks poll and the
+// worker.needs_user events must build identical items so they dedupe.
+func askInput(a Ask) InboxInput {
+	input := InboxInput{Source: "worker", Host: a.Host, Thread: a.ThreadID, Title: oneLine(a.Question, inboxTitleMax),
+		Context: a.Why, Blocks: a.Title, Ticket: strings.ToUpper(ticketPattern.FindString(a.Title))}
+	if input.Title != a.Question {
+		input.Context = strings.TrimSpace(a.Question + "\n\n" + a.Why)
+	}
+	if len(a.Options) >= 2 && len(a.Options) <= 4 {
+		input.Options = a.Options
+	} else if len(a.Options) > 0 {
+		input.Context = strings.TrimSpace(input.Context + "\n\nOPTIONS: " + strings.Join(a.Options, " | "))
+	}
+	input.Context = string([]rune(input.Context)[:min(utf8.RuneCountInString(input.Context), inboxTextMax)])
+	return input
+}
+
+// fileNeedsUser files a worker.needs_user event as soon as T3 ingestion sees it.
+func (in *Inbox) fileNeedsUser(ctx context.Context, e Event) error {
+	var a Ask
+	if err := json.Unmarshal(e.Data, &a); err != nil || e.Kind != KindNeedsUser || e.Host == "" || e.Thread == "" || a.Question == "" {
+		return fmt.Errorf("malformed worker.needs_user event %s", e.ID)
+	}
+	a.Host, a.ThreadID = e.Host, e.Thread
+	_, err := in.Add(ctx, askInput(a))
+	return err
+}
+
+// consumeNeedsUser files worker questions from the event stream; the durable
+// consumer resumes where the previous leader stopped.
+// A fixed start time, unlike DeliverNew, does not depend on when the first pull happens; later leaders resume the durable.
+func (in *Inbox) consumeNeedsUser(ctx context.Context) error {
+	consumer, err := in.js.Consumer(ctx, EventsStream, "cos-inbox-needs-user")
+	if errors.Is(err, jetstream.ErrConsumerNotFound) {
+		start := time.Now()
+		consumer, err = in.js.CreateConsumer(ctx, EventsStream, jetstream.ConsumerConfig{Durable: "cos-inbox-needs-user",
+			FilterSubject: Event{Source: SourceT3, Kind: KindNeedsUser}.Subject(), AckPolicy: jetstream.AckExplicitPolicy,
+			DeliverPolicy: jetstream.DeliverByStartTimePolicy, OptStartTime: &start, MaxDeliver: 5})
+	}
+	if err != nil {
+		return err
+	}
+	consuming, err := consumer.Consume(func(msg jetstream.Msg) {
+		var e Event
+		ferr := json.Unmarshal(msg.Data(), &e)
+		if ferr == nil {
+			ferr = in.fileNeedsUser(ctx, e)
+		}
+		if ferr != nil {
+			slog.Warn("file worker question", "error", ferr)
+			_ = msg.Nak()
+			return
+		}
+		_ = msg.Ack()
+	})
+	if err != nil {
+		return err
+	}
+	<-ctx.Done()
+	consuming.Stop()
+	return nil
+}
+
 // SyncAsks turns worker NEEDS-USER blocks into items and supersedes items whose
 // idle or closed worker no longer asks. Items dedupe by key.
 func (in *Inbox) SyncAsks(ctx context.Context, live Live, open []InboxItem) error {
@@ -416,18 +479,7 @@ func (in *Inbox) SyncAsks(ctx context.Context, live Live, open []InboxItem) erro
 		if a.Kind != "marker" || a.Stale {
 			continue
 		}
-		input := InboxInput{Source: "worker", Host: a.Host, Thread: a.ThreadID, Title: oneLine(a.Question, inboxTitleMax),
-			Context: a.Why, Blocks: a.Title, Ticket: strings.ToUpper(ticketPattern.FindString(a.Title))}
-		if input.Title != a.Question {
-			input.Context = strings.TrimSpace(a.Question + "\n\n" + a.Why)
-		}
-		if len(a.Options) >= 2 && len(a.Options) <= 4 {
-			input.Options = a.Options
-		} else if len(a.Options) > 0 {
-			input.Context = strings.TrimSpace(input.Context + "\n\nOPTIONS: " + strings.Join(a.Options, " | "))
-		}
-		input.Context = string([]rune(input.Context)[:min(utf8.RuneCountInString(input.Context), inboxTextMax)])
-		item, err := in.Add(ctx, input)
+		item, err := in.Add(ctx, askInput(a))
 		if err != nil {
 			return err
 		}
@@ -523,12 +575,43 @@ func (in *Inbox) Mirror(ctx context.Context, store *Store) error {
 	}
 }
 
+// inboxFailures turns repeated errors of one background loop into one WARN and,
+// only if they persist (KV/stream raft re-elections during restarts are transient),
+// one ERROR; it returns the backoff before the next attempt.
+type inboxFailures struct {
+	what      string
+	since     time.Time
+	n         int
+	escalated bool
+}
+
+const inboxPersist = 5 * time.Minute
+
+func (f *inboxFailures) observe(err error) time.Duration {
+	if err == nil {
+		if f.n > 0 {
+			slog.Info(f.what+" recovered", "attempts", f.n)
+		}
+		*f = inboxFailures{what: f.what}
+		return 0
+	}
+	f.n++
+	switch {
+	case f.n == 1:
+		f.since = time.Now()
+		slog.Warn(f.what+" failed; retrying", "error", err)
+	case !f.escalated && time.Since(f.since) >= inboxPersist:
+		f.escalated = true
+		slog.Error(f.what+" still failing", "since", f.since.UTC().Format(time.RFC3339), "attempts", f.n, "error", err)
+	}
+	return min(2*time.Second<<min(f.n-1, 5), time.Minute)
+}
+
 // RunInbox mirrors the bucket on every node and calls ready once it is
 // reachable (the cluster needs a JetStream quorum first). The reconciler is
 // singleton work, so it runs only on the cluster leader.
 func RunInbox(ctx context.Context, bus *Bus, host string, store *Store, ready func(*Inbox)) {
-	retry := time.NewTicker(2 * time.Second)
-	defer retry.Stop()
+	opening := inboxFailures{what: "COS Inbox open"}
 	var in *Inbox
 	for in == nil {
 		attempt, stop := context.WithTimeout(ctx, 5*time.Second)
@@ -536,41 +619,70 @@ func RunInbox(ctx context.Context, bus *Bus, host string, store *Store, ready fu
 		in, err = OpenInbox(attempt, bus, host, true)
 		stop()
 		if err != nil {
-			slog.Warn("COS Inbox not ready", "error", err)
+			if ctx.Err() != nil {
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-retry.C:
+			case <-time.After(opening.observe(err)):
 			}
 		}
 	}
+	opening.observe(nil)
 	slog.Info("COS Inbox ready", "host", host)
 	ready(in)
 	var lead sync.WaitGroup
 	defer lead.Wait()
 	lead.Go(func() {
 		bus.Lead(ctx, func(ctx context.Context) {
-			tick := time.NewTicker(time.Minute)
-			defer tick.Stop()
+			var consumer sync.WaitGroup
+			defer consumer.Wait()
+			consumer.Go(func() {
+				questions := inboxFailures{what: "inbox worker-question consumer"}
+				for ctx.Err() == nil {
+					var wait time.Duration
+					if err := in.consumeNeedsUser(ctx); err != nil && ctx.Err() == nil {
+						wait = questions.observe(err)
+					}
+					select {
+					case <-ctx.Done():
+					case <-time.After(wait):
+					}
+				}
+			})
+			reconciling := inboxFailures{what: "inbox reconcile"}
 			for {
-				if err := in.reconcile(ctx, store); err != nil && ctx.Err() == nil {
-					slog.Error("reconcile inbox", "error", err)
+				err := in.reconcile(ctx, store)
+				if ctx.Err() != nil {
+					return
+				}
+				wait := reconciling.observe(err)
+				if wait == 0 {
+					wait = time.Minute
 				}
 				select {
 				case <-ctx.Done():
 					return
-				case <-tick.C:
+				case <-time.After(wait):
 				}
 			}
 		})
 	})
-	for ctx.Err() == nil {
-		if err := in.Mirror(ctx, store); err != nil && ctx.Err() == nil {
-			slog.Error("mirror inbox", "error", err)
+	mirroring := inboxFailures{what: "inbox mirror"}
+	for {
+		started := time.Now()
+		err := in.Mirror(ctx, store)
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(started) > time.Minute {
+			mirroring.observe(nil)
 		}
 		select {
 		case <-ctx.Done():
-		case <-retry.C:
+			return
+		case <-time.After(mirroring.observe(err)):
 		}
 	}
 }
@@ -682,14 +794,6 @@ func age(t time.Time) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
-}
-func ticketURL(v Dashboard, ticket string) string {
-	for _, i := range v.Live.Issues {
-		if i.Identifier == ticket {
-			return i.URL
-		}
-	}
-	return ""
 }
 
 // liveRequests are T3 runtime requests and failures; NEEDS-USER markers are Inbox items.

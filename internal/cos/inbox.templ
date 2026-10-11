@@ -62,8 +62,8 @@ templ inbox(v Dashboard) {
 									<p class="inbox-text">{ item.Context }</p>
 								}
 								<p class="meta inbox-links">
-									if url := ticketURL(v, item.Ticket); url != "" {
-										<a href={ templ.URL(url) }>{ item.Ticket }</a>
+									if item.Ticket != "" {
+										{ item.Ticket }
 									}
 									for _, link := range item.Links {
 										<a href={ templ.URL(link) }>{ link }</a>
