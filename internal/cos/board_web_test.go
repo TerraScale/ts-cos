@@ -37,9 +37,9 @@ func workFixture(t *testing.T, s *Store) {
 			{ThreadID: "c3e88f02-thread", Title: "TS-802 review", Status: "running", Model: "claude-opus-5-5", Branch: "cos/ts-802-report"},
 		}},
 	}, PRs: []PR{
-		{Repo: "TerraScale/ts-cos", Number: 43, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/43", Title: "TS-803 review gate", Branch: "cos/ts-803-review", Base: "main", Mergeable: true, CI: "pending"},
-		{Repo: "TerraScale/ts-cos", Number: 44, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/44", Title: "TS-804 ready to land", Branch: "cos/ts-804-land", Base: "main", Mergeable: true, CI: "success", Ready: true},
-		{Repo: "TerraScale/ts-cos", Number: 45, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/45", Title: "TS-808 lint", Branch: "cos/ts-808-lint", Base: "main", Mergeable: true, CI: "failure", Failing: []string{"lint"}},
+		{Repo: "TerraScale/ts-cos", Number: 43, URL: "https://github.com/TerraScale/ts-cos/pulls/43", Title: "TS-803 review gate", Branch: "cos/ts-803-review", Base: "main", Mergeable: true, CI: "pending"},
+		{Repo: "TerraScale/ts-cos", Number: 44, URL: "https://github.com/TerraScale/ts-cos/pulls/44", Title: "TS-804 ready to land", Branch: "cos/ts-804-land", Base: "main", Mergeable: true, CI: "success", Ready: true},
+		{Repo: "TerraScale/ts-cos", Number: 45, URL: "https://github.com/TerraScale/ts-cos/pulls/45", Title: "TS-808 lint", Branch: "cos/ts-808-lint", Base: "main", Mergeable: true, CI: "failure", Failing: []string{"lint"}},
 	}}
 	if err := s.SaveLive(ctx, live); err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestWorkTimelinePRLinks(t *testing.T) {
 	s := boardTestStore(t)
 	workFixture(t, s)
 	_, page := workGet(t, NewWeb(s, nil), "/work/TS-803")
-	if !strings.Contains(page, `<a href="https://git.terrascale.tech/TerraScale/ts-cos/pulls/43">TerraScale/ts-cos#43</a>`) {
+	if !strings.Contains(page, `<a href="https://github.com/TerraScale/ts-cos/pulls/43">TerraScale/ts-cos#43</a>`) {
 		t.Fatal("open PR event not linked to its URL")
 	}
 	_, merged := workGet(t, NewWeb(s, nil), "/work/TS-805")
