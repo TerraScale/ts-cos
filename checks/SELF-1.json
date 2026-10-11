@@ -1,0 +1,7 @@
+{
+  "summary": "progress line renders an arrow",
+  "template": "progress",
+  "contains": [
+    "TS-900 → PR open"
+  ]
+}
