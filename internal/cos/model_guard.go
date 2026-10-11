@@ -28,7 +28,7 @@ func haikuModel(v any) bool {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, x := range v {
-			if s, ok := x.(string); ok && k == "model" && strings.Contains(strings.ToLower(s), "haiku") {
+			if strings.EqualFold(k, "model") && containsHaiku(x) {
 				return true
 			}
 			if haikuModel(x) {
@@ -38,6 +38,27 @@ func haikuModel(v any) bool {
 	case []any:
 		for _, x := range v {
 			if haikuModel(x) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// containsHaiku reports whether any string inside v, at any depth, names Haiku.
+func containsHaiku(v any) bool {
+	switch v := v.(type) {
+	case string:
+		return strings.Contains(strings.ToLower(v), "haiku")
+	case map[string]any:
+		for _, x := range v {
+			if containsHaiku(x) {
+				return true
+			}
+		}
+	case []any:
+		for _, x := range v {
+			if containsHaiku(x) {
 				return true
 			}
 		}

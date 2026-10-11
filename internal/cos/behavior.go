@@ -95,9 +95,23 @@ type Behavior struct {
 // AgentBrief is the brief and rules text COS starts every thread with.
 func (b *Behavior) AgentBrief() string { return b.Brief + "\n" + b.Rules }
 
+// behaviorRenderMax bounds one rendered template; a bundle cannot exhaust a node's memory.
+const behaviorRenderMax = 64 << 10
+
+var errRenderTooLarge = fmt.Errorf("rendered template exceeds %d bytes", behaviorRenderMax)
+
+type cappedWriter struct{ bytes.Buffer }
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	if w.Len()+len(p) > behaviorRenderMax {
+		return 0, errRenderTooLarge
+	}
+	return w.Buffer.Write(p)
+}
+
 // Render executes a behavior template; status-line templates come back as one trimmed line.
 func (b *Behavior) Render(name string, data any) (string, error) {
-	var out bytes.Buffer
+	var out cappedWriter
 	if err := b.tmpl.ExecuteTemplate(&out, name, data); err != nil {
 		return "", err
 	}

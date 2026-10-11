@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -47,15 +48,16 @@ func TestBehaviorRejectsInvalid(t *testing.T) {
 		"wake bad kind": func(f map[string]string) {
 			f["wake.json"] = `{"maxWakesPerHour":6,"digestSeconds":600,"immediate":["chat.message","Bad Kind"]}`
 		},
-		"template syntax":      func(f map[string]string) { f["templates/updated.tmpl"] = "Updated: {{.Summary" },
-		"template field":       func(f map[string]string) { f["templates/updated.tmpl"] = "Updated: {{.Title}}" },
-		"template missing":     func(f map[string]string) { delete(f, "templates/reverted.tmpl") },
-		"status line wall":     func(f map[string]string) { f["templates/progress.tmpl"] = "{{.Ticket}}\n{{.Step}}" },
-		"status line empty":    func(f map[string]string) { f["templates/updated.tmpl"] = "  " },
-		"template redefines":   func(f map[string]string) { f["templates/digest.tmpl"] += `{{define "updated"}}x{{end}}` },
-		"template defines new": func(f map[string]string) { f["templates/digest.tmpl"] += `{{define "other"}}x{{end}}` },
-		"unknown file":         func(f map[string]string) { f["notes.txt"] = "x" },
-		"oversized bundle":     func(f map[string]string) { f["rules.md"] = strings.Repeat("x", behaviorMaxBytes) },
+		"template syntax":           func(f map[string]string) { f["templates/updated.tmpl"] = "Updated: {{.Summary" },
+		"template field":            func(f map[string]string) { f["templates/updated.tmpl"] = "Updated: {{.Title}}" },
+		"template missing":          func(f map[string]string) { delete(f, "templates/reverted.tmpl") },
+		"status line wall":          func(f map[string]string) { f["templates/progress.tmpl"] = "{{.Ticket}}\n{{.Step}}" },
+		"status line empty":         func(f map[string]string) { f["templates/updated.tmpl"] = "  " },
+		"template redefines":        func(f map[string]string) { f["templates/digest.tmpl"] += `{{define "updated"}}x{{end}}` },
+		"template defines new":      func(f map[string]string) { f["templates/digest.tmpl"] += `{{define "other"}}x{{end}}` },
+		"unknown file":              func(f map[string]string) { f["notes.txt"] = "x" },
+		"oversized bundle":          func(f map[string]string) { f["rules.md"] = strings.Repeat("x", behaviorMaxBytes) },
+		"template output too large": func(f map[string]string) { f["templates/digest.tmpl"] = `{{range 100000}}xxxxxxxxxx{{end}}` },
 	}
 	for name, mutate := range cases {
 		files := behaviorTestFiles()
@@ -68,6 +70,18 @@ func TestBehaviorRejectsInvalid(t *testing.T) {
 	files["templates/extra.tmpl"] = "{{.}}"
 	if _, err := ParseBehavior("test", files); err != nil {
 		t.Fatalf("extra template rejected: %v", err)
+	}
+}
+
+func TestBehaviorRenderCapped(t *testing.T) {
+	files := behaviorTestFiles()
+	files["templates/big.tmpl"] = `{{range 10000}}xxxxxxxxxx{{end}}`
+	b, err := ParseBehavior("test", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Render("big", nil); !errors.Is(err, errRenderTooLarge) {
+		t.Fatalf("big render = %v, want errRenderTooLarge", err)
 	}
 }
 
