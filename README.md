@@ -408,8 +408,8 @@ When the user asks the COS chat to fix or change COS itself, the agent runs
 acceptance check: a dashboard path or a behavior template, plus text that must
 appear or disappear. The cluster leader then drives it with no further input:
 
-1. Key `SELF-<n>` from a counter in `COS_SELF`, branch `cos/self-<n>` whose first
-   commit is `checks/SELF-<n>.json`; the check must fail on all 3 live nodes.
+1. Key `SELF-<n>` from a counter in `COS_SELF`, branch `self/self-<n>` whose first
+   commit is `checks/SELF-<n>.json`; the check must fail on all 3 live nodes. COS's merge train only takes `cos/` branches, so the driver alone merges self-changes, after the full e2e gate.
 2. Opus 5.5 worker thread (effort high; Haiku 5.5 only as its delegate_task
    subagents) on the least busy host with a brief rendered from `behavior/templates/selfbrief.tmpl`.
 3. Gate: every CI context green (CI runs every `checks/*.json` against the PR
