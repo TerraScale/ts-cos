@@ -12,6 +12,7 @@ templ page(v Dashboard) {
 			<style>main{max-width:1440px} .table-scroll{overflow-x:auto} td{vertical-align:top} small{display:block} mark{white-space:nowrap}</style>
 		</head>
 		<body data-init="@get('/events')">
+			<p id="autopilot-notice" role="status"></p>
 			@dashboard(v)
 		</body>
 	</html>
@@ -65,6 +66,7 @@ templ dashboard(v Dashboard) {
 				</article>
 			}
 		</section>
+		@autopilotPanel(v.Autopilot)
 		<section aria-labelledby="decisions-heading">
 			<h2 id="decisions-heading">Decided for you</h2>
 			@noteList(v.Story.Notes, "decide")

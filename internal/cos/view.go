@@ -12,9 +12,10 @@ import (
 )
 
 type Dashboard struct {
-	Story                   Story  `json:"story"`
-	Live                    Live   `json:"live"`
-	Tasks                   []Task `json:"tasks"`
+	Story                   Story          `json:"story"`
+	Live                    Live           `json:"live"`
+	Tasks                   []Task         `json:"tasks"`
+	Autopilot               AutopilotState `json:"autopilot"`
 	Running, Ready, Failing int
 }
 
@@ -42,7 +43,11 @@ func View(ctx context.Context, store *Store) (Dashboard, error) {
 	if err != nil {
 		return Dashboard{}, err
 	}
-	v := Dashboard{Story: story, Live: live, Tasks: []Task{}}
+	autopilot, err := store.Autopilot(ctx)
+	if err != nil {
+		return Dashboard{}, err
+	}
+	v := Dashboard{Story: story, Live: live, Tasks: []Task{}, Autopilot: autopilot}
 	for _, h := range live.Fleet {
 		if !h.Stale {
 			v.Running += h.Active

@@ -15,6 +15,7 @@ import (
 
 type Web struct {
 	Store       *Store
+	Autopilot   *Autopilot
 	token       string
 	mu          sync.Mutex
 	clients     map[chan struct{}]struct{}
@@ -50,6 +51,7 @@ func (w *Web) Handler() http.Handler {
 		}
 	})
 	mux.HandleFunc("GET /events", w.Events)
+	w.autopilotRoutes(mux)
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := View(r.Context(), w.Store)
 		if err != nil {

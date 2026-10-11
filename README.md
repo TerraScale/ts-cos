@@ -151,6 +151,21 @@ open PRs, and all open threads grouped by host. Datastar SSE patches HTML;
 SQLite/WAL and post-commit notifications push story edits from another process without
 waiting for the 60-second source refresh. No completed-work history is shown.
 
+## Autopilot heartbeat
+
+Every node serves the same Autopilot panel. The heartbeat interval is one of
+10, 15, 30 or 60 minutes (default 30); one tap on any node stores it in the
+replicated `COS_AUTOPILOT` KV bucket. Only the holder of the `COS_AUTOPILOT_LEADER`
+KV lock (45-second TTL, renewed every 15 seconds over a quorum) beats;
+mariogk-desktop never takes the lock. **Run now** sends a NATS request that only
+the leader answers, so it works from any node. Each beat records its time in KV
+first, so a failover leader keeps the schedule instead of beating again.
+
+The beat is the reconciler: it refreshes T3, Forgejo and Ku and logs what it saw.
+Every step is published with its reason to the 3-replica `COS_AUTOPILOT_LOG`
+stream; each node mirrors the stream and the KV state into its SQLite, so a
+restarted or joining node catches up and the feed shows the same entries everywhere.
+
 ## TS-769 slices
 
 1. **This PR:** CLI parity, derived SQLite state, read-only live dashboard,

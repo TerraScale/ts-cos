@@ -1,0 +1,38 @@
+package cos
+
+templ autopilotPanel(a AutopilotState) {
+	<section aria-labelledby="autopilot-heading">
+		<h2 id="autopilot-heading">Autopilot</h2>
+		if a.Error != "" {
+			<p role="alert">{ a.Error }</p>
+		}
+		<p>
+			Heartbeat every { integer(a.Interval) } minutes ·
+			if a.Leader == "" {
+				no leader yet
+			} else {
+				leader { a.Leader }
+			}
+			· last { orNone(a.LastBeat) } · next { a.NextBeat() }
+		</p>
+		<div role="group" aria-label="Heartbeat interval">
+			for _, m := range autopilotPresets {
+				<button type="button" aria-pressed={ boolText(m == a.Interval) } data-on:click={ "@post('/autopilot/interval/" + integer(m) + "')" }>{ integer(m) } min</button>
+			}
+			<button type="button" class="secondary" data-on:click="@post('/autopilot/run')">Run now</button>
+		</div>
+		<div class="table-scroll" tabindex="0" role="region" aria-label="Autopilot actions">
+			<table>
+				<thead><tr><th scope="col">Time</th><th scope="col">Kind</th><th scope="col">Target</th><th scope="col">Action</th><th scope="col">Reason</th></tr></thead>
+				<tbody>
+					if len(a.Log) == 0 {
+						<tr><td colspan="5">No actions yet.</td></tr>
+					}
+					for _, e := range a.Log {
+						<tr><td>{ e.At }<small>{ e.Host }</small></td><td>{ e.Kind }</td><td>{ e.Target }</td><td>{ e.Action }</td><td>{ e.Reason }</td></tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	</section>
+}

@@ -296,6 +296,10 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	}
 	defer bus.Close()
 	w := NewWeb(s, token)
+	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s))
+	if err != nil {
+		return err
+	}
 	if err := w.Watch(ctx); err != nil {
 		return err
 	}
