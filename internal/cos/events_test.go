@@ -84,31 +84,7 @@ func TestEventValidate(t *testing.T) {
 func TestEventStreamsReplicateAndDeduplicate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ports := busTestPorts(t, 6)
-	hosts := []string{"delta", "beta", "mariogk-dev"}
-	nodes := make([]*Bus, 3)
-	for i, host := range hosts {
-		var peers []int
-		for j := range hosts {
-			if i != j {
-				peers = append(peers, ports[j+3])
-			}
-		}
-		cfg, busNode := busTestConfig(t, host, ports[i], ports[i+3], peers)
-		node, err := startBus(ctx, cfg, busNode, func(context.Context, string, []string) (any, error) { return nil, nil })
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer node.Close()
-		nodes[i] = node
-	}
-	js := make([]jetstream.JetStream, 3)
-	for i, node := range nodes {
-		var err error
-		if js[i], err = node.JetStream(); err != nil {
-			t.Fatal(err)
-		}
-	}
+	js := busTestJetStream(t, ctx)
 	busTestReady(t, "event streams", func() bool {
 		ready, stop := context.WithTimeout(ctx, time.Second)
 		defer stop()

@@ -460,7 +460,7 @@ func TestE2EPartitionTimerHealPayload(t *testing.T) {
 }
 
 func TestE2EChecksIDsAndGroups(t *testing.T) {
-	streamPattern := regexp.MustCompile(`^TS-81[0-8]$`)
+	streamPattern := regexp.MustCompile(`^TS-8(1[0-9]|2[0-9])$`)
 	seen := map[string]bool{}
 	checks := e2eChecks()
 	if len(checks) < 3*len(e2eHosts)+6 {
@@ -472,7 +472,7 @@ func TestE2EChecksIDsAndGroups(t *testing.T) {
 		}
 		seen[c.ID] = true
 		if !streamPattern.MatchString(c.Stream) {
-			t.Errorf("%s: stream = %q, want TS-810 to TS-818", c.ID, c.Stream)
+			t.Errorf("%s: stream = %q, want TS-810 to TS-829", c.ID, c.Stream)
 		}
 	}
 }

@@ -58,6 +58,14 @@ another node takes over within about 20 seconds. Two of three nodes keep the
 cluster working. `cos cluster` prints the local host, the leader and the build
 revision; every node also advertises its revision in its micro metadata.
 
+### Nodes
+
+Every node samples its host (CPU, memory, load, disks, network, temperatures), its COS
+process and its local T3 every 10 seconds and publishes the sample to JetStream. Three
+replicated streams keep the samples: `COS_NODES_RAW` (6 hours), `COS_NODES_1M` (7 days)
+and `COS_NODES_15M` (90 days). Each node averages its own samples into 1-minute and
+15-minute buckets in memory; a bucket still open when that node restarts is lost.
+
 ### Sign-in and public URL
 
 `https://cos.terrascale.tech` and `http://<host>:8790` on the tailnet serve the
@@ -156,6 +164,7 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 |---|---|
 | `cos fleet` / `cos shell <host>` | Open threads and active load |
 | `cos cluster` | Local host, current leader and build revision |
+| `cos nodes [<host> [1h\|24h\|7d]]` | Latest sample of every node, or one host's samples for the window (default 1h) |
 | `cos prs` | Every open PR authored by mariogk, with CI/review/merge gates |
 | `cos status [--brief]` | Refresh all sources; `--brief` is at most 40 lines |
 | `cos context list\|get\|set\|rm` | Shared context files for the COS agent |

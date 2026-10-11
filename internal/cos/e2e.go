@@ -236,7 +236,11 @@ func e2eChecks() []E2ECheck {
 			E2ECheck{ID: "deploy.logs." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkLogs(ctx, e, h) }},
 		)
 	}
+	for _, h := range e2eHosts {
+		checks = append(checks, E2ECheck{ID: "nodes.data." + h, Stream: "TS-825", Run: checkNodeData(h)})
+	}
 	checks = append(checks,
+		E2ECheck{ID: "nodes.downsampling", Stream: "TS-825", Run: checkNodeDownsampling},
 		E2ECheck{ID: "cluster.members", Stream: "TS-810", Smoke: true, Run: checkMembers},
 		E2ECheck{ID: "cluster.jetstream", Stream: "TS-810", Smoke: true, Run: checkJetStream},
 		E2ECheck{ID: "cluster.leader", Stream: "TS-810", Smoke: true, Run: checkLeader},

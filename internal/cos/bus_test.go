@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nats.go/micro"
 )
 
@@ -37,6 +38,32 @@ func busTestPorts(t *testing.T, count int) []int {
 		ports[i] = listener.Addr().(*net.TCPAddr).Port
 	}
 	return ports
+}
+
+// busTestJetStream starts three peered COS buses and returns each node's JetStream API.
+func busTestJetStream(t *testing.T, ctx context.Context) []jetstream.JetStream {
+	t.Helper()
+	ports := busTestPorts(t, 6)
+	hosts := []string{"delta", "beta", "mariogk-dev"}
+	js := make([]jetstream.JetStream, len(hosts))
+	for i, host := range hosts {
+		var peers []int
+		for j := range hosts {
+			if i != j {
+				peers = append(peers, ports[j+3])
+			}
+		}
+		cfg, busNode := busTestConfig(t, host, ports[i], ports[i+3], peers)
+		node, err := startBus(ctx, cfg, busNode, func(context.Context, string, []string) (any, error) { return nil, nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(node.Close)
+		if js[i], err = node.JetStream(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return js
 }
 
 var busTestMaster = []byte("0123456789abcdef0123456789abcdef")
