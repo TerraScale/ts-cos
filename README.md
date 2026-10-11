@@ -332,7 +332,7 @@ and as a system chat entry. A normal merge records nothing.
 `cos e2e` checks the deployed cluster from any COS host and prints one JSON report:
 every check has `status` (`pass`, `fail`, or `skip` while its feature is not on main),
 `evidence` (redacted, clipped) and its owning `stream`. Any failure exits nonzero.
-It finishes within 5 minutes, cleans up after itself and never touches real work.
+Its checks finish within 4.5 minutes; a full run may also wait up to 5 minutes for the cluster to settle and up to 5 minutes for the chaos lock or a rollout. It cleans up after itself and never touches real work.
 
 - `deploy.*`: `cos.service` active, running `cos version` equals origin/main
   (15-minute deploy window), no unattributed automatic restarts in 25 minutes, no
@@ -343,8 +343,10 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   `deploy.restarts` counts only automatic restarts with no matching `sigkill` record
   (allowance 0); deploy installs are reported, not counted.
 - Only one e2e run may perturb the cluster at a time: it holds the `lock` key in the
-  `cos_e2e` bucket (host, pid, time) before its first chaos check. A concurrent run
-  skips its chaos checks with the holder in the evidence; a lock older than 10 minutes is stale and taken over.
+  `cos_e2e` bucket (host, pid, time) before its first chaos check; a lock older than 10
+  minutes is stale and taken over. A concurrent run waits for the lock, and for any rollout
+  to finish and settle, up to 5 minutes in total per run, then skips its chaos checks naming
+  the holder or the rollout. Chaos checks run after every other check.
 - `--smoke` never runs chaos. COS runs `--smoke` every 10 minutes and the full
   suite hourly.
 - `cluster.*`: all three hosts answer micro PING; every JetStream stream is R3 with
@@ -353,8 +355,9 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   non-runner host) is partitioned: iptables on every peer address except ssh, with
   a root timer that heals it after 120 s even if the runner dies. The majority
   must elect a new leader within 30 s, and after healing all nodes agree on one
-  leader. Finally, the leader is SIGKILLed and the survivors must agree on a new
-  one within 30 s.
+  leader. Finally, the leader is frozen (SIGSTOP for 25 s, with a safety SIGCONT timer) and
+  the survivors must agree on a new one within 30 s. `cluster.leader-kill` (SIGKILL)
+  runs only when named.
 - `rules.heartbeat-leader`: the autopilot heartbeat runs on the cluster leader.
 - `rules.heartbeat-presets` (TS-813): the Settings page renders every heartbeat preset and
   the stored interval is one of them. It reads the page and never sets a preset.
@@ -375,6 +378,10 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   ones, with `deploy.version` expecting the rolled-out revision.
 - `access.*`, `deploy.*` and `gate.*` are protected: a self-change may never break
   or remove them (`protected: true` in the report).
+- `access.*` and every signed-in check share one throwaway user per run, signed in once
+  per node, so a run stays under the dashboard's login limit. Checks that change auth
+  state (wrong password, lockout, logout, password change) get their own throwaway users.
+  All are deleted when the run ends.
 - `events.forgejo.*` (TS-814): signed foreign-author pull_request probes with fresh delivery IDs, asserted at the ingest layer (COS_INGEST last sequence, hook status, consumer ack floor, COS_EVENTS scan). Never push events: a push on main triggers real work.
 - Per-request acceptance checks register with `RegisterE2E` from an
   `e2e_accept_*.go` init function, IDs `accept.<slug>.<name>`.
