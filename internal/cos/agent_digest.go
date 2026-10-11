@@ -111,7 +111,7 @@ func escalationEvent(e AutopilotEntry, seq uint64, at time.Time) Event {
 	if ev.ID == "" {
 		ev.ID = "seq:" + strconv.FormatUint(seq, 10)
 	}
-	if e.Action == "worker-question" || e.Action == "budget-pause" {
+	if e.Action == "worker-question" {
 		ev.Severity = SeverityUrgent
 	}
 	return ev

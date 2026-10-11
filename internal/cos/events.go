@@ -49,7 +49,6 @@ const (
 	SourceUser    EventSource = "user"
 	SourceInbox   EventSource = "inbox"
 	SourceDeploy  EventSource = "deploy"
-	SourceBudget  EventSource = "budget"
 	SourceCOS     EventSource = "cos"
 	SourceNode    EventSource = "node"
 	SourceLimits  EventSource = "limits"
@@ -90,10 +89,7 @@ const (
 	KindDeployRolledBack EventKind = "deploy.rolled_back"
 	KindDeployCompleted  EventKind = "deploy.completed"
 
-	// Token budgets, one per crossed mark; Data is budgetData.
-	KindBudgetWarn     EventKind = "budget.warn"
-	KindBudgetExceeded EventKind = "budget.exceeded"
-	KindMergeOrder     EventKind = "merge.order" // Data: {"orders":[...],"reason":...,"sha":...}, a user merge past the gate
+	KindMergeOrder EventKind = "merge.order" // Data: {"orders":[...],"reason":...,"sha":...}, a user merge past the gate
 
 	// Published by a full `cos e2e` run. Data: {"pass":n,"fail":n,"skip":n,"runner":host}.
 	KindE2EReport EventKind = "e2e.report"
@@ -116,7 +112,6 @@ var eventKinds = map[EventKind]EventSource{
 	KindInboxItemAdded: SourceInbox, KindInboxClosed: SourceInbox,
 	KindDeployStarted: SourceDeploy, KindNodeUpdated: SourceDeploy, KindGateFailed: SourceDeploy,
 	KindDeployRolledBack: SourceDeploy, KindDeployCompleted: SourceDeploy,
-	KindBudgetWarn: SourceBudget, KindBudgetExceeded: SourceBudget,
 	KindE2EReport: SourceCOS, KindKPIProbe: SourceCOS,
 	KindNodeAlert: SourceNode, KindLimitsChanged: SourceLimits,
 }

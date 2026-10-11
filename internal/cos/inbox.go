@@ -108,8 +108,8 @@ func (in InboxInput) item(now time.Time) (InboxItem, error) {
 	switch {
 	case !slices.Contains(inboxKinds, item.Kind):
 		return item, errors.New("inbox kind must be question, approval, decision, blocker, or fyi")
-	case !slices.Contains([]string{"cos", "rules", "worker", "deploy", "budget", "e2e"}, item.Source):
-		return item, errors.New("inbox source must be cos, rules, worker, deploy, budget, or e2e")
+	case !slices.Contains([]string{"cos", "rules", "worker", "deploy", "e2e"}, item.Source):
+		return item, errors.New("inbox source must be cos, rules, worker, deploy, or e2e")
 	case item.Kind == "fyi" && item.Urgent:
 		return item, errors.New("inbox fyi items are never urgent")
 	case item.Title == "" || strings.ContainsAny(item.Title, "\r\n") || utf8.RuneCountInString(item.Title) > inboxTitleMax:
@@ -362,11 +362,6 @@ func (in *Inbox) Answer(ctx context.Context, id string, answer AnswerData) (Inbo
 
 func (in *Inbox) Dismiss(ctx context.Context, id string) (InboxItem, error) {
 	return in.close(ctx, id, "dismissed", nil, "Dismissed by the user")
-}
-
-// purge removes an item's KV entry for good; the mirror drops it on the delete the purge leaves.
-func (in *Inbox) purge(ctx context.Context, id string) error {
-	return in.kv.Purge(ctx, id)
 }
 
 func answerText(a *AnswerData) string {

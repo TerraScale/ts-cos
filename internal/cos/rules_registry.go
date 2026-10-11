@@ -15,7 +15,7 @@ type RuleEnv struct {
 
 // Rule is a classifier another feature registers from its own file's init(). Event runs
 // for every event on cos.events.> after the built-in rules; Beat runs on every leader
-// heartbeat (budgets, thresholds). Either may be nil. Decisions are executed and logged
+// heartbeat (thresholds). Either may be nil. Decisions are executed and logged
 // like built-in ones (wake, merge, model, escalate) or through Decision.Do.
 type Rule struct {
 	Name  string

@@ -37,7 +37,7 @@ var rulesBackoff = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second
 
 // Wake texts are behavior files (behavior/templates/wake_<rule>.tmpl), hot-reloaded
 // over NATS; a bundle missing one, or rendering more than one line, is rejected.
-var wakeRules = []string{"ci", "review", "conflict", "failed", "size", "slice", "budget"}
+var wakeRules = []string{"ci", "review", "conflict", "failed", "size", "slice"}
 
 type wakeData struct {
 	PR, Checks, Summary string
@@ -131,9 +131,6 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 	}
 	if e.Source == SourceUser || e.Source == SourceInbox {
 		return nil // the COS inbox owns user messages
-	}
-	if e.Kind == KindBudgetWarn || e.Kind == KindBudgetExceeded {
-		return budgetDecisions(e, live, owner) // budgets apply whether or not the ticket runs
 	}
 	if e.Source == SourceNode {
 		// Node alerts do not depend on tickets or live state: they file an FYI or record a synthetic one.
