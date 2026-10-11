@@ -108,8 +108,8 @@ func (in InboxInput) item(now time.Time) (InboxItem, error) {
 	switch {
 	case !slices.Contains(inboxKinds, item.Kind):
 		return item, errors.New("inbox kind must be question, approval, decision, blocker, or fyi")
-	case !slices.Contains([]string{"cos", "rules", "worker", "deploy"}, item.Source):
-		return item, errors.New("inbox source must be cos, rules, worker, or deploy")
+	case !slices.Contains([]string{"cos", "rules", "worker", "deploy", "budget"}, item.Source):
+		return item, errors.New("inbox source must be cos, rules, worker, deploy, or budget")
 	case item.Kind == "fyi" && item.Urgent:
 		return item, errors.New("inbox fyi items are never urgent")
 	case item.Title == "" || strings.ContainsAny(item.Title, "\r\n") || utf8.RuneCountInString(item.Title) > inboxTitleMax:

@@ -49,6 +49,7 @@ const (
 	SourceUser    EventSource = "user"
 	SourceInbox   EventSource = "inbox"
 	SourceDeploy  EventSource = "deploy"
+	SourceBudget  EventSource = "budget"
 )
 
 type EventKind string
@@ -85,6 +86,10 @@ const (
 	KindGateFailed       EventKind = "gate.failed"
 	KindDeployRolledBack EventKind = "deploy.rolled_back"
 	KindDeployCompleted  EventKind = "deploy.completed"
+
+	// Token budgets, one per crossed mark; Data is budgetData.
+	KindBudgetWarn     EventKind = "budget.warn"
+	KindBudgetExceeded EventKind = "budget.exceeded"
 )
 
 var eventKinds = map[EventKind]EventSource{
@@ -97,6 +102,7 @@ var eventKinds = map[EventKind]EventSource{
 	KindInboxItemAdded: SourceInbox, KindInboxClosed: SourceInbox,
 	KindDeployStarted: SourceDeploy, KindNodeUpdated: SourceDeploy, KindGateFailed: SourceDeploy,
 	KindDeployRolledBack: SourceDeploy, KindDeployCompleted: SourceDeploy,
+	KindBudgetWarn: SourceBudget, KindBudgetExceeded: SourceBudget,
 }
 
 // Severity is the source's hint; the rules engine makes the final classification.

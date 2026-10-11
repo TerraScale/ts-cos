@@ -34,7 +34,7 @@ const (
 
 // Wake texts are behavior files (behavior/templates/wake_<rule>.tmpl), hot-reloaded
 // over NATS; a bundle missing one, or rendering more than one line, is rejected.
-var wakeRules = []string{"ci", "review", "conflict", "failed", "interrupted", "size", "slice"}
+var wakeRules = []string{"ci", "review", "conflict", "failed", "interrupted", "size", "slice", "budget"}
 
 type wakeData struct {
 	PR, Checks, Summary string
@@ -74,6 +74,7 @@ type Decision struct {
 	Wake  string         // message queued to Host/Thread
 	Merge *PR            // squash-merge this READY PR
 	Model map[string]any // next-run model for Host/Thread
+	Inbox *InboxInput    // file this item in the COS Inbox
 	Sig   string         // wake signature for dedup and "same failure twice"
 }
 
@@ -119,6 +120,9 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 	}
 	if e.Source == SourceUser || e.Source == SourceInbox {
 		return nil // the COS inbox owns user messages
+	}
+	if e.Kind == KindBudgetWarn || e.Kind == KindBudgetExceeded {
+		return budgetDecisions(e, live, owner) // budgets apply whether or not the ticket runs
 	}
 	switch e.Kind {
 	case KindRequestPending, KindNeedsUser:
@@ -260,6 +264,7 @@ type RulesEngine struct {
 	PR      func(ctx context.Context, repo string, number int) (*PRFacts, error)
 	Merge   func(ctx context.Context, repo string, number int) error
 	Call    func(ctx context.Context, host, command string, args []string) error
+	Inbox   func(ctx context.Context, in InboxInput) error
 	kvMu    sync.Mutex
 	memory  jetstream.KeyValue
 }
@@ -282,6 +287,7 @@ func (r *RulesEngine) settingsKV(ctx context.Context) (jetstream.KeyValue, error
 // NewRulesEngine wires the real executors; StartAutopilot supplies JS and Publish.
 func NewRulesEngine(cfg Config, bus *Bus, store *Store) *RulesEngine {
 	f := Forgejo{Config: cfg}
+	var inbox *Inbox
 	return &RulesEngine{Store: store, PR: f.prFacts,
 		Merge: func(ctx context.Context, repo string, number int) error {
 			_, err := f.Merge(ctx, repo, number)
@@ -289,6 +295,16 @@ func NewRulesEngine(cfg Config, bus *Bus, store *Store) *RulesEngine {
 		},
 		Call: func(ctx context.Context, host, command string, args []string) error {
 			return bus.Call(ctx, host, command, args, nil)
+		},
+		Inbox: func(ctx context.Context, in InboxInput) error {
+			if inbox == nil {
+				var err error
+				if inbox, err = OpenInbox(ctx, bus, cfg.LocalHost, false); err != nil {
+					return err
+				}
+			}
+			_, err := inbox.Add(ctx, in)
+			return err
 		}}
 }
 
@@ -403,6 +419,10 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 			sel, _ := json.Marshal(d.Model)
 			if err := r.Call(ctx, d.Host, "model", []string{d.Thread, string(sel)}); err != nil {
 				entry.Kind, entry.Reason = "error", d.Reason+"; model change failed: "+publicText(err)
+			}
+		case d.Inbox != nil:
+			if err := r.Inbox(ctx, *d.Inbox); err != nil {
+				entry.Kind, entry.Reason = "error", d.Reason+"; inbox failed: "+publicText(err)
 			}
 		case d.Wake != "":
 			if err := r.Call(ctx, d.Host, "send", []string{d.Thread, d.Wake}); err != nil {
