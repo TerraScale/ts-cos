@@ -23,9 +23,10 @@ import (
 // COS_INGEST's last sequence, since a work queue deletes each message once it is consumed.
 
 const (
-	e2eProbeAuthor  = "e2e-foreign"
-	e2eProbeRepo    = "e2e-foreign/e2e-probe"
-	e2eHookWindow   = 10 * time.Second
+	e2eProbeAuthor = "e2e-foreign"
+	e2eProbeRepo   = "e2e-foreign/e2e-probe"
+	// A rollout moves the ingest consumer to the new leader, which resumes acking within a minute.
+	e2eHookWindow   = 60 * time.Second
 	e2eEventsWindow = 5 * time.Second
 )
 
@@ -183,7 +184,7 @@ func awaitIngestAck(ctx context.Context, js jetstream.JetStream, seq uint64) err
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("ingest consumer acked up to seq %d, not %d, within 10 s", info.AckFloor.Stream, seq)
+			return fmt.Errorf("ingest consumer acked up to seq %d, not %d, within %s", info.AckFloor.Stream, seq, e2eHookWindow)
 		}
 		select {
 		case <-ctx.Done():
