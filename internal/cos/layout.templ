@@ -7,16 +7,16 @@ templ docHead(title string) {
 	<head>
 		<meta charset="utf-8"/>
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"/>
-		<meta name="color-scheme" content="light dark"/>
+		<meta name="color-scheme" content="dark"/>
 		<title>{ title }</title>
 		@pwaHead()
+		<link rel="preload" href="/static/oxanium-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin/>
 		<link rel="stylesheet" href={ templ.SafeURL(cssPath) }/>
 		<link rel="icon" href="/static/icon.svg" type="image/svg+xml"/>
 		<link rel="icon" href="/static/favicon-32.png" sizes="32x32" type="image/png"/>
 		<link rel="apple-touch-icon" href="/static/apple-touch-icon.png"/>
-		<meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)"/>
-		<meta name="theme-color" content="#0d0e11" media="(prefers-color-scheme: dark)"/>
-		<script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js"></script>
+		<meta name="theme-color" content="#0a0c12"/>
+		<script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js" integrity="sha384-twbOvafhSBQ0rJDNPzJdUw6DRvthVgAVfSIG1BQVmCiNO7Qh2zeVn7T5qstgjJ9q" crossorigin="anonymous"></script>
 	</head>
 }
 

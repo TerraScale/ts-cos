@@ -1,0 +1,121 @@
+/* Design tokens: color, tone, type, spacing, radius, motion, layering. */
+
+:root {
+  color-scheme: dark;
+
+  /* Canvas and surfaces, darkest to lightest. */
+  --ts-canvas: #0a0c12;
+  --ts-sidebar: #0a0c12;
+  --ts-surface: #11141c;
+  --ts-surface-2: #161a24;
+  --ts-surface-3: #1e2330;
+  --ts-line: rgb(148 163 184 / 0.12);
+  --ts-line-strong: rgb(148 163 184 / 0.22);
+  /* Form control borders: at least 3:1 against the canvas, --ts-surface and
+     --ts-surface-2, so inputs stay identifiable (WCAG 1.4.11). */
+  --ts-control-line: #5e677b;
+  --ts-control-line-hover: #7a8397;
+
+  /* Text. Every ink keeps at least 4.5:1 on the canvas and all surfaces. */
+  --ts-ink: #eef1f7;
+  --ts-ink-2: #a7afbf;
+  --ts-ink-3: #858ea3;
+
+  /* Primary accent and status colors. */
+  --ts-accent: #3b82f6;
+  --ts-accent-soft: rgb(59 130 246 / 0.14);
+  /* Filled surfaces behind --ts-on-accent text: 5.2:1, and 6.7:1 on hover. */
+  --ts-accent-fill: #2563eb;
+  --ts-accent-fill-hover: #1d4ed8;
+  --ts-on-accent: #ffffff;
+  --ts-link: #6ea8ff;
+  --ts-success: #34d399;
+  --ts-warning: #fbbf24;
+  --ts-severe: #fb923c;
+  --ts-danger: #f87171;
+  --ts-info: #60a5fa;
+
+  /* Chart series (kept for the SVG chart renderer). */
+  /* Charts: a blue family, validated against the canvas. */
+  --ts-chart-1: #3b82f6;
+  --ts-chart-2: #22d3ee;
+  --ts-cat-1: #3b82f6;
+  --ts-cat-2: #22d3ee;
+  --ts-cat-3: #a5b4fc;
+
+  /* Page accent. Navigation icons override it with their [data-tone]. */
+  --tone: var(--ts-accent);
+
+  /* Type. Oxanium carries the brand; body copy stays at a readable 14px. */
+  --ts-font-sans: "Oxanium", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ts-font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --ts-fs-xs: 12px;
+  --ts-fs-sm: 13px;
+  --ts-fs-md: 14px;
+  --ts-fs-lg: 16px;
+  --ts-fs-xl: 20px;
+  --ts-fs-2xl: 26px;
+  --ts-fs-3xl: 32px;
+
+  /* Spacing on a 4px grid. */
+  --ts-s1: 4px;
+  --ts-s2: 8px;
+  --ts-s3: 12px;
+  --ts-s4: 16px;
+  --ts-s5: 20px;
+  --ts-s6: 24px;
+  --ts-s8: 32px;
+  --ts-s10: 40px;
+  --ts-s12: 48px;
+
+  /* Shape. */
+  --ts-radius-sm: 4px;
+  --ts-radius: 6px;
+  --ts-radius-lg: 10px;
+  --ts-radius-pill: 999px;
+  --ts-control-h: 36px;
+  --ts-control-h-sm: 32px;
+  --ts-control-h-lg: 44px;
+
+  /* Depth. */
+  /* Overlays separate by a hairline; the faint drop only lifts them off content. */
+  --ts-shadow-overlay: 0 0 0 1px var(--ts-line-strong), 0 12px 24px -16px rgb(0 0 0 / 0.6);
+  --ts-scrim: rgb(5 6 10 / 0.6);
+  /* Translucent overlay fill, blurred over the content behind it. */
+  --ts-glass: rgb(17 20 28 / 0.72);
+
+  /* Motion. */
+  --ts-fast: 120ms;
+  --ts-base: 180ms;
+  /* One cycle of an ongoing wait, such as creating a database. */
+  --ts-loop: 1.4s;
+  --ts-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Layering. */
+  --ts-z-sticky: 10;
+  --ts-z-dropdown: 20;
+  --ts-z-overlay: 30;
+  --ts-z-modal: 40;
+  --ts-z-progress: 50;
+  --ts-z-tooltip: 60;
+
+  /* Shell. */
+  --ts-sidebar-width: 264px;
+}
+
+/* Section tones: every navigation destination owns one, and the page it
+   opens inherits it for headers and highlights. */
+[data-tone="violet"] { --tone: #a78bfa; }
+[data-tone="blue"] { --tone: #60a5fa; }
+[data-tone="cyan"] { --tone: #22d3ee; }
+[data-tone="teal"] { --tone: #2dd4bf; }
+[data-tone="lime"] { --tone: #a3e635; }
+[data-tone="amber"] { --tone: #fbbf24; }
+[data-tone="pink"] { --tone: #f472b6; }
+[data-tone="emerald"] { --tone: #34d399; }
+[data-tone="orange"] { --tone: #fb923c; }
+[data-tone="sky"] { --tone: #38bdf8; }
+[data-tone="fuchsia"] { --tone: #e879f9; }
+[data-tone="rose"] { --tone: #fb7185; }
+[data-tone="indigo"] { --tone: #818cf8; }
+[data-tone="slate"] { --tone: #94a3b8; }

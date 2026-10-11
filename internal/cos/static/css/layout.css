@@ -1,0 +1,178 @@
+/* Page container, page actions, and layout helpers. Pages space their
+   blocks with gap, never with margins, so rhythm stays consistent. */
+
+.ts-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--ts-s8);
+  width: 100%;
+  /* A compact top inset reclaims viewport space at every breakpoint;
+     the larger grid gap separates content sections within the page. */
+  padding-top: var(--ts-s2);
+  padding-inline: var(--ts-s10);
+  padding-bottom: var(--ts-s12);
+}
+
+.ts-eyebrow {
+  color: var(--tone);
+  font-size: var(--ts-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ts-page-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ts-s2);
+}
+
+.ts-page-actions:empty {
+  display: none;
+}
+
+/* Tabs on the left, filters on the right. */
+.ts-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--ts-s3) var(--ts-s6);
+  border-bottom: 1px solid var(--ts-line);
+}
+
+.ts-toolbar > .ts-filters,
+.ts-toolbar > form {
+  padding-bottom: var(--ts-s2);
+}
+
+/* Grids. */
+.ts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: var(--ts-s4);
+}
+
+.ts-grid-2,
+.ts-grid-3 {
+  display: grid;
+  gap: var(--ts-s4);
+}
+
+.ts-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ts-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Main column plus a narrower aside. */
+.ts-split {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  align-items: start;
+  gap: var(--ts-s10);
+}
+
+.ts-stack,
+.ts-stack-sm,
+.ts-stack-lg {
+  display: grid;
+  align-content: start;
+  gap: var(--ts-s4);
+  min-width: 0;
+}
+
+.ts-stack-sm { gap: var(--ts-s2); }
+.ts-stack-lg { gap: var(--ts-s6); }
+
+.ts-row,
+.ts-row-between {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ts-s3);
+  min-width: 0;
+}
+
+.ts-row-between {
+  justify-content: space-between;
+}
+
+.ts-row-end {
+  justify-content: flex-end;
+}
+
+/* The sidebar consumes 264px on desktop; query the page column instead of
+   the viewport before adding columns. Container rems use the 14px root font
+   (unlike media-query rems), so use px for the 60rem/960px breakpoint. */
+@container page (width < 960px) {
+  .ts-split,
+  .ts-grid-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Stacked split columns keep the hairline between sections. */
+  .ts-split > * + * {
+    padding-top: var(--ts-s6);
+    border-top: 1px solid var(--ts-line);
+  }
+}
+
+@media (max-width: 47.99rem) {
+  .ts-page {
+    gap: var(--ts-s5);
+    padding-inline: var(--ts-s4);
+    padding-bottom: var(--ts-s10);
+  }
+}
+
+@container page (width < 768px) {
+  .ts-grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Text helpers. */
+.ts-meta {
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-sm);
+}
+
+.ts-muted {
+  color: var(--ts-ink-2);
+}
+
+.ts-mono {
+  font-family: var(--ts-font-mono);
+  font-size: 0.92em;
+}
+
+.ts-strong {
+  color: var(--ts-ink);
+  font-weight: 600;
+}
+
+.ts-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-break {
+  overflow-wrap: anywhere;
+}
+
+.ts-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ts-link {
+  color: var(--ts-link);
+  font-weight: 500;
+}
+
+.ts-section-title {
+  font-size: var(--ts-fs-lg);
+  font-weight: 600;
+}
