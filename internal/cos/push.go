@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"git.terrascale.tech/TerraScale/ts-cos/internal/webpush"
+	"github.com/TerraScale/ts-cos/internal/webpush"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )

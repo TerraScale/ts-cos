@@ -11,7 +11,7 @@ import templruntime "github.com/a-h/templ/runtime"
 import (
 	"strings"
 
-	"git.terrascale.tech/TerraScale/ts-cos/internal/ui/icons"
+	"github.com/TerraScale/ts-cos/internal/ui/icons"
 )
 
 // FieldProps labels one form control; children are the control itself. Error

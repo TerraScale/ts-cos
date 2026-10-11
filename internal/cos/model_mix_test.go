@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.terrascale.tech/TerraScale/ts-cos/behavior"
+	"github.com/TerraScale/ts-cos/behavior"
 )
 
 func TestBriefSectionNamesEveryPair(t *testing.T) {
