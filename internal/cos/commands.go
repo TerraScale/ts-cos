@@ -163,7 +163,7 @@ func localCommand(ctx context.Context, open func(context.Context) (*T3, error), 
 		if runs == nil {
 			runs = []ThreadRun{}
 		}
-		out := map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": p.PendingRequests(), "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}
+		out := map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "projectId": p.Thread.ProjectID, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": p.PendingRequests(), "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}
 		if len(args) == 2 {
 			n, _ := strconv.Atoi(args[1])
 			out["replies"] = lastReplies(p, n)
@@ -182,7 +182,11 @@ func localCommand(ctx context.Context, open func(context.Context) (*T3, error), 
 		if err != nil {
 			return nil, err
 		}
-		return c.Handoff(ctx, id, sel)
+		brief := ""
+		if len(args) == 3 {
+			brief = args[2]
+		}
+		return c.Handoff(ctx, id, sel, brief)
 	case "fork":
 		p, err := c.Projection(ctx, id)
 		if err != nil {

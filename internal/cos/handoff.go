@@ -29,6 +29,7 @@ func launchSuccessor(ctx context.Context, call func(ctx context.Context, host, c
 	pol := CurrentBehavior().Models
 	input, err := json.Marshal(map[string]any{
 		"projectTitle":      t.Project,
+		"projectId":         info["projectId"],
 		"title":             title,
 		"modelSelection":    pol.Advisor(pair, false),
 		"workspaceStrategy": map[string]any{"type": "existing_worktree", "worktreePath": path, "branch": branch},

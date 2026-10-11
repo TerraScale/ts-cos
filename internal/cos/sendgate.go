@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"regexp"
 	"slices"
@@ -33,6 +34,13 @@ const (
 	sendInboxMax   = 3500
 	sendLimitSlack = 5 * time.Second // a CLIProxyAPI read this close after a usage-limit failure may predate its cooldown
 	sendHeld       = "COS held: "    // prefix of every refusal error; survives the bus as text
+)
+
+// solPair is the routine pair; a P0 stalled on Opus moves to it. p0Wait is how long a P0 waits for Opus headroom first.
+const (
+	solPair     = "sol"
+	p0Wait      = 30 * time.Minute
+	p0MovedLine = "COS moved this P0 from Opus to Sol: Opus had no headroom for over 30 min."
 )
 
 var sendArgPattern = regexp.MustCompile(`^(queue|user|deliver:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})$`)
@@ -305,18 +313,14 @@ func (g *Gate) Command(ctx context.Context, command string, args []string) (any,
 		if err := g.checkThread(ctx, args[0], "no compaction on a cooling model"); err != nil {
 			return nil, err
 		}
-	case "launch", "dispatch":
+	case "launch":
+		return g.launch(ctx, args)
+	case "dispatch":
 		input, err := localObjectJSON(args[0])
 		if err != nil {
 			return nil, err
 		}
-		if command == "launch" {
-			sel, _ := input["modelSelection"].(map[string]any)
-			model, _ := sel["model"].(string)
-			if err := g.cooling(ctx, model, "no worker spawn on a cooling model"); err != nil {
-				return nil, err
-			}
-		} else if input["type"] == "message.dispatch" {
+		if input["type"] == "message.dispatch" {
 			thread, _ := input["threadId"].(string)
 			if err := g.checkThread(ctx, thread, "no message on a cooling model"); err != nil {
 				return nil, err
@@ -324,6 +328,137 @@ func (g *Gate) Command(ctx context.Context, command string, args []string) (any,
 		}
 	}
 	return g.Local(ctx, command, args)
+}
+
+// launch routes a launch to the pair with headroom (routeLaunch). A launch that its pair holds is refused; a P0 that has
+// waited p0Wait on Opus moves to Sol with a brief, and that move is filed.
+func (g *Gate) launch(ctx context.Context, args []string) (any, error) {
+	input, err := localObjectJSON(args[0])
+	if err != nil {
+		return nil, err
+	}
+	pol := CurrentBehavior().Models
+	pair, err := pol.PairFor(maps.Clone(input)) // PairFor removes "pair"; launchInput reads it again later
+	if err != nil {
+		return nil, err
+	}
+	limits, err := g.Limits(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kv, err := g.Queue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := g.Now()
+	title, _ := input["title"].(string)
+	ws, _ := input["workspaceStrategy"].(map[string]any)
+	branch, _ := ws["branch"].(string)
+	ticket := ticketOf(title, branch)
+	heldKey := sendMarkerKey("held.", ticket)
+	var heldSince time.Time
+	if ticket != "" {
+		if _, err := kvJSON(ctx, kv, heldKey, &heldSince); err != nil {
+			return nil, err
+		}
+	}
+	route, why, held := routeLaunch(pol, pair, ticket, limits, now, heldSince)
+	if held {
+		if ticket != "" {
+			if _, err := putOnce(ctx, kv, heldKey, now); err != nil {
+				return nil, err
+			}
+		}
+		return nil, OperationError(sendHeld + why)
+	}
+	if route != pair {
+		input["pair"] = route
+		msg, _ := input["message"].(string)
+		input["message"] = strings.TrimSpace(msg + "\n\n" + pol.BriefLine(route) + "\n" + p0MovedLine)
+		raw, err := json.Marshal(input)
+		if err != nil {
+			return nil, err
+		}
+		args = []string{string(raw)}
+	}
+	out, err := g.Local(ctx, "launch", args)
+	if err != nil {
+		return out, err
+	}
+	if !heldSince.IsZero() {
+		if err := kv.Delete(ctx, heldKey); err != nil {
+			logErr(ctx, slog.LevelWarn, "COS held launch marker", err, "ticket", ticket)
+		}
+	}
+	if route != pair {
+		slog.Info("COS moved a P0 to Sol", "ticket", ticket, "from", pair)
+		if err := g.File(ctx, p0SolInbox(g.Host, ticket)); err != nil {
+			logErr(ctx, slog.LevelWarn, "COS P0 to Sol inbox", err, "ticket", ticket)
+		}
+	}
+	return out, nil
+}
+
+// routeLaunch picks a launch's route: its own pair when that pair's advisor and worker have headroom, else sol for a P0
+// that has waited p0Wait on Opus while Sol has headroom. held means no route is open; why names the cooling model.
+// Routine work never waits for Opus; important work (the leader pair) never downgrades before p0Wait.
+func routeLaunch(pol ModelPolicy, pair, ticket string, limits LimitsState, now, heldSince time.Time) (route, why string, held bool) {
+	ok, _, advisorWhy := limits.Headroom(pol.Pairs[pair].Advisor.Model, now)
+	switch {
+	case ok:
+		route = pair
+	case pair != pol.Leader:
+		return "", "routine work waits for Sol headroom: " + advisorWhy, true
+	case isP0(pol, ticket) && !heldSince.IsZero() && now.Sub(heldSince) > p0Wait && hasRoom(limits, pol.Pairs[solPair].Advisor.Model, now):
+		route, why = solPair, fmt.Sprintf("P0 %s moved to Sol after 30 min without Opus headroom", ticket)
+	default:
+		return "", "important work waits for Opus headroom: " + advisorWhy, true
+	}
+	if ok, _, workerWhy := limits.Headroom(pol.Pairs[route].Worker.Model, now); !ok {
+		return "", "no worker spawn on a cooling model: " + workerWhy, true
+	}
+	return route, why, false
+}
+
+// isP0 reports whether ticket is the first priority key. An empty priority list names no P0, and no ticket is never a P0.
+func isP0(pol ModelPolicy, ticket string) bool {
+	return ticket != "" && len(pol.Priority) > 0 && strings.EqualFold(pol.Priority[0], ticket)
+}
+
+// ticketOf is the ticket key in a thread's or launch's title and branch, upper-cased; "" when there is none.
+func ticketOf(title, branch string) string {
+	return strings.ToUpper(ticketPattern.FindString(title + " " + branch))
+}
+
+// hasRoom reports whether model has headroom now; a model no pair names has none.
+func hasRoom(limits LimitsState, model string, now time.Time) bool {
+	ok, _, _ := limits.Headroom(model, now)
+	return model != "" && ok
+}
+
+// sendMarkerKey names a COS_SENDQ marker for one ticket or thread; hashing keeps the value out of the key, as sendKeys does.
+func sendMarkerKey(prefix, s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return prefix + hex.EncodeToString(sum[:])[:24]
+}
+
+// putOnce stores v at key unless the key exists; it reports whether it stored v.
+func putOnce(ctx context.Context, kv jetstream.KeyValue, key string, v any) (bool, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return false, err
+	}
+	_, err = kv.Create(ctx, key, data)
+	if errors.Is(err, jetstream.ErrKeyExists) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// p0SolInbox is the Inbox item that files a P0 moved to Sol.
+func p0SolInbox(host, ticket string) InboxInput {
+	return InboxInput{Kind: "fyi", Source: "cos", Key: "p0-sol:" + ticket, Host: host, Ticket: ticket,
+		Title: oneLine(fmt.Sprintf("P0 %s moved to Sol: no Opus headroom for 30 min", ticket), inboxTitleMax)}
 }
 
 // handoff refuses a cooling target, and a cooling current model when the handoff compacts first. The brief goes through Send.
@@ -572,6 +707,7 @@ func (d *sendDeliverer) tick(ctx context.Context) error {
 	}
 	slices.SortFunc(held, func(a, b heldSend) int { return a.e.Queued.Compare(b.e.Queued) })
 	now := d.Now()
+	d.moveStalledP0(ctx, kv, held, limits, now)
 	// last is the latest ReadyAt already scheduled per model, so new slots stack behind it.
 	last := map[string]time.Time{}
 	for _, h := range held {
@@ -620,6 +756,61 @@ func (d *sendDeliverer) tick(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// moveStalledP0 moves each P0 whose held work has waited p0Wait on Opus while Sol has headroom (moveP0). Other entries stay.
+func (d *sendDeliverer) moveStalledP0(ctx context.Context, kv jetstream.KeyValue, held []heldSend, limits LimitsState, now time.Time) {
+	pol := CurrentBehavior().Models
+	for _, h := range held {
+		e := h.e
+		if pair, _ := pol.PairOf(e.Model); pair != pol.Leader || now.Sub(e.Queued) <= p0Wait || hasRoom(limits, e.Model, now) || !hasRoom(limits, pol.Pairs[solPair].Advisor.Model, now) {
+			continue
+		}
+		if err := d.moveP0(ctx, kv, h.key, e, now); err != nil {
+			logErr(ctx, slog.LevelWarn, "COS P0 to Sol", err, "thread", e.Thread)
+		}
+	}
+}
+
+// moveP0 starts a Sol successor on the P0's worktree with the held texts, settles the old thread and drops its entry.
+// The marker is stored before the launch, so a retry or a new leader never starts a second successor.
+func (d *sendDeliverer) moveP0(ctx context.Context, kv jetstream.KeyValue, key string, e queuedSend, now time.Time) error {
+	pol := CurrentBehavior().Models
+	var info map[string]any
+	if err := d.Call(ctx, e.Host, "thread", []string{e.Thread}, &info); err != nil {
+		return err
+	}
+	title, _ := info["title"].(string)
+	branch, _ := info["branch"].(string)
+	ticket := ticketOf(title, branch)
+	lineage, _ := info["lineage"].(map[string]any)
+	if parent, _ := lineage["parentThreadId"].(string); parent != "" || !isP0(pol, ticket) {
+		return nil
+	}
+	if stored, err := putOnce(ctx, kv, sendMarkerKey("p0moved.", e.Thread), now); err != nil || !stored {
+		return err
+	}
+	brief := func(lastReply string) (string, error) {
+		return p0MovedLine + "\n\nLast reply of the Opus thread:\n" + lastReply + "\n\nHeld messages:\n" + strings.Join(e.Texts, "\n\n"), nil
+	}
+	id, _, ok, err := launchSuccessor(ctx, d.Call, e.Host, FleetThread{ThreadID: e.Thread, Title: title, Branch: branch}, solPair, brief)
+	switch {
+	case err != nil:
+		return err
+	case !ok:
+		return fmt.Errorf("P0 %s has no worktree to move to Sol", ticket)
+	case id == "":
+		return fmt.Errorf("P0 %s: the Sol successor launched without a thread id", ticket)
+	}
+	if err := d.Call(ctx, e.Host, "settle", []string{e.Thread}, nil); err != nil {
+		return err
+	}
+	queued := e.Queued
+	if err := casSend(ctx, kv, key, func(cur *queuedSend, found bool) bool { return found && !cur.Queued.Equal(queued) }); err != nil {
+		return err
+	}
+	slog.Info("COS moved a P0 to Sol", "ticket", ticket, "thread", e.Thread, "successor", id)
+	return d.File(ctx, p0SolInbox(e.Host, ticket))
 }
 
 // deliver claims one entry and sends its texts with the entry's message ID; the gate decides whether they land, wait or drop.
