@@ -1,15 +1,22 @@
 package cos
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 const (
@@ -187,5 +194,143 @@ func TestUsageStoreRoundTrip(t *testing.T) {
 	rows, err = s.Usage(ctx, "0000-01-01")
 	if err != nil || len(rows) != 1 || rows[0].Output != 9 {
 		t.Fatalf("usage after update and prune = %+v, %v", rows, err)
+	}
+}
+
+// fakeUsageKV fails Put with failErr while failPut is positive. Get reports every key
+// as absent, so each scan decides only from last.
+type fakeUsageKV struct {
+	jetstream.KeyValue
+	failPut  int
+	failErr  error
+	onPut    func()
+	attempts map[string]int
+	stored   map[string][]byte
+}
+
+func newFakeUsageKV() *fakeUsageKV {
+	return &fakeUsageKV{failErr: context.DeadlineExceeded, attempts: map[string]int{}, stored: map[string][]byte{}}
+}
+
+func (f *fakeUsageKV) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
+	return nil, jetstream.ErrKeyNotFound
+}
+
+func (f *fakeUsageKV) Put(_ context.Context, key string, value []byte) (uint64, error) {
+	f.attempts[key]++
+	if f.onPut != nil {
+		f.onPut()
+	}
+	if f.failPut > 0 {
+		f.failPut--
+		return 0, f.failErr
+	}
+	f.stored[key] = value
+	return 1, nil
+}
+
+func usageTestRow(session string, output int64) UsageRow {
+	return UsageRow{Day: "2026-10-11", Host: "delta", Project: "p", Session: session, Model: "claude-opus-5-5", Output: output}
+}
+
+func shortUsageBackoff(t *testing.T) {
+	t.Helper()
+	old := usageBackoff
+	usageBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { usageBackoff = old })
+}
+
+func TestPublishUsageRetriesTransientPut(t *testing.T) {
+	shortUsageBackoff(t)
+	ctx := context.Background()
+	kv := newFakeUsageKV()
+	kv.failPut = 2
+	last := map[string][]byte{}
+	row := usageTestRow("a", 1)
+	key := usageKey(row)
+	n, err := publishUsage(ctx, kv, []UsageRow{row}, last)
+	if err != nil || n != 1 || kv.attempts[key] != 3 || len(kv.stored) != 1 || len(last) != 1 {
+		t.Fatalf("n=%d err=%v attempts=%d stored=%d last=%d; want the third attempt to publish in one scan", n, err, kv.attempts[key], len(kv.stored), len(last))
+	}
+}
+
+func TestPublishUsageStopsScanAfterExhaustedKey(t *testing.T) {
+	shortUsageBackoff(t)
+	ctx := context.Background()
+	kv := newFakeUsageKV()
+	kv.failPut = 10
+	last := map[string][]byte{}
+	rows := []UsageRow{usageTestRow("a", 1), usageTestRow("b", 1), usageTestRow("c", 1)}
+	keys := []string{usageKey(rows[0]), usageKey(rows[1]), usageKey(rows[2])}
+	slices.Sort(keys)
+	n, err := publishUsage(ctx, kv, rows, last)
+	if !errors.Is(err, context.DeadlineExceeded) || n != 0 {
+		t.Fatalf("n=%d err=%v; want 0 and a deadline error", n, err)
+	}
+	if kv.attempts[keys[0]] != len(usageBackoff)+1 || kv.attempts[keys[1]] != 0 || kv.attempts[keys[2]] != 0 {
+		t.Fatalf("attempts = %v; want the first key retried and the rest untouched", kv.attempts)
+	}
+	if len(last) != 0 || len(kv.stored) != 0 {
+		t.Fatalf("last = %v, stored = %d; want nothing recorded after a failed key", last, len(kv.stored))
+	}
+	kv.failPut = 0
+	n, err = publishUsage(ctx, kv, rows, last)
+	if err != nil || n != 3 || len(last) != 3 || len(kv.stored) != 3 {
+		t.Fatalf("next scan n=%d err=%v last=%d stored=%d; want all three published", n, err, len(last), len(kv.stored))
+	}
+}
+
+func TestPublishUsageNonTransientErrorIsNotRetried(t *testing.T) {
+	shortUsageBackoff(t)
+	kv := newFakeUsageKV()
+	kv.failPut = 1
+	kv.failErr = errors.New("bad row")
+	last := map[string][]byte{}
+	row := usageTestRow("a", 1)
+	if _, err := publishUsage(context.Background(), kv, []UsageRow{row}, last); err != nil {
+		t.Fatalf("err = %v; want the row error logged and skipped", err)
+	}
+	if got := kv.attempts[usageKey(row)]; got != 1 || len(last) != 0 {
+		t.Fatalf("attempts = %d, last = %d; want one attempt and nothing recorded", got, len(last))
+	}
+}
+
+// Shutdown during a Put returns the context error and logs nothing at ERROR. Logs are
+// captured by swapping the default slog handler, since the error path logs via slog.
+func TestPublishUsageShutdownIsNotAnError(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	kv := newFakeUsageKV()
+	kv.failPut = 1
+	kv.failErr = context.Canceled
+	kv.onPut = cancel
+	last := map[string][]byte{}
+	n, err := publishUsage(ctx, kv, []UsageRow{usageTestRow("a", 1)}, last)
+	if !errors.Is(err, context.Canceled) || n != 0 || len(last) != 0 {
+		t.Fatalf("n=%d err=%v last=%d; want 0, context.Canceled and nothing recorded", n, err, len(last))
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("shutdown logged an error: %s", logs.String())
+	}
+}
+
+func TestPublishUsageWritesDuplicateKeyOnce(t *testing.T) {
+	ctx := context.Background()
+	kv := newFakeUsageKV()
+	first, second := usageTestRow("a", 1), usageTestRow("a", 2)
+	if _, err := publishUsage(ctx, kv, []UsageRow{first, second}, map[string][]byte{}); err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := usageKey(first)
+	if kv.attempts[key] != 1 || !bytes.Equal(kv.stored[key], want) {
+		t.Fatalf("attempts = %d, stored = %s; want one write of the last row", kv.attempts[key], kv.stored[key])
 	}
 }

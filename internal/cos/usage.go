@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -22,16 +23,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Token usage is read from each node's own Claude transcripts, published into the
 // replicated COS_USAGE bucket, and mirrored into every node's SQLite state.
 const (
-	usageBucket    = "COS_USAGE"
-	usageKeepDays  = 31
-	usageScanEvery = 2 * time.Minute
+	usageBucket     = "COS_USAGE"
+	usageKeepDays   = 31
+	usageScanEvery  = 2 * time.Minute
+	usageErrorScans = 3
 )
+
+// usageBackoff spaces the retries of one KV call. A var so tests can shorten it.
+var usageBackoff = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
 
 // UsageRow is one day's usage for one session and model on one host.
 type UsageRow struct {
@@ -325,14 +331,29 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 	root := filepath.Join(home, ".claude", "projects")
 	var scanner usageScanner
 	published := map[string][]byte{}
+	failed := 0
 	tick := time.NewTicker(usageScanEvery)
 	defer tick.Stop()
 	for {
 		rows, err := scanner.Scan(root, host, time.Now())
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			slog.Error("scan usage", "error", err)
 		}
-		publishUsage(ctx, kv, rows, published)
+		n, err := publishUsage(ctx, kv, rows, published)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			failed++
+			if failed == usageErrorScans {
+				slog.Error("publish usage failing", "scans", failed, "error", err)
+			}
+		} else {
+			if failed >= usageErrorScans {
+				slog.Info("publish usage recovered", "published", n)
+			}
+			failed = 0
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -343,7 +364,11 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 
 // publishUsage puts only rows that changed since this process last saw them. A key
 // it has not seen yet is compared with the bucket, so a restart rewrites nothing.
-func publishUsage(ctx context.Context, kv jetstream.KeyValue, rows []UsageRow, last map[string][]byte) {
+// A transient error stops the scan; the keys not yet in last go out on the next one.
+// It returns how many keys are in sync with the bucket after this scan.
+func publishUsage(ctx context.Context, kv jetstream.KeyValue, rows []UsageRow, last map[string][]byte) (int, error) {
+	// A duplicate key in one scan keeps its last row, so each key is written once.
+	want := map[string][]byte{}
 	for _, r := range rows {
 		key := usageKey(r)
 		data, err := json.Marshal(r)
@@ -351,22 +376,79 @@ func publishUsage(ctx context.Context, kv jetstream.KeyValue, rows []UsageRow, l
 			slog.Error("marshal usage row", "key", key, "error", err)
 			continue
 		}
-		prev, ok := last[key]
-		if !ok {
-			if entry, err := kv.Get(ctx, key); err == nil {
+		want[key] = data
+	}
+	keys := slices.Sorted(maps.Keys(want))
+	published := 0
+	for i, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return published, err
+		}
+		if err := putUsage(ctx, kv, key, want[key], last); err != nil {
+			if ctx.Err() != nil {
+				return published, ctx.Err() // shutdown interrupted the write, not a failure
+			}
+			if !transientUsageErr(err) {
+				slog.Error("publish usage", "key", key, "error", err)
+				continue
+			}
+			slog.Warn("publish usage deferred", "key", key, "error", err, "pending", len(keys)-i)
+			return published, fmt.Errorf("publish usage key=%s: %w", key, err)
+		}
+		published++
+	}
+	return published, nil
+}
+
+// putUsage writes one key when its bytes differ from the bucket. It records the key in
+// last only after the write, so a failed key is tried again on the next scan.
+func putUsage(ctx context.Context, kv jetstream.KeyValue, key string, data []byte, last map[string][]byte) error {
+	prev, ok := last[key]
+	if !ok {
+		if err := retryUsage(ctx, func() error {
+			entry, err := kv.Get(ctx, key)
+			if err == nil {
 				prev = entry.Value()
 			}
+			if transientUsageErr(err) {
+				return err
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		if bytes.Equal(prev, data) {
-			last[key] = data
-			continue
-		}
-		if _, err := kv.Put(ctx, key, data); err != nil {
-			slog.Error("publish usage", "key", key, "error", err)
-			continue
-		}
-		last[key] = data
 	}
+	if !bytes.Equal(prev, data) {
+		if err := retryUsage(ctx, func() error {
+			_, err := kv.Put(ctx, key, data)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	last[key] = data
+	return nil
+}
+
+// retryUsage runs op again after each usageBackoff step while it fails transiently.
+func retryUsage(ctx context.Context, op func() error) error {
+	for attempt := 0; ; attempt++ {
+		err := op()
+		if err == nil || !transientUsageErr(err) || attempt == len(usageBackoff) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(usageBackoff[attempt]):
+		}
+	}
+}
+
+// transientUsageErr reports errors from a busy or settling cluster, not from the row.
+func transientUsageErr(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrTimeout) ||
+		errors.Is(err, nats.ErrNoResponders) || errors.Is(err, jetstream.ErrNoStreamResponse)
 }
 
 // mirrorUsage copies the bucket into SQLite until ctx ends. The initial replay is
