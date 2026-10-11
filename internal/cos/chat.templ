@@ -168,7 +168,7 @@ templ kpiTiles(k kpiView) {
 	</section>
 }
 
-templ settingsPage(a AutopilotState, b budgetPanelData, m modelsPanelData, push PushState, wakes []WakeRecord) {
+templ settingsPage(a AutopilotState, m modelsPanelData, push PushState, wakes []WakeRecord) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Settings · COS")
@@ -184,7 +184,6 @@ templ settingsPage(a AutopilotState, b budgetPanelData, m modelsPanelData, push 
 			<main class="page page-narrow">
 				@autopilotPanel(a)
 				@pushPanel(push)
-				@budgetSection(b)
 				<section class="panel" aria-labelledby="wakes-heading">
 					<header class="panel-head"><h2 id="wakes-heading">COS wakes</h2></header>
 					<table>

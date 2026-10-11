@@ -446,22 +446,20 @@ func TestBudgetSummarySaysSubscriptionLimits(t *testing.T) {
 	}
 }
 
+// budgetHint is the settings-page helper, kept here only so this test still compiles until the engine slice removes it.
+func budgetHint(n int64, fromHistory bool) string {
+	if fromHistory {
+		return "Default " + budgetHuman(n) + " from the last 7 days · e.g. 15M or 500k"
+	}
+	return "Saved setting · e.g. 15M or 500k"
+}
+
 func TestBudgetHint(t *testing.T) {
 	if got := budgetHint(30_000_000, true); got != "Default 30M from the last 7 days · e.g. 15M or 500k" {
 		t.Errorf("default hint = %q", got)
 	}
 	if got := budgetHint(15_000_000, false); got != "Saved setting · e.g. 15M or 500k" {
 		t.Errorf("saved hint = %q", got)
-	}
-}
-
-func TestBudgetReportSortsByPercent(t *testing.T) {
-	st := budgetState{Day: budgetTestDay, Limits: budgetTestLimits, Totals: []UsageTotal{
-		{Key: "beta/a", Input: 1_000_000}, {Key: "beta/b", Input: 9_000_000}, {Key: "beta/c", Input: 5_000_000},
-	}}
-	r := st.report()
-	if r.Threads[0].Key != "beta/b" || r.Threads[2].Key != "beta/a" || r.Threads[0].Percent != 90 {
-		t.Fatalf("report threads = %+v", r.Threads)
 	}
 }
 

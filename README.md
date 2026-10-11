@@ -576,8 +576,7 @@ under `compact.<hash>`, so a new leader keeps it.
 **Registered rules:** a feature adds a rule from its own file with `RegisterRule(Rule{...})`
 in `init()`. `Event` runs for every event after the built-in rules; `Beat` runs on each
 leader heartbeat. Decisions are logged like built-in ones, and a decision with `Do` runs
-its custom action with a `RuleEnv` (the `Bus` and `Publish`). Node alerts (TS-825) and
-budgets (TS-826) register their rules this way. A panicking rule logs an `error` entry
+its custom action with a `RuleEnv` (the `Bus` and `Publish`). Node alerts (TS-825) register their rules this way. A panicking rule logs an `error` entry
 and the other rules still run.
 
 **Action-log writes** retry three times with backoff (1 s, then 3 s), 5 s per attempt.
