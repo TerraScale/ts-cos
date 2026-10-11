@@ -74,8 +74,8 @@ func workFixture(t *testing.T, s *Store) {
 	}
 }
 
-// workRowRE pulls one table row: ticket, data-stage and stage label.
-var workRowRE = regexp.MustCompile(`(?s)<th scope="row" class="mono">([^<]+)</th>.*?<span class="stage" data-stage="([^"]+)">([^<]+)</span>`)
+// workRowRE pulls one table row: ticket href, data-stage and stage label.
+var workRowRE = regexp.MustCompile(`(?s)<th scope="row" class="mono"><a class="row-link" href="/work/([^"]+)">[^<]+</a></th>.*?<span class="stage" data-stage="([^"]+)">([^<]+)</span>`)
 
 // workFilterRE pulls one stage filter button: value, pressed, label and count.
 var workFilterRE = regexp.MustCompile(`name="stage" value="([^"]*)" aria-pressed="(true|false)">\s*([^<]+?)\s*<span class="badge">(\d+)</span>`)
@@ -182,6 +182,57 @@ func TestWorkBoardEmpty(t *testing.T) {
 	_, page := workGet(t, web, "/work")
 	if !strings.Contains(page, `<p class="empty">No work yet.</p>`) {
 		t.Fatal("empty board message missing")
+	}
+}
+
+func TestWorkTimelineNewestFirst(t *testing.T) {
+	s := boardTestStore(t)
+	workFixture(t, s)
+	web := NewWeb(s, nil)
+
+	status, page := workGet(t, web, "/work/TS-802")
+	if status != http.StatusOK {
+		t.Fatalf("/work/TS-802 status %d", status)
+	}
+	tag := regexp.MustCompile(`<span class="tag" data-tone="([a-z]*)">([a-z.]+)</span>`)
+	var kinds, tones []string
+	for _, m := range tag.FindAllStringSubmatch(page, -1) {
+		if strings.HasPrefix(m[2], "turn.") || strings.HasPrefix(m[2], "review.") {
+			kinds = append(kinds, m[2])
+			tones = append(tones, m[1])
+		}
+	}
+	if strings.Join(kinds, ",") != "review.submitted,turn.failed,turn.completed" {
+		t.Fatalf("timeline kinds = %v", kinds)
+	}
+	if strings.Join(tones, ",") != "warn,danger," {
+		t.Fatalf("timeline tones = %v", tones)
+	}
+	if !strings.Contains(page, ` UTC">`) {
+		t.Fatal("exact UTC time missing from title")
+	}
+
+	if status, _ := workGet(t, web, "/work/ts-802"); status != http.StatusOK {
+		t.Fatalf("lower-case ticket status %d", status)
+	}
+	if status, body := workGet(t, web, "/work/TS-999"); status != http.StatusNotFound || !strings.Contains(body, "No work for") {
+		t.Fatalf("unknown ticket = %d %q", status, body)
+	}
+	if status, _ := workGet(t, web, "/work/nope"); status != http.StatusNotFound {
+		t.Fatalf("invalid ticket status %d", status)
+	}
+}
+
+func TestWorkTimelinePRLinks(t *testing.T) {
+	s := boardTestStore(t)
+	workFixture(t, s)
+	_, page := workGet(t, NewWeb(s, nil), "/work/TS-803")
+	if !strings.Contains(page, `<a href="https://git.terrascale.tech/TerraScale/ts-cos/pulls/43">TerraScale/ts-cos#43</a>`) {
+		t.Fatal("open PR event not linked to its URL")
+	}
+	_, merged := workGet(t, NewWeb(s, nil), "/work/TS-805")
+	if !strings.Contains(merged, `<span>TerraScale/ts-cos#42</span>`) {
+		t.Fatal("merged PR without a live URL should be plain text")
 	}
 }
 

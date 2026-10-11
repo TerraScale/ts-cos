@@ -51,7 +51,7 @@ templ workPanel(b workBoard) {
 					<tbody>
 						for _, l := range b.Lines {
 							<tr>
-								<th scope="row" class="mono">{ l.Row.Ticket }</th>
+								<th scope="row" class="mono"><a class="row-link" href={ templ.SafeURL("/work/" + l.Row.Ticket) }>{ l.Row.Ticket }</a></th>
 								<td>{ l.Row.Title }</td>
 								<td><span class="stage" data-stage={ boardStageData(l.Row) }>{ l.Row.Stage }</span></td>
 								<td>
@@ -84,6 +84,111 @@ templ workPanel(b workBoard) {
 					</tbody>
 				</table>
 			</div>
+		}
+	</section>
+}
+
+templ workTicketPage(h chatHeader, t workTimeline) {
+	<!DOCTYPE html>
+	<html lang="en">
+		@docHead(t.Ticket + " · Work · COS")
+		<body class="shell">
+			@chatHead(h)
+			<main class="page page-narrow">
+				@workTicketPanel(t)
+			</main>
+		</body>
+	</html>
+}
+
+// workTicketPanel is one ticket's row and its timeline, newest first.
+templ workTicketPanel(t workTimeline) {
+	<section id="work-ticket" class="panel" aria-labelledby="work-ticket-heading">
+		<p class="meta"><a href="/work">← Work</a></p>
+		if !t.Known {
+			<p class="empty">No work for <span class="mono">{ t.Ticket }</span>. Check the ticket ID, or <a href="/work">open the board</a>.</p>
+		} else {
+			<header class="panel-head"><h2 id="work-ticket-heading"><span class="mono">{ t.Ticket }</span></h2></header>
+			<article class="card stack">
+				<header class="card-head">
+					if t.OnBoard {
+						<span class="stage" data-stage={ boardStageData(t.Row) }>{ t.Row.Stage }</span>
+					} else {
+						<span class="tag">Not on the board</span>
+					}
+					if t.Row.Blocker != "" {
+						<span class="tag" data-tone="danger">{ t.Row.Blocker }</span>
+					}
+				</header>
+				if t.Row.Title != "" && t.Row.Title != t.Ticket {
+					<p>{ t.Row.Title }</p>
+				}
+				if t.OnBoard {
+					<p class="meta">
+						<span>Age { ageText(t.Row.Since) }</span>
+						if !t.Row.Deployed.IsZero() {
+							<span>Deployed { agoText(t.Row.Deployed) }</span>
+						}
+					</p>
+				}
+				if len(t.Row.PRs) > 0 {
+					<p class="meta">
+						for _, p := range t.Row.PRs {
+							<span class="row">
+								if p.URL != "" {
+									<a href={ templ.URL(p.URL) }>{ p.Repo }#{ integer(p.Number) }</a>
+								} else {
+									<span>{ p.Repo }#{ integer(p.Number) }</span>
+								}
+								if p.Merged {
+									<span class="tag" data-tone="ok">merged</span>
+								}
+							</span>
+						}
+					</p>
+				}
+				if len(t.Threads) > 0 {
+					<ul class="list">
+						for _, th := range t.Threads {
+							<li class="row">
+								<span>{ th.Host }</span>
+								<span class="meta">{ orDash(modelLabel(th.Model)) }</span>
+								<span class="meta mono">{ clip(th.ThreadID, 8) }</span>
+							</li>
+						}
+					</ul>
+				}
+			</article>
+			<header class="panel-head"><h2>Timeline <span class="badge">{ integer(len(t.Events)) }</span></h2></header>
+			if len(t.Events) == 0 {
+				<p class="empty">No events for this ticket yet.</p>
+			} else {
+				<ol class="list">
+					for _, e := range t.Events {
+						<li>
+							<div class="row">
+								<time title={ e.Exact }>{ e.Ago }</time>
+								<span class="tag" data-tone={ e.Tone }>{ e.Kind }</span>
+							</div>
+							<span>{ e.Summary }</span>
+							if e.PR != "" || e.Thread != "" {
+								<span class="meta">
+									if e.PR != "" {
+										if e.PRURL != "" {
+											<a href={ templ.URL(e.PRURL) }>{ e.PR }</a>
+										} else {
+											<span>{ e.PR }</span>
+										}
+									}
+									if e.Thread != "" {
+										<span class="mono">{ e.Thread }</span>
+									}
+								</span>
+							}
+						</li>
+					}
+				</ol>
+			}
 		}
 	</section>
 }
