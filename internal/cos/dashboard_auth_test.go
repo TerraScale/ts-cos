@@ -2,6 +2,8 @@ package cos
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,7 +122,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 	}
 	deadline := time.Now().Add(40 * time.Second)
 	for _, auth := range auths {
-		for users, _ := auth.kv(); users == nil; users, _ = auth.kv() {
+		for users, _, _ := auth.kv(); users == nil; users, _, _ = auth.kv() {
 			if time.Now().After(deadline) {
 				t.Fatal("auth buckets were not created")
 			}
@@ -130,6 +133,20 @@ func TestAuthAcrossNodes(t *testing.T) {
 	a, b, d := servers[0], servers[1], servers[2]
 	login := func(server *httptest.Server, user, password string, header ...string) (*http.Response, string) {
 		return c.do(server, "POST", "/login", url.Values{"user": {user}, "password": {password}}, nil, header...)
+	}
+	// countFailure repeats the same wrong login until the server counts it.
+	countFailure := func(server *httptest.Server, user string, header ...string) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+			response, _ := login(server, user, "wrong-password-1", header...)
+			if response.StatusCode == http.StatusUnauthorized {
+				return
+			}
+			// A 503 is refused but not counted (lock state unreadable during a NATS reconnect); only a 401 counts.
+			if response.StatusCode != http.StatusServiceUnavailable || time.Now().After(deadline) {
+				t.Fatalf("wrong login for %s = %d, want 401", user, response.StatusCode)
+			}
+		}
 	}
 
 	t.Run("only the login page is public", func(t *testing.T) {
@@ -182,8 +199,15 @@ func TestAuthAcrossNodes(t *testing.T) {
 			t.Fatalf("probe session = %d %q", response.StatusCode, body)
 		}
 		end()
-		if response, _ := c.do(d, "GET", "/", nil, probe); response.StatusCode != http.StatusUnauthorized {
-			t.Fatal("the probe session outlived end")
+		// Revocation reaches a lagging local replica within milliseconds; wait for it rather than read once.
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+			response, _ := c.do(d, "GET", "/", nil, probe)
+			if response.StatusCode == http.StatusUnauthorized {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the probe session outlived end")
+			}
 		}
 		if response, _ := login(d, "cos-probe", ""); response.StatusCode != http.StatusUnauthorized {
 			t.Fatal("cos-probe signed in with a password")
@@ -262,15 +286,167 @@ func TestAuthAcrossNodes(t *testing.T) {
 		}
 	})
 
-	t.Run("failures lock the user on every node, even with the right password", func(t *testing.T) {
-		for i := range lockAfter {
-			login(servers[i%3], "tester", "wrong-password-1", "Cf-Connecting-Ip", fmt.Sprintf("198.51.100.%d", i))
+	t.Run("failures lock the account on every node, even with the right password", func(t *testing.T) {
+		hash, err := bcrypt.GenerateFromPassword([]byte("locked-password-4"), bcrypt.MinCost)
+		if err != nil {
+			t.Fatal(err)
 		}
-		response, body := login(b, "tester", "second-password-2", "Cf-Connecting-Ip", "198.51.100.99")
-		if response.StatusCode != http.StatusTooManyRequests || sessionOf(response) != nil || !strings.Contains(body, "Too many failed attempts") {
-			t.Fatalf("locked login = %d %q", response.StatusCode, body)
+		users, _, _ := auths[0].kv()
+		value, _ := json.Marshal(authUser{Bcrypt: string(hash)})
+		if _, err := users.Put(ctx, "user.locktest", value); err != nil {
+			t.Fatal(err)
+		}
+		for i, server := range []*httptest.Server{a, b, d, a, b} {
+			countFailure(server, "locktest", "Cf-Connecting-Ip", fmt.Sprintf("198.51.100.%d", i+1))
+		}
+		for i, server := range servers {
+			response, body := login(server, "locktest", "locked-password-4", "Cf-Connecting-Ip", fmt.Sprintf("198.51.100.%d", 50+i))
+			if response.StatusCode != http.StatusTooManyRequests || sessionOf(response) != nil || !strings.Contains(body, "Too many failed attempts") {
+				t.Fatalf("locked login = %d %q", response.StatusCode, body)
+			}
 		}
 	})
+
+	t.Run("failures from one address lock it on every node, for any username", func(t *testing.T) {
+		authTestUser(t, auths[0], "carol", "ip-password-3")
+		for i, server := range []*httptest.Server{a, b, d, a, b} {
+			countFailure(server, fmt.Sprintf("nobody-%d", i+1), "Cf-Connecting-Ip", "203.0.113.77")
+		}
+		for _, server := range servers {
+			response, body := login(server, "carol", "ip-password-3", "Cf-Connecting-Ip", "203.0.113.77")
+			if response.StatusCode != http.StatusTooManyRequests || sessionOf(response) != nil || !strings.Contains(body, "Too many failed attempts") {
+				t.Fatalf("locked address = %d %q", response.StatusCode, body)
+			}
+		}
+		if response, _ := login(d, "carol", "ip-password-3", "Cf-Connecting-Ip", "203.0.113.78"); response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("another address = %d", response.StatusCode)
+		}
+	})
+
+	t.Run("no lost increments under concurrency", func(t *testing.T) {
+		const key = "acct.dave-concurrent"
+		var wg sync.WaitGroup
+		for i := range 10 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				auth := auths[i%3]
+				_, _, lockouts := auth.kv()
+				auth.fail(ctx, lockouts, key)
+			}()
+		}
+		wg.Wait()
+		// The final read can hit the same reconnect blip, so poll until the leader answers.
+		var value []byte
+		var found bool
+		var err error
+		var count lockoutCount
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+			value, _, found, err = leaderGet(ctx, auths[1].nc, lockoutBucket, key)
+			if err == nil && found {
+				break
+			}
+		}
+		if err == nil && found {
+			err = json.Unmarshal(value, &count)
+		}
+		if err != nil || count.Failures != 10 {
+			t.Fatalf("%s = %q found %v err %v", key, value, found, err)
+		}
+	})
+
+	t.Run("leaderGet reads the stream leader on every node", func(t *testing.T) {
+		_, _, lockouts := auths[0].kv()
+		if _, err := lockouts.Put(ctx, "ip.test", []byte(`{"failures":1}`)); err != nil {
+			t.Fatal(err)
+		}
+		value, revision, found, err := leaderGet(ctx, auths[1].nc, lockoutBucket, "ip.test")
+		if err != nil || !found || revision == 0 || string(value) != `{"failures":1}` {
+			t.Fatalf("found key = %q %d %v %v", value, revision, found, err)
+		}
+		if _, _, found, err := leaderGet(ctx, auths[2].nc, lockoutBucket, "ip.missing"); err != nil || found {
+			t.Fatalf("missing key found = %v %v", found, err)
+		}
+		if err := lockouts.Delete(ctx, "ip.test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, found, err := leaderGet(ctx, auths[2].nc, lockoutBucket, "ip.test"); err != nil || found {
+			t.Fatalf("deleted key found = %v %v", found, err)
+		}
+	})
+}
+
+// TestForgedSessionsCannotStampedeLeader sends forged cookies past the leader-read budget from one
+// address, then checks that a real session from that address still works on its own node.
+func TestForgedSessionsCannotStampedeLeader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	buses, configs := authTestCluster(t, ctx)
+	authTestAdmin(t, configs[0].Home, "tester", "first-password-1", 0600)
+	js, err := buses[0].JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := NewAuth(configs[0].Home, js)
+	go auth.Start(ctx)
+	server := httptest.NewServer(auth.Protect(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(rw, "dashboard for ", r.Context().Value(authUserKey{}))
+	}), http.NotFoundHandler()))
+	t.Cleanup(server.Close)
+	deadline := time.Now().Add(40 * time.Second)
+	for users, _, _ := auth.kv(); users == nil; users, _, _ = auth.kv() {
+		if time.Now().After(deadline) {
+			t.Fatal("auth buckets were not created")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	c := authTestClient{t, &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	header := []string{"Cf-Connecting-Ip", "203.0.113.40"}
+	for i := range 31 {
+		raw := make([]byte, 32)
+		rand.Read(raw)
+		forged := &http.Cookie{Name: sessionCookie, Value: "tester." + base64.RawURLEncoding.EncodeToString(raw)}
+		response, _ := c.do(server, "GET", "/", nil, forged, header...)
+		if response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("forged session %d = %d, want 401 or 303", i+1, response.StatusCode)
+		}
+	}
+	response, _ := c.do(server, "POST", "/login", url.Values{"user": {"tester"}, "password": {"first-password-1"}}, nil, header...)
+	session := sessionOf(response)
+	if session == nil {
+		t.Fatalf("login after forged cookies = %d", response.StatusCode)
+	}
+	if response, body := c.do(server, "GET", "/", nil, session, header...); response.StatusCode != 200 || body != "dashboard for tester" {
+		t.Fatalf("real session after forged cookies = %d %q", response.StatusCode, body)
+	}
+}
+
+// authTestUser adds a seeded user straight to KV, for tests that need more than the admin.
+func authTestUser(t *testing.T, auth *Auth, user, password string) {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, _, _ := auth.kv()
+	value, _ := json.Marshal(authUser{Bcrypt: string(hash)})
+	if _, err := users.Create(context.Background(), "user."+user, value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLockoutIPKey(t *testing.T) {
+	for ip, want := range map[string]string{
+		"198.51.100.7": "ip.198.51.100.7",
+		"fd7a:115c::1": "ip.fd7a_115c__1",
+		"fe80::1%eth0": "ip.fe80__1_eth0",
+		"":             "ip.unknown",
+		"..":           "ip.unknown",
+	} {
+		if got := lockoutIPKey(ip); got != want {
+			t.Errorf("lockoutIPKey(%q) = %q, want %q", ip, got, want)
+		}
+	}
 }
 
 func TestAuthStartingAsksToRetry(t *testing.T) {

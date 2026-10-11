@@ -365,9 +365,18 @@ func TestDashboardProbe(t *testing.T) {
 	}))
 	defer srv.Close()
 	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	// Creating three R3 buckets on a fresh cluster can take most of busTestReady's budget.
+	for deadline := time.Now().Add(40 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if users, _, _ := auth.kv(); users != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("auth buckets were not created")
+		}
+	}
 	var last []string
 	busTestReady(t, "probe signs in", func() bool { last = dashboardProbe(ctx, port, auth); return len(last) == 0 })
-	_, sessions := auth.kv()
+	_, sessions, _ := auth.kv()
 	if keys, _ := sessions.Keys(ctx); len(keys) != 0 {
 		t.Fatalf("probe sessions left behind: %v", keys)
 	}
