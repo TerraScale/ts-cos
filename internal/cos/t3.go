@@ -464,7 +464,7 @@ func (c *T3) Send(ctx context.Context, id, text string, mode SendMode) (SendResu
 		dispatch["type"] = "queue_after_active"
 	}
 	messageID := uuid()
-	_, err = c.Dispatch(ctx, map[string]any{"type": "message.dispatch", "createdBy": "user", "creationSource": "server", "threadId": id, "messageId": messageID, "text": text, "attachments": []any{}, "dispatchMode": dispatch})
+	_, err = c.Dispatch(ctx, sendDispatch(id, messageID, text, dispatch))
 	return SendResult{c.Host, id, messageID, dispatch["type"].(string)}, err
 }
 

@@ -43,8 +43,8 @@ func validateLocal(command string, args []string) error {
 			return errors.New("command arguments cannot be empty")
 		}
 	}
-	if command == "send" && len(args) == 3 && args[2] != "queue" {
-		return errors.New("send mode must be queue")
+	if command == "send" && len(args) == 3 && !sendArgPattern.MatchString(args[2]) {
+		return errors.New("send mode must be queue, user, or deliver:<messageId>")
 	}
 	if command == "thread" && len(args) == 2 {
 		if n, err := strconv.Atoi(args[1]); err != nil || n < 1 || n > 50 {
@@ -169,12 +169,6 @@ func localCommand(ctx context.Context, open func(context.Context) (*T3, error), 
 			out["replies"] = lastReplies(p, n)
 		}
 		return out, nil
-	case "send":
-		mode := SendSteer
-		if len(args) == 3 {
-			mode = SendQueue
-		}
-		return c.Send(ctx, id, args[1], mode)
 	case "compact":
 		focus := ""
 		if len(args) == 2 {
@@ -188,11 +182,7 @@ func localCommand(ctx context.Context, open func(context.Context) (*T3, error), 
 		if err != nil {
 			return nil, err
 		}
-		brief := ""
-		if len(args) == 3 {
-			brief = args[2]
-		}
-		return c.Handoff(ctx, id, sel, brief)
+		return c.Handoff(ctx, id, sel)
 	case "fork":
 		p, err := c.Projection(ctx, id)
 		if err != nil {
@@ -458,7 +448,22 @@ func (c *T3) Tidy(ctx context.Context) (TreeResult, error) {
 	}
 	return out, nil
 }
-func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief string) (any, error) {
+
+// handoffCompactTokens is the context use above which a handoff compacts the thread first.
+const handoffCompactTokens = 20000
+
+// Handoff moves an idle thread to sel's model; the gate sends the brief after it.
+func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any) (any, error) {
+	window := 200000
+	for _, key := range []string{"instanceId", "model"} {
+		switch sel[key] {
+		case "codex":
+			window = 258400
+		case "claudeAgent":
+			window = 1000000
+		}
+	}
+	budget := window / 2
 	p, err := c.WaitIdle(ctx, id, 20*time.Minute)
 	if err != nil {
 		return nil, err
@@ -466,7 +471,7 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief s
 	usage := ContextOf(p)
 	steps := []any{map[string]any{"before": usage}}
 	// Every later turn re-sends the whole context; the target model only needs a summary.
-	if usage.UsedTokens > 20000 {
+	if usage.UsedTokens > handoffCompactTokens {
 		focus := fmt.Sprintf("Handing over to %v for the review-fix phase. Keep only: the PR's purpose and design, decisions made (incl. user decisions), files changed and why, open reviewer findings and their status, what was tried and failed, and the exact next step. Drop tool output, file dumps and resolved discussions.", sel["model"])
 		compacted, err := c.Compact(ctx, id, focus)
 		if err != nil {
@@ -478,12 +483,7 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief s
 	if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.model-selection.set", "threadId": id, "modelSelection": sel}); err != nil {
 		return nil, err
 	}
-	if brief != "" {
-		if _, err := c.Send(ctx, id, brief, SendQueue); err != nil {
-			return nil, err
-		}
-	}
-	return map[string]any{"action": "handed-off", "to": sel["model"], "ctx": usage, "steps": steps}, nil
+	return map[string]any{"action": "handed-off", "to": sel["model"], "budget": budget, "ctx": usage, "steps": steps}, nil
 }
 
 // InventoryThread is one live thread in cleanup planning output.
