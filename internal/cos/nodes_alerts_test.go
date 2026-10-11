@@ -1,6 +1,7 @@
 package cos
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strconv"
@@ -125,5 +126,48 @@ func TestNodeAlertData(t *testing.T) {
 	}
 	if missingData["type"] != "missing" || missingData["lastSeen"] != "2026-10-11T03:11:49Z" || missingData["after"] != 60.0 {
 		t.Errorf("missing data = %v", missingData)
+	}
+}
+
+func TestSeedNodeLatestKeepsUnknownStoredHost(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	js := busTestJetStream(t, ctx)
+	busTestReady(t, "node streams", func() bool {
+		ready, stop := context.WithTimeout(ctx, time.Second)
+		defer stop()
+		return EnsureNodeStreams(ready, js[0]) == nil
+	})
+	// The ghost is a synthetic e2e host the bus never discovers; a new leader must still find it in the stream.
+	ghost := NodeSample{Host: "e2e-ghost", Time: nodeAlertNow.Add(-90 * time.Second), N: 1, Synthetic: true}
+	delta := NodeSample{Host: "delta", Time: nodeAlertNow, N: 1}
+	if err := PublishNodeSample(ctx, js[0], "raw", ghost); err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishNodeSample(ctx, js[1], "raw", delta); err != nil {
+		t.Fatal(err)
+	}
+	seeded := seedNodeLatest(ctx, js[2], []string{"delta", "beta", "mariogk-dev"}, nodeAlertNow)
+	if len(seeded) != 4 {
+		t.Fatalf("seeded %d hosts, want ghost, delta, beta and mariogk-dev", len(seeded))
+	}
+	if got := seeded["e2e-ghost"]; !got.Synthetic || !got.Time.Equal(ghost.Time) {
+		t.Errorf("ghost seeded as %+v, want its stored sample", got)
+	}
+	if got := seeded["delta"]; !got.Time.Equal(delta.Time) {
+		t.Errorf("delta seeded at %v, want its stored sample time %v", got.Time, delta.Time)
+	}
+	for _, host := range []string{"beta", "mariogk-dev"} {
+		if got := seeded[host]; got.Host != host || !got.Time.Equal(nodeAlertNow) {
+			t.Errorf("%s seeded as %+v, want a grace sample at start", host, got)
+		}
+	}
+	got := nodeAlerts(nodeAlertNow, seeded)
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want only the ghost's missing alert", len(got))
+	}
+	want := NewEventID(SourceNode, "missing", "e2e-ghost", strconv.FormatInt(ghost.Time.Unix(), 10))
+	if got[0].ID != want || !got[0].Synthetic || got[0].Severity != SeverityInfo {
+		t.Errorf("event %s synthetic %v severity %s, want %s synthetic info", got[0].ID, got[0].Synthetic, got[0].Severity, want)
 	}
 }

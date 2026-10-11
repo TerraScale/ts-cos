@@ -8,10 +8,12 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Alert thresholds are fixed; a host past them is worth an Inbox item or a push.
@@ -59,11 +61,7 @@ func watchNodes(ctx context.Context, bus *Bus) {
 	if err != nil {
 		slog.Warn("COS node alert hosts", "error", err)
 	}
-	for _, host := range hosts {
-		s, err := NodeLatest(ctx, js, host)
-		if err != nil {
-			s = NodeSample{Host: host, Time: start}
-		}
+	for host, s := range seedNodeLatest(ctx, js, hosts, start) {
 		mu.Lock()
 		if _, seen := latest[host]; !seen {
 			latest[host] = s
@@ -105,6 +103,47 @@ func watchNodes(ctx context.Context, bus *Bus) {
 			}
 		}
 	}
+}
+
+// seedNodeLatest starts the watcher from what is stored: every host with a raw sample, plus the expected hosts.
+// A host with no stored sample counts as last seen at start, so a silent host still gets its missing alert.
+func seedNodeLatest(ctx context.Context, js jetstream.JetStream, hosts []string, start time.Time) map[string]NodeSample {
+	stored, err := nodeRawHosts(ctx, js)
+	if err != nil {
+		slog.Warn("COS node alert stored hosts", "error", err)
+	}
+	known := map[string]bool{}
+	for _, host := range append(stored, hosts...) {
+		known[host] = true
+	}
+	out := make(map[string]NodeSample, len(known))
+	for host := range known {
+		s, err := NodeLatest(ctx, js, host)
+		if err != nil {
+			s = NodeSample{Host: host, Time: start}
+		}
+		out[host] = s
+	}
+	return out
+}
+
+// nodeRawHosts lists every host with a subject in the raw node stream, so a host the bus does not know still counts.
+func nodeRawHosts(ctx context.Context, js jetstream.JetStream) ([]string, error) {
+	stream, err := js.Stream(ctx, NodesRawStream)
+	if err != nil {
+		return nil, err
+	}
+	info, err := stream.Info(ctx, jetstream.WithSubjectFilter(nodeSubject("raw", "*")))
+	if err != nil {
+		return nil, err
+	}
+	var hosts []string
+	for subject := range info.State.Subjects {
+		if host, ok := strings.CutPrefix(subject, nodeSubject("raw", "")); ok && validNodeHost(host) {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts, nil
 }
 
 // nodeAlerts evaluates the rules over each host's newest sample; latest[host].Time is when the host was last seen.
