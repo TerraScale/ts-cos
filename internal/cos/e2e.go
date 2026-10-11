@@ -409,6 +409,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "tokens.budget-pause", Stream: "TS-826", OnDemand: true, Run: checkBudgetPause},
 		// Runs only when named, because it spends an Opus probe run.
 		E2ECheck{ID: "inbox.needs-user-forward", Stream: "TS-815", OnDemand: true, Run: inboxCheck(checkInboxNeedsUserForward)},
+		E2ECheck{ID: "push.inbox-notify", Stream: "TS-827", Run: checkPushInboxNotify},
 	)
 	return append(append(checks, e2ePending...), e2eRegistered...)
 }

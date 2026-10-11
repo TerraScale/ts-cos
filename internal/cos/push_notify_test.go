@@ -1,10 +1,30 @@
 package cos
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"reflect"
 	"testing"
+	"time"
 )
+
+func TestPushRecordLast(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	buses, _ := chatTestCluster(t, ctx)
+	p := pushTestStores(t, ctx, buses)[0]
+	p.recordLast(ctx, Event{Source: SourceInbox, Kind: KindInboxItemAdded, ID: "ev1", Item: "a1", Severity: SeverityWarn}, 2)
+	p.recordLast(ctx, Event{Source: "deploy", Kind: "deploy.completed", ID: "ev2"}, 5)
+	var got pushLast
+	chatTestWait(t, "last inbox record", func() bool {
+		entry, err := p.kv.Get(ctx, pushLastKey)
+		return err == nil && json.Unmarshal(entry.Value(), &got) == nil && got.Event == "ev1"
+	})
+	if got.Item != "a1" || got.Severity != "warn" || got.Sent != 2 || got.At.IsZero() {
+		t.Fatalf("last inbox record = %+v", got)
+	}
+}
 
 func TestNoticeFor(t *testing.T) {
 	approval := json.RawMessage(`{"kind":"approval"}`)
@@ -46,6 +66,18 @@ func TestFirstLine(t *testing.T) {
 	} {
 		if got := firstLine(in); got != want {
 			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPushOutageLevel(t *testing.T) {
+	for down, want := range map[time.Duration]slog.Level{
+		0:                           slog.LevelWarn,
+		2 * time.Minute:             slog.LevelWarn,
+		2*time.Minute + time.Second: slog.LevelError,
+	} {
+		if got := pushOutageLevel(down); got != want {
+			t.Errorf("pushOutageLevel(%s) = %s, want %s", down, got, want)
 		}
 	}
 }

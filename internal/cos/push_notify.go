@@ -16,7 +16,19 @@ const (
 	pushMaxDeliver  = 5
 	pushCloseKeep   = 20
 	pushReplyWindow = 10 * time.Minute
+	pushLastKey     = "last.inbox"
+	pushDownLoud    = 2 * time.Minute // a consumer outage longer than this is an error
+	pushRetryMax    = 30 * time.Second
 )
+
+// pushLast is the last Inbox item the notifier handled, read back by the push.inbox-notify e2e check.
+type pushLast struct {
+	Event    string    `json:"event"`
+	Item     string    `json:"item"`
+	Severity string    `json:"severity"`
+	Sent     int       `json:"sent"`
+	At       time.Time `json:"at"`
+}
 
 // pushSubjects are the events that become notifications or close one.
 var pushSubjects = []string{
@@ -30,20 +42,40 @@ var pushSubjects = []string{
 // inboxTitles name the Inbox item kinds in a notification title.
 var inboxTitles = map[string]string{"approval": "Approval needed", "question": "Question", "decision": "Decision needed", "blocker": "Blocked"}
 
-// notify runs under the cluster lease: a durable consumer turns events into pushes and a chat watcher pushes COS replies.
+// notify runs under the cluster lease: a durable consumer turns events into pushes and a chat watcher pushes COS replies. A dropped consumer resubscribes with backoff (1 s doubling to 30 s) and logs an error only after 2 minutes down.
 func (p *Push) notify(ctx context.Context) {
 	var replies sync.WaitGroup
 	replies.Go(func() { p.chatReplies(ctx) })
 	defer replies.Wait()
+	var down time.Time
+	delay := time.Second
 	for ctx.Err() == nil {
-		if err := p.consume(ctx); err != nil && ctx.Err() == nil {
-			logErr(ctx, slog.LevelError, "push notifier", err)
+		start := time.Now()
+		err := p.consume(ctx)
+		if ctx.Err() != nil {
+			return
 		}
+		if time.Since(start) > time.Minute { // it was healthy for a while: this is a fresh outage
+			down, delay = time.Time{}, time.Second
+		}
+		if down.IsZero() {
+			down = time.Now()
+		}
+		logErr(ctx, pushOutageLevel(time.Since(down)), "push notifier", err, "down", time.Since(down).Round(time.Second))
 		select {
 		case <-ctx.Done():
-		case <-time.After(5 * time.Second):
+		case <-time.After(delay):
 		}
+		delay = min(delay*2, pushRetryMax)
 	}
+}
+
+// pushOutageLevel keeps rollout restarts and heartbeat blips at warn; only an outage that outlasts pushDownLoud is an error.
+func pushOutageLevel(down time.Duration) slog.Level {
+	if down > pushDownLoud {
+		return slog.LevelError
+	}
+	return slog.LevelWarn
 }
 
 // consume pushes events in order until the consumer or ctx fails. A closed item is held and carried by the next push.
@@ -85,17 +117,34 @@ func (p *Push) consume(ctx context.Context) error {
 		}
 		n, ok := noticeFor(e)
 		if !ok {
+			p.recordLast(ctx, e, 0)
 			_ = m.Ack()
 			continue
 		}
 		n.Close = closed
-		if _, err := p.Send(ctx, n); err != nil {
+		sent, err := p.Send(ctx, n)
+		if err != nil {
 			logErr(ctx, slog.LevelError, "push notice", err, "event", e.ID)
 			_ = m.NakWithDelay(30 * time.Second)
 			continue
 		}
 		closed = nil
+		p.recordLast(ctx, e, sent)
 		_ = m.Ack()
+	}
+}
+
+// recordLast notes an Inbox item once it is handled. A failed write only logs: the item was already handled, so NAKing would push it twice.
+func (p *Push) recordLast(ctx context.Context, e Event, sent int) {
+	if e.Kind != KindInboxItemAdded {
+		return
+	}
+	raw, err := json.Marshal(pushLast{Event: e.ID, Item: e.Item, Severity: string(e.Severity), Sent: sent, At: time.Now().UTC()})
+	if err == nil {
+		_, err = p.kv.Put(ctx, pushLastKey, raw)
+	}
+	if err != nil {
+		logErr(ctx, slog.LevelWarn, "push record last", err, "event", e.ID)
 	}
 }
 
