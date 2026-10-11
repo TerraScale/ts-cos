@@ -52,6 +52,7 @@ const (
 	SourceBudget  EventSource = "budget"
 	SourceCOS     EventSource = "cos"
 	SourceNode    EventSource = "node"
+	SourceLimits  EventSource = "limits"
 )
 
 type EventKind string
@@ -101,6 +102,8 @@ const (
 	KindNodeAlert EventKind = "node.alert"
 	// Published by the home.kpis.live e2e check; folded only into #kpis[data-probe].
 	KindKPIProbe EventKind = "kpi.probe"
+	// Published by the leader's CLIProxyAPI poller when a credential or model state changes. Data: limitsEventData.
+	KindLimitsChanged EventKind = "limits.changed"
 )
 
 var eventKinds = map[EventKind]EventSource{
@@ -115,7 +118,7 @@ var eventKinds = map[EventKind]EventSource{
 	KindDeployRolledBack: SourceDeploy, KindDeployCompleted: SourceDeploy,
 	KindBudgetWarn: SourceBudget, KindBudgetExceeded: SourceBudget,
 	KindE2EReport: SourceCOS, KindKPIProbe: SourceCOS,
-	KindNodeAlert: SourceNode,
+	KindNodeAlert: SourceNode, KindLimitsChanged: SourceLimits,
 }
 
 // Severity is the source's hint; the rules engine makes the final classification.

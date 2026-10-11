@@ -77,6 +77,7 @@ func (w *Web) routes() *http.ServeMux {
 		rw.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(rw).Encode(v)
 	})
+	mux.HandleFunc("GET /limits", w.limitsJSON)
 	mux.HandleFunc("POST /inbox/{id}/{action}", w.InboxAction)
 	return mux
 }
