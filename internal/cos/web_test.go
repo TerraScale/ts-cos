@@ -145,17 +145,18 @@ func TestChatRoutes(t *testing.T) {
 	if r := serve("POST", "/chat", false, `{"msg":"hi"}`); r.Code != http.StatusForbidden {
 		t.Errorf("POST /chat without Datastar header = %d", r.Code)
 	}
+	// Send errors answer 200 with the composer notice, so Datastar applies it.
 	for name, body := range map[string]string{
 		"blank":    `{"msg":"   "}`,
 		"not json": `not json`,
 		"too long": `{"msg":"` + strings.Repeat("x", 20001) + `"}`,
 	} {
-		if r := serve("POST", "/chat", true, body); r.Code != http.StatusBadRequest {
+		if r := serve("POST", "/chat", true, body); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `id="chat-notice"`) {
 			t.Errorf("POST /chat %s = %d", name, r.Code)
 		}
 	}
 	// NewChat has no bus, so the store is not ready and the message cannot be saved.
-	if r := serve("POST", "/chat", true, `{"msg":"hi"}`); r.Code != http.StatusServiceUnavailable {
+	if r := serve("POST", "/chat", true, `{"msg":"hi"}`); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "Chat is unavailable") {
 		t.Errorf("POST /chat without store = %d", r.Code)
 	}
 }

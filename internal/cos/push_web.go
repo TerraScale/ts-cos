@@ -43,7 +43,7 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 			return
 		}
 		if err := p.Subscribe(r.Context(), pushUser(r), r.UserAgent(), sub); err != nil {
-			slog.Error("save push subscription", "error", err)
+			logErr(r.Context(), slog.LevelError, "save push subscription", err)
 			http.Error(rw, "Push subscription failed; try again", http.StatusInternalServerError)
 			return
 		}
@@ -61,7 +61,7 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 			return
 		}
 		if err := p.Unsubscribe(r.Context(), pushUser(r), body.Endpoint); err != nil {
-			slog.Error("delete push subscription", "error", err)
+			logErr(r.Context(), slog.LevelError, "delete push subscription", err)
 			http.Error(rw, "Push update failed; try again", http.StatusInternalServerError)
 			return
 		}
@@ -97,7 +97,7 @@ func (w *Web) pushRoutes(mux *http.ServeMux) {
 			return
 		}
 		if err := p.SetPref(r.Context(), pushUser(r), category, state == "on"); err != nil {
-			slog.Error("save push preference", "error", err)
+			logErr(r.Context(), slog.LevelError, "save push preference", err)
 			http.Error(rw, "Preference update failed; try again", http.StatusInternalServerError)
 			return
 		}
@@ -126,12 +126,12 @@ func (w *Web) pushState(ctx context.Context, user string) PushState {
 	}
 	devices, err := p.Devices(ctx, user)
 	if err != nil {
-		slog.Error("read push devices", "error", err)
+		logErr(ctx, slog.LevelError, "read push devices", err)
 		return PushState{}
 	}
 	off, err := p.off(ctx, user)
 	if err != nil {
-		slog.Error("read push preferences", "error", err)
+		logErr(ctx, slog.LevelError, "read push preferences", err)
 		return PushState{}
 	}
 	return PushState{Ready: true, Devices: devices, Off: off}
@@ -141,7 +141,7 @@ func (w *Web) pushState(ctx context.Context, user string) PushState {
 func pushPatch(ctx context.Context, rw http.ResponseWriter, c templ.Component) {
 	rw.Header().Set("Content-Type", "text/event-stream")
 	if err := patchElements(ctx, rw, c); err != nil {
-		slog.Error("patch push panel", "error", err)
+		logErr(ctx, slog.LevelError, "patch push panel", err)
 	}
 }
 

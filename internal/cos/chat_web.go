@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -141,7 +142,7 @@ func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(status)
 	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context(), pushUser(r))).Render(r.Context(), rw); err != nil {
-		slog.Error("render settings", "error", err)
+		logErr(r.Context(), slog.LevelError, "render settings", err)
 	}
 }
 
@@ -159,7 +160,7 @@ func (w *Web) homeBoard(ctx context.Context) (workBoard, bool) {
 func (w *Web) homeNodes(ctx context.Context) ([]NodeCard, bool) {
 	cards, err := NodeCards(ctx, w.Bus)
 	if err != nil {
-		slog.Error("read node cards", "error", err)
+		logErr(ctx, slog.LevelError, "read node cards", err)
 		return nil, false
 	}
 	return cards, true
@@ -172,7 +173,7 @@ func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
 	b, ok := w.homeBoard(r.Context())
 	nodes, nodesOK := w.homeNodes(r.Context())
 	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(), b, ok, nodes, nodesOK).Render(r.Context(), rw); err != nil {
-		slog.Error("render chat", "error", err)
+		logErr(r.Context(), slog.LevelError, "render chat", err)
 	}
 }
 
@@ -257,7 +258,16 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		}
 		return patchElements(ctx, rw, chatMessages(entries))
 	}
+	// window is the IDs the log shows now; the cache keeps trimmed entries, so an edit must not re-append them.
+	window := func() map[string]bool {
+		ids := map[string]bool{}
+		for _, e := range w.Chat.Entries() {
+			ids[e.ID] = true
+		}
+		return ids
+	}
 	update := func(keys []string) error {
+		shown := window()
 		for _, key := range keys {
 			e, ok := w.Chat.Entry(key)
 			switch {
@@ -272,7 +282,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 				if err := patchElements(ctx, rw, chatEntry(e)); err != nil {
 					return err
 				}
-			case ok:
+			case ok && shown[key]:
 				sent[key] = true
 				if err := patchElements(ctx, rw, chatEntry(e), "selector #messages", "mode append"); err != nil {
 					return err
@@ -280,6 +290,24 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return nil
+	}
+	// trim removes the entries that left the window: trimming changes no key of its own, so no change would show it.
+	trim := func() error {
+		shown := window()
+		for id := range sent {
+			if shown[id] {
+				continue
+			}
+			delete(sent, id)
+			if err := sse(rw, "datastar-patch-elements", []string{"selector #m-" + id, "mode remove"}, "elements", ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// follow bumps chatTick after each batch; the log scrolls only while the reader is at its bottom.
+	follow := func() error {
+		return sse(rw, "datastar-patch-signals", nil, "signals", fmt.Sprintf(`{"chatTick":%d}`, time.Now().UnixNano()))
 	}
 	flush := func(err error) bool {
 		if err == nil {
@@ -304,6 +332,12 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		case <-sub.wake:
 			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err = update(w.Chat.Changed(sub))
+			if err == nil {
+				err = trim()
+			}
+			if err == nil {
+				err = follow()
+			}
 		case <-notify:
 			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err = home(w.state(ctx))
@@ -333,22 +367,28 @@ func (w *Web) chatPost(rw http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Msg string `json:"msg"`
 	}
+	rw.Header().Set("Content-Type", "text/event-stream")
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil {
-		http.Error(rw, "Invalid request", http.StatusBadRequest)
+		chatNotice(rw, "Invalid request")
 		return
 	}
 	text := strings.TrimSpace(in.Msg)
 	if text == "" || len([]rune(text)) > chatMaxText {
-		http.Error(rw, fmt.Sprintf("Message must be 1 to %d characters", chatMaxText), http.StatusBadRequest)
+		chatNotice(rw, fmt.Sprintf("Message must be 1 to %d characters", chatMaxText))
 		return
 	}
 	if _, err := w.Chat.Put(r.Context(), ChatEntry{Role: "user", Text: text}); err != nil {
-		slog.Error("store chat message", "error", err)
-		http.Error(rw, "Chat is unavailable; try again in a few seconds", http.StatusServiceUnavailable)
+		logErr(r.Context(), slog.LevelError, "store chat message", err)
+		chatNotice(rw, "Chat is unavailable; try again in a few seconds")
 		return
 	}
-	rw.Header().Set("Content-Type", "text/event-stream")
+	chatNotice(rw, "")
 	_ = sse(rw, "datastar-patch-signals", nil, "signals", `{"msg":""}`)
+}
+
+// chatNotice shows text beside the composer; empty text clears it. The stream answers 200 so Datastar applies the patch.
+func chatNotice(rw http.ResponseWriter, text string) {
+	_ = sse(rw, "datastar-patch-elements", nil, "elements", fmt.Sprintf(`<p id="chat-notice" class="toast" role="status">%s</p>`, html.EscapeString(text)))
 }
 
 func toolSummary(tools []string) string {
@@ -367,7 +407,7 @@ func (w *Web) inboxPage(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := inboxPage(headerOf(v), v).Render(r.Context(), rw); err != nil {
-		slog.Error("render inbox", "error", err)
+		logErr(r.Context(), slog.LevelError, "render inbox", err)
 	}
 }
 
@@ -458,12 +498,12 @@ func (w *Web) chatAnswer(rw http.ResponseWriter, r *http.Request) {
 	if len(e.Ask.Answers) == len(e.Ask.Questions) {
 		answers, _ := json.Marshal(e.Ask.Answers)
 		if err := w.Chat.Respond(r.Context(), e.Ask.Host, e.Ask.ThreadID, e.Ask.RequestID, string(answers)); err != nil {
-			slog.Error("answer COS question", "host", e.Ask.Host, "error", err)
+			logErr(r.Context(), slog.LevelError, "answer COS question", err, "host", e.Ask.Host)
 			// Undo the recorded answer so the question shows its buttons again.
 			if cur, ok := w.Chat.Entry(e.ID); ok && cur.Ask != nil {
 				delete(cur.Ask.Answers, question)
 				if err := w.Chat.Replace(context.WithoutCancel(r.Context()), cur); err != nil {
-					slog.Error("roll back COS answer", "entry", e.ID, "error", err)
+					logErr(context.WithoutCancel(r.Context()), slog.LevelError, "roll back COS answer", err, "entry", e.ID)
 				}
 			}
 			if errors.Is(err, errBusUnavailable) {

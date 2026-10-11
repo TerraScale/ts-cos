@@ -55,14 +55,14 @@ func (w *Web) budgetKV() jetstream.KeyValue {
 func (w *Web) budgetPanel(ctx context.Context, now time.Time) budgetPanelData {
 	st, scopes, err := budgetUsage(ctx, w.Store, now)
 	if err != nil {
-		slog.Error("read budget usage", "error", err)
+		logErr(ctx, slog.LevelError, "read budget usage", err)
 		return budgetPanelData{Alert: "Cannot read today's token usage", Tone: "warn"}
 	}
 	d := budgetPanelData{Alert: budgetUnavailable, Tone: "warn"}
 	if kv := w.budgetKV(); kv != nil {
 		limits, err := budgetLoadLimits(ctx, kv, st.Day, scopes, st.Limits)
 		if err != nil {
-			slog.Error("read budget limits", "error", err)
+			logErr(ctx, slog.LevelError, "read budget limits", err)
 		} else {
 			st.Limits, d.Alert = limits, ""
 		}
@@ -121,7 +121,7 @@ func (w *Web) budgetSave(rw http.ResponseWriter, r *http.Request) {
 	}
 	if err := errors.Join(budgetSetLimit(r.Context(), kv, budgetSettingsThread, thread),
 		budgetSetLimit(r.Context(), kv, budgetSettingsDaily, daily)); err != nil {
-		slog.Error("save token budgets", "error", err)
+		logErr(r.Context(), slog.LevelError, "save token budgets", err)
 		w.budgetRejected(rw, r, in, "Budgets were not saved; try again.", http.StatusServiceUnavailable)
 		return
 	}

@@ -15,13 +15,13 @@ func (w *Web) nodesRoutes(mux *http.ServeMux) {
 func (w *Web) nodesPage(rw http.ResponseWriter, r *http.Request) {
 	cards, err := NodeCards(r.Context(), w.Bus)
 	if err != nil {
-		slog.Error("read node cards", "error", err)
+		logErr(r.Context(), slog.LevelError, "read node cards", err)
 		http.Error(rw, "Nodes are unavailable; retry in a few seconds", http.StatusServiceUnavailable)
 		return
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := nodesPage(cards).Render(r.Context(), rw); err != nil {
-		slog.Error("render nodes", "error", err)
+		logErr(r.Context(), slog.LevelError, "render nodes", err)
 	}
 }
 

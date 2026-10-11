@@ -19,13 +19,14 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 				</nav>
 				<main class="app-main" id="pane-chat">
 					@kpiTiles(k)
-					<div id="scroll" class="chat-log">
+					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)
 					</div>
 					<form id="composer" class="composer" data-on:submit__prevent="@post('/chat')">
 						<textarea data-bind:msg rows="2" maxlength="20000" placeholder="Message COS" aria-label="Message COS" data-on:keydown="evt.key === 'Enter' && (evt.ctrlKey || evt.metaKey) && el.form.requestSubmit()"></textarea>
 						<button class="btn-primary" type="submit">Send</button>
 					</form>
+					<p id="chat-notice" class="toast" role="status"></p>
 				</main>
 				<aside class="app-aside" aria-label="Inbox, nodes and work">
 					<section id="pane-inbox" class="pane">@inbox(v)</section>

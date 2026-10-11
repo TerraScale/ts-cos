@@ -537,7 +537,7 @@ func renderAuth(rw http.ResponseWriter, r *http.Request, status int, page templ.
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(status)
 	if err := page.Render(r.Context(), rw); err != nil {
-		slog.Error("render auth page", "error", err)
+		logErr(r.Context(), slog.LevelError, "render auth page", err)
 	}
 }
 

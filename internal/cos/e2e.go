@@ -386,6 +386,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "failure.sqlite-disk-full", Stream: "TS-810", Run: checkSQLiteDiskFull},
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
 		E2ECheck{ID: "memory.recall", Stream: "TS-828", Run: checkMemoryRecall},
+		E2ECheck{ID: "chat.non-leader-message", Stream: "TS-811", Run: checkChatNonLeader},
 		// These change auth state (failures, lockout, logout, password), so each gets its own throwaway user.
 		E2ECheck{ID: "access.wrong-password", Stream: "TS-810", Run: accessCheck(checkWrongPassword)},
 		E2ECheck{ID: "access.lockout", Stream: "TS-810", Run: accessCheck(checkLockout)},

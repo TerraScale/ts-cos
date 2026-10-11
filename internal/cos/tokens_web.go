@@ -76,7 +76,7 @@ func (w *Web) tokensData(ctx context.Context, window string, now time.Time) (tok
 	if kv := w.Chat.SavingsKV(); kv != nil {
 		ledgerDays, err = SavingsReport(ctx, kv, back+1, now)
 		if err != nil {
-			slog.Warn("savings ledger unavailable", "error", err)
+			logErr(ctx, slog.LevelWarn, "savings ledger unavailable", err)
 		}
 	}
 	d := tokensPageData{Window: window, Empty: len(rows) == 0, Total: usageTotal("total", rows), RuleActions: actions}
@@ -107,7 +107,7 @@ func (w *Web) tokensPage(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tokensPage(w.header(r.Context()), d).Render(r.Context(), rw); err != nil {
-		slog.Error("render tokens", "error", err)
+		logErr(r.Context(), slog.LevelError, "render tokens", err)
 	}
 }
 

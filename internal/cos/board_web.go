@@ -271,7 +271,7 @@ func (w *Web) workPage(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := workPage(w.header(r.Context()), newWorkBoard(data, stage)).Render(r.Context(), rw); err != nil {
-		slog.Error("render work", "error", err)
+		logErr(r.Context(), slog.LevelError, "render work", err)
 	}
 }
 
@@ -347,6 +347,6 @@ func (w *Web) workTicket(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusNotFound)
 	}
 	if err := workTicketPage(w.header(ctx), t).Render(ctx, rw); err != nil {
-		slog.Error("render work ticket", "error", err)
+		logErr(ctx, slog.LevelError, "render work ticket", err)
 	}
 }

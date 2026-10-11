@@ -106,7 +106,7 @@ func (w *Web) InboxAction(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		slog.Error("inbox action", "error", err)
+		logErr(r.Context(), slog.LevelError, "inbox action", err)
 		http.Error(rw, "Inbox update failed", http.StatusBadGateway)
 		return
 	}

@@ -4,7 +4,6 @@ package cos
 // owning stream until the feature lands and the check gets a real implementation.
 var e2ePending = func() []E2ECheck {
 	rows := [][3]string{
-		{"chat.non-leader-message", "TS-811", "COS chat"},
 		{"chat.reply-all-nodes", "TS-811", "COS chat streaming"},
 		{"chat.spawn-thread", "TS-811", "COS agent runtime (probe threads run on Opus 5.5)"},
 		{"chat.focus-restart", "TS-811", "COS focus change"},

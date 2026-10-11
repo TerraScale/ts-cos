@@ -275,18 +275,24 @@ func TestChatSSEPatches(t *testing.T) {
 	if !strings.Contains(appended, "data: selector #messages\n") || !strings.Contains(appended, "data: mode append\n") || !strings.Contains(appended, `id="m-`+key+`"`) {
 		t.Fatal(appended)
 	}
+	// Each batch ends with the chatTick that scrolls the log.
+	if tick := readEvent(); !strings.Contains(tick, "chatTick") {
+		t.Fatal(tick)
+	}
 
 	web.Chat.apply(chatTestPut(t, key, "hello again"))
 	morphed := readEvent()
 	if !strings.Contains(morphed, `id="m-`+key+`"`) || !strings.Contains(morphed, "hello again") || strings.Contains(morphed, "mode append") {
 		t.Fatal(morphed)
 	}
+	readEvent()
 
 	web.Chat.apply(fakeChatEntry{key: key, op: jetstream.KeyValueDelete})
 	removed := readEvent()
 	if !strings.Contains(removed, "data: selector #m-"+key+"\n") || !strings.Contains(removed, "data: mode remove\n") {
 		t.Fatal(removed)
 	}
+	readEvent()
 }
 
 func TestRenderMarkdownSafe(t *testing.T) {
