@@ -1,0 +1,113 @@
+package cos
+
+// nodeDetailPage is one node: header, range control, the ten charts and the newest cores.
+templ nodeDetailPage(c NodeCard, window string, charts []nodeChart) {
+	<!DOCTYPE html>
+	<html lang="en">
+		@docHead(c.Host + " · Nodes · COS")
+		<body class="shell">
+			@nodesTopbar()
+			<main class="page">
+				<section class="panel" aria-labelledby="node-heading">
+					<header class="panel-head">
+						<h1 id="node-heading" class="row"><span class="dot" data-state={ c.State }></span>{ c.Host }</h1>
+					</header>
+					<div class="stack">
+						<p class="muted">{ nodeMeta(c) }</p>
+						<form class="segmented" method="get" action={ templ.SafeURL("/nodes/" + c.Host) } aria-label="Time range">
+							for _, name := range nodeWindowNames {
+								<button type="submit" name="range" value={ name } aria-pressed={ boolText(name == window) }>{ name }</button>
+							}
+						</form>
+					</div>
+				</section>
+				for _, chart := range charts {
+					@nodeChartView(chart)
+				}
+				@nodeCores(c)
+			</main>
+		</body>
+	</html>
+}
+
+templ nodeChartView(c nodeChart) {
+	<figure class="chart">
+		<figcaption class="chart-head">
+			<span class="chart-title">{ c.Title }</span>
+			if len(c.Lines) > 1 {
+				<ul class="legend">
+					for _, l := range c.Lines {
+						<li><span class="swatch" data-series={ integer(l.Color) }></span>{ l.Name }</li>
+					}
+				</ul>
+			}
+		</figcaption>
+		if c.empty() {
+			<div class="chart-body"><p class="chart-empty">No samples in this window</p></div>
+		} else if len(c.Lines) == 0 {
+			<div class="chart-body"><p class="chart-empty">No data</p></div>
+		} else {
+			<div class="chart-body">
+				<div class="chart-y">
+					for _, t := range c.YTicks {
+						<span>{ t }</span>
+					}
+				</div>
+				<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+					<g class="chart-grid">
+						<line x1="0" x2="100" y1="0" y2="0"></line>
+						<line x1="0" x2="100" y1="25" y2="25"></line>
+						<line x1="0" x2="100" y1="50" y2="50"></line>
+						<line x1="0" x2="100" y1="75" y2="75"></line>
+						<line x1="0" x2="100" y1="100" y2="100"></line>
+					</g>
+					for _, l := range c.Lines {
+						<path class="chart-line" data-series={ integer(l.Color) } d={ chartPaths(c.Times, l.Values, c.Start, c.End, c.YMax) }></path>
+					}
+				</svg>
+				<div class="chart-x">
+					for _, t := range c.XTicks {
+						<span>{ t }</span>
+					}
+				</div>
+			</div>
+			<details class="disclosure">
+				<summary>Data</summary>
+				<div class="table-wrap">
+					<table class="table">
+						<thead>
+							<tr>
+								<th scope="col">Time</th>
+								for _, l := range c.Lines {
+									<th scope="col" class="num">{ l.Name }</th>
+								}
+							</tr>
+						</thead>
+						<tbody>
+							for _, i := range tableRows(len(c.Times)) {
+								<tr>
+									<th scope="row">{ c.Times[i].UTC().Format("Jan 2 15:04") }</th>
+									for _, l := range c.Lines {
+										<td class="num">{ c.Format(l.Values[i]) }</td>
+									}
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</details>
+		}
+	</figure>
+}
+
+templ nodeCores(c NodeCard) {
+	<section class="panel" aria-labelledby="cores-heading">
+		<header class="panel-head"><h2 id="cores-heading">Cores now</h2></header>
+		if len(c.Sample.Cores) == 0 {
+			<p class="empty">No per-core samples yet.</p>
+		}
+		for i, used := range c.Sample.Cores {
+			@meterRow("cpu"+integer(i), used)
+		}
+	</section>
+}

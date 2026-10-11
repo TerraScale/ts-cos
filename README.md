@@ -69,6 +69,7 @@ The leader turns a disk over 85 %, memory over 90 % and a host with no sample fo
 Synthetic e2e hosts raise info-level alerts that never reach web push.
 
 `/nodes` shows a live card per node with current values and last-hour sparklines.
+`/nodes/<host>` charts 1 h / 24 h / 7 d.
 
 ### Sign-in and public URL
 

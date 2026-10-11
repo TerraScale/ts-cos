@@ -47,6 +47,7 @@ templ nodeCard(c NodeCard) {
 			<span class="dot" data-state={ c.State }></span>
 			<h2>{ c.Host }</h2>
 			<span class="muted">{ nodeMeta(c) }</span>
+			<a class="btn btn-ghost" href={ templ.SafeURL("/nodes/" + c.Host) }>Details</a>
 		</header>
 		<div class="stack">
 			<div class="kpis">
