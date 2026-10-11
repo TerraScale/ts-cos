@@ -37,10 +37,10 @@ func t3TestFrames(t *testing.T) [][]byte {
 	return frames
 }
 
-func t3TestRows(t *testing.T) (snapshot []t3ShellRow, updates []t3ShellRow) {
+func t3TestRows(t *testing.T) (snapshot []Thread, updates []Thread) {
 	t.Helper()
 	for _, frame := range t3TestFrames(t) {
-		var chunk struct{ Values []t3ShellValue }
+		var chunk struct{ Values []ShellEvent }
 		if err := json.Unmarshal(frame, &chunk); err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +48,7 @@ func t3TestRows(t *testing.T) (snapshot []t3ShellRow, updates []t3ShellRow) {
 			if v.Kind == "snapshot" {
 				snapshot = append(snapshot, v.Snapshot.Threads...)
 			} else {
-				updates = append(updates, v.Thread)
+				updates = append(updates, *v.Thread)
 			}
 		}
 	}
@@ -99,7 +99,7 @@ func TestT3TrackerRecordedShell(t *testing.T) {
 	// No pending runtime request was live while recording; the row shape follows T3's
 	// shell schema (projection.runtimeRequests[pending]).
 	row := updates[1]
-	row.PendingRuntimeRequest = &t3PendingRequest{ID: "request-1", Kind: "user-input", CreatedAt: "2026-10-11T00:50:00.000Z"}
+	row.PendingRuntimeRequest = json.RawMessage(`{"id":"request-1","kind":"user-input","createdAt":"2026-10-11T00:50:00.000Z"}`)
 	pending, _ := tracker.observe(row, false, now)
 	if len(pending) != 1 || pending[0].Kind != KindRequestPending || pending[0].Severity != SeverityUrgent || pending[0].Validate() != nil {
 		t.Fatalf("request.pending %#v", pending)
@@ -118,7 +118,8 @@ func t3TestProjection(percent int) Projection {
 // t3TestProjectionJSON has every key T3's projection must carry.
 func t3TestProjectionJSON(percent int) []byte {
 	return []byte(`{"thread":{"id":"t"},"runs":[],"runtimeRequests":[],"turnItems":[],
-		"messages":[{"role":"user","text":"go"},{"role":"assistant","text":"Done.\nNEEDS-USER: Which merge order?\nOPTIONS: A | B\nWHY: both touch web.go"}],
+		"messages":[{"role":"user","text":"go"},{"role":"assistant","runId":"older-run","text":"NEEDS-USER: stale question"},
+		{"role":"assistant","text":"Done.\nNEEDS-USER: Which merge order?\nOPTIONS: A | B\nWHY: both touch web.go"}],
 		"providerTurns":[{"usage":{"usedTokens":` + fmt.Sprint(percent*2000) + `,"maxTokens":200000}}]}`)
 }
 

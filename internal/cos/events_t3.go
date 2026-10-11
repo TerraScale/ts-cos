@@ -47,7 +47,7 @@ func t3TurnKind(status string) (EventKind, Severity, bool) {
 	return "", "", false
 }
 
-func (t *t3Tracker) event(row t3ShellRow, id string, kind EventKind, severity Severity, at time.Time, summary string, data map[string]any) Event {
+func (t *t3Tracker) event(row Thread, id string, kind EventKind, severity Severity, at time.Time, summary string, data map[string]any) Event {
 	ticket := t3TicketRef.FindString(row.Title + " " + strings.ToUpper(row.Branch))
 	if len(ticket) > 64 {
 		ticket = ""
@@ -72,22 +72,18 @@ func (t *t3Tracker) event(row t3ShellRow, id string, kind EventKind, severity Se
 // observe turns one live thread row into turn and pending-request events. Rows from
 // a (re)connect snapshot only emit turns that ended inside the dedup window, so a
 // restart catches up on missed turns without replaying old history twice.
-func (t *t3Tracker) observe(row t3ShellRow, snapshot bool, now time.Time) (events []Event, ended bool) {
+func (t *t3Tracker) observe(row Thread, snapshot bool, now time.Time) (events []Event, ended bool) {
 	if row.ID == "" || row.ArchivedAt != nil || row.DeletedAt != nil {
 		return nil, false
 	}
-	if kind, severity, ok := t3TurnKind(row.Status); ok && row.LatestRunID != "" && row.LatestRunCompletedAt != "" {
+	if kind, severity, ok := t3TurnKind(row.Status); ok && row.LatestRunID != "" && row.LatestRunDone != "" {
 		key := row.LatestRunID + ":" + row.Status
-		at, err := time.Parse(time.RFC3339Nano, row.LatestRunCompletedAt)
+		at, err := time.Parse(time.RFC3339Nano, row.LatestRunDone)
 		if t.runs[row.ID] != key && err == nil {
 			t.runs[row.ID] = key
 			if !snapshot || now.Sub(at) < eventsDedup {
 				data := map[string]any{"run": row.LatestRunID, "status": row.Status}
-				var lastError string
-				if json.Unmarshal(row.LastError, &lastError) != nil {
-					lastError = string(row.LastError)
-				}
-				if lastError = EventText(lastError, 500); lastError != "" && lastError != "null" {
+				if lastError := EventText(row.LastError, 500); lastError != "" {
 					data["error"] = lastError
 				}
 				events = append(events, t.event(row, NewEventID(SourceT3, key), kind, severity, at, "turn "+row.Status, data))
@@ -95,7 +91,7 @@ func (t *t3Tracker) observe(row t3ShellRow, snapshot bool, now time.Time) (event
 			}
 		}
 	}
-	if request := row.PendingRuntimeRequest; request == nil {
+	if request := row.PendingRequest(); request == nil {
 		delete(t.pending, row.ID)
 	} else if request.ID != "" && t.pending[row.ID] != request.ID {
 		t.pending[row.ID] = request.ID
@@ -112,7 +108,7 @@ func (t *t3Tracker) observe(row t3ShellRow, snapshot bool, now time.Time) (event
 
 // ended derives context.high and worker.needs_user from the projection of a thread
 // whose turn just ended; one read per turn keeps the stream cheap.
-func (t *t3Tracker) ended(row t3ShellRow, p Projection, now time.Time) []Event {
+func (t *t3Tracker) ended(row Thread, p Projection, now time.Time) []Event {
 	var events []Event
 	usage := ContextOf(p)
 	previous := t.context[row.ID]
@@ -126,7 +122,8 @@ func (t *t3Tracker) ended(row t3ShellRow, p Projection, now time.Time) []Event {
 	}
 	var reply string
 	for _, m := range p.Messages {
-		if m.Role == "assistant" {
+		// Only this run's reply can carry the ask; older runs were already reported.
+		if m.Role == "assistant" && (m.RunID == "" || m.RunID == row.LatestRunID) {
 			reply = m.Text
 		}
 	}
@@ -194,13 +191,13 @@ func ingestT3(ctx context.Context, tracker *t3Tracker, open func(context.Context
 	if err != nil {
 		return err
 	}
-	return t3SubscribeShell(ctx, c, func(value t3ShellValue) error {
-		var rows []t3ShellRow
+	return c.SubscribeShell(ctx, func(value ShellEvent) error {
+		var rows []Thread
 		snapshot := value.Kind == "snapshot"
 		if snapshot {
 			rows = value.Snapshot.Threads
 		} else if value.Kind == "thread.updated" {
-			rows = []t3ShellRow{value.Thread}
+			rows = []Thread{*value.Thread}
 		}
 		for _, row := range rows {
 			events, ended := tracker.observe(row, snapshot, time.Now())
