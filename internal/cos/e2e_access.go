@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -31,9 +32,10 @@ type e2eUser struct {
 	name, password string
 	users          jetstream.KeyValue
 	sessions       jetstream.KeyValue
+	lockouts       jetstream.KeyValue
 }
 
-// tempUser creates a throwaway account; cleanup deletes it with its lock and sessions.
+// tempUser creates a throwaway account; cleanup deletes it with its sessions and the locks it caused (its account and the runner's addresses).
 func (e *E2EEnv) tempUser(ctx context.Context, bus *Bus) (*e2eUser, func(), error) {
 	js, err := jetstream.New(bus.conn)
 	if err != nil {
@@ -47,6 +49,9 @@ func (e *E2EEnv) tempUser(ctx context.Context, bus *Bus) (*e2eUser, func(), erro
 	}
 	if u.sessions, err = js.KeyValue(call, sessionBucket); err != nil {
 		return nil, nil, fmt.Errorf("session store: %w", err)
+	}
+	if u.lockouts, err = js.KeyValue(call, lockoutBucket); err != nil {
+		return nil, nil, fmt.Errorf("lockout store: %w", err)
 	}
 	sweepE2EUsers(call, u)
 	raw := make([]byte, 18)
@@ -68,7 +73,15 @@ func deleteE2EUser(u *e2eUser, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = u.users.Delete(ctx, "user."+name)
-	_ = u.users.Delete(ctx, "lock."+name)
+	_ = u.lockouts.Delete(ctx, "acct."+name)
+	// Brute-force checks lock the runner's own address too, which would refuse every later check's login.
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			if p, ok := a.(*net.IPNet); ok {
+				_ = u.lockouts.Delete(ctx, lockoutIPKey(p.IP.String()))
+			}
+		}
+	}
 	if keys, err := u.sessions.ListKeysFiltered(ctx, name+".*"); err == nil {
 		for key := range keys.Keys() {
 			_ = u.sessions.Delete(ctx, key)
