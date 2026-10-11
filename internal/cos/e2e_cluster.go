@@ -422,22 +422,57 @@ func rolloutHold(r Rollout, now time.Time) string {
 	return fmt.Sprintf("rollout %s %s (%s ago), not perturbing", r.ID, r.Phase, age)
 }
 
-// noRollout skips the check while the last rollout is active or only just finished (TS-816).
-func (e *E2EEnv) noRollout(ctx context.Context, bus *Bus) error {
+// rolloutGuard reads the last rollout, the one that decides whether a chaos check may perturb now.
+func rolloutGuard(ctx context.Context, bus *Bus) (Rollout, error) {
 	js, err := bus.JetStream()
 	if err != nil {
-		return err
+		return Rollout{}, err
 	}
 	kv, err := deployKV(ctx, js)
 	if err != nil {
-		return err
+		return Rollout{}, err
 	}
 	r, _, err := loadRollout(ctx, kv)
+	return r, err
+}
+
+// noRollout skips the check while the last rollout is active or only just finished (TS-816). The pre-signal
+// polls use it, so a rollout that starts right before a signal still skips rather than waits.
+func (e *E2EEnv) noRollout(ctx context.Context, bus *Bus) error {
+	r, err := rolloutGuard(ctx, bus)
 	if err != nil {
 		return err
 	}
 	if reason := rolloutHold(r, time.Now()); reason != "" {
 		return e2eSkip(reason)
+	}
+	return nil
+}
+
+// waitRollout re-reads the last rollout every poll while it holds a chaos check, for up to budget. It returns
+// the rollout last read, the time waited and a read error.
+func waitRollout(ctx context.Context, budget, poll time.Duration, look func() (Rollout, error), now func() time.Time) (Rollout, time.Duration, error) {
+	var r Rollout
+	var err error
+	waited := waitFor(ctx, budget, poll, func() bool {
+		r, err = look()
+		return err != nil || rolloutHold(r, now()) == ""
+	})
+	return r, waited, err
+}
+
+// waitNoRollout is noRollout at the start of a chaos check: it waits for the rollout to finish and settle,
+// within the budget the run shares, and skips only when that runs out (TS-816).
+func (e *E2EEnv) waitNoRollout(ctx context.Context, bus *Bus) error {
+	look := func() (Rollout, error) { return rolloutGuard(ctx, bus) }
+	r, waited, err := waitRollout(ctx, e2eChaosWait-e.rolloutWaited, e2eChaosPoll, look, time.Now)
+	e.rolloutWaited += waited
+	e.waited += waited
+	if err != nil {
+		return err
+	}
+	if rolloutHold(r, time.Now()) != "" {
+		return e2eSkip(fmt.Sprintf("rollout %s %s still blocking after waiting %s", r.ID, r.Phase, waited.Round(time.Second)))
 	}
 	return nil
 }
@@ -504,7 +539,7 @@ func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
-	if err := e.noRollout(ctx, bus); err != nil {
+	if err := e.waitNoRollout(ctx, bus); err != nil {
 		return "", err
 	}
 	gate, err := e.allCurrent(ctx, bus, "cluster.restart")
@@ -581,7 +616,7 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
-	if err := e.noRollout(ctx, bus); err != nil {
+	if err := e.waitNoRollout(ctx, bus); err != nil {
 		return "", err
 	}
 	gate, err := e.allCurrent(ctx, bus, "cluster.partition")

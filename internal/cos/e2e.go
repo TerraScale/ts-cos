@@ -115,6 +115,10 @@ type E2EEnv struct {
 	// chaosLock takes the cluster-wide chaos lock; nil takes the real one. Replaceable in tests.
 	chaosLock func(ctx context.Context) (func(), error)
 
+	// waited is the time the current chaos check spent waiting for the lock or a rollout. rolloutWaited is
+	// the rollout wait all chaos checks of this run share (TS-816).
+	waited, rolloutWaited time.Duration
+
 	once       sync.Once
 	mainHead   e2eMain
 	mainErr    error
@@ -261,7 +265,7 @@ func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) 
 	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	report := E2EReport{StartedAt: time.Now().UTC(), Runner: env.cfg.LocalHost, Version: Version, Summary: map[string]int{"pass": 0, "fail": 0, "skip": 0}, Checks: []E2EResult{}}
-	chaos := &chaosLockRun{env: env}
+	chaos := &chaosLockRun{env: env, budget: e2eChaosWait, poll: e2eChaosPoll}
 	defer chaos.close()
 	for _, c := range checks {
 		if smoke && (!c.Smoke || c.Chaos) || len(filter) > 0 && !slicesHasPrefix(filter, c.ID) || c.OnDemand && !slices.Contains(filter, c.ID) {
@@ -272,10 +276,14 @@ func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) 
 		var evidence string
 		var err error
 		if c.Chaos {
+			env.waited = 0
 			err = chaos.take(ctx)
 		}
 		if err == nil {
 			evidence, err = c.Run(ctx, env)
+		}
+		if c.Chaos && err == nil && env.waited.Round(time.Second) > 0 {
+			evidence += fmt.Sprintf("; waited %s for lock/rollout", env.waited.Round(time.Second))
 		}
 		var skip e2eSkip
 		switch {

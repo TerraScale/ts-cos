@@ -118,7 +118,7 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 			bus.Close()
 		}
 	}()
-	if err := e.noRollout(ctx, bus); err != nil {
+	if err := e.waitNoRollout(ctx, bus); err != nil {
 		return "", err
 	}
 	// shortcut: a fixed settle of one lease period after the earlier chaos checks; without it a kill
@@ -278,7 +278,7 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 			bus.Close()
 		}
 	}()
-	if err := e.noRollout(ctx, bus); err != nil {
+	if err := e.waitNoRollout(ctx, bus); err != nil {
 		return "", err
 	}
 	gate, err := e.allCurrent(ctx, bus, "cluster.leader-freeze")

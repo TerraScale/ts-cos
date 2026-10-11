@@ -17,7 +17,15 @@ import (
 const (
 	e2eChaosLockKey = "lock"
 	e2eChaosLockTTL = 10 * time.Minute
+	// A chaos check waits this long for the lock or a rollout to clear before it skips (TS-816).
+	e2eChaosWait = 5 * time.Minute
+	e2eChaosPoll = 5 * time.Second
 )
+
+// chaosHeld is the error for a lock a fresh holder keeps. take waits for it rather than skipping at once.
+type chaosHeld string
+
+func (h chaosHeld) Error() string { return string(h) }
 
 // chaosLock is the value stored under e2eChaosLockKey in the cos_e2e bucket.
 type chaosLock struct {
@@ -34,19 +42,46 @@ func chaosLockBlocks(cur *chaosLock, now time.Time) bool {
 
 // chaosLockRun takes the lock once, before the run's first chaos check, and releases it when the run ends.
 type chaosLockRun struct {
-	env     *E2EEnv
-	taken   bool
-	release func()
-	err     error
+	env          *E2EEnv
+	budget, poll time.Duration // how long and how often take waits for a fresh holder to let go
+	taken        bool
+	release      func()
+	err          error
 }
 
-// take returns nil when this run holds the lock. Otherwise every chaos check skips with the returned error.
+// take returns nil when this run holds the lock. A fresh holder is waited for, up to budget, and only then
+// does every chaos check skip with the holder's evidence.
 func (l *chaosLockRun) take(ctx context.Context) error {
 	if !l.taken {
 		l.taken = true
-		l.release, l.err = l.env.takeChaosLock(ctx)
+		var held chaosHeld
+		waited := waitFor(ctx, l.budget, l.poll, func() bool {
+			l.release, l.err = l.env.takeChaosLock(ctx)
+			return !errors.As(l.err, &held)
+		})
+		l.env.waited += waited
+		if errors.As(l.err, &held) {
+			l.err = e2eSkip(fmt.Sprintf("%s, after waiting %s", held, waited.Round(time.Second)))
+		}
 	}
 	return l.err
+}
+
+// waitFor calls try now and then every poll until it reports done, the budget is spent or ctx ends. It returns
+// the time waited, which is about 0 when try is done at once.
+func waitFor(ctx context.Context, budget, poll time.Duration, try func() bool) time.Duration {
+	start := time.Now()
+	for !try() {
+		left := budget - time.Since(start)
+		if left <= 0 || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(min(poll, left)):
+		}
+	}
+	return time.Since(start)
 }
 
 func (l *chaosLockRun) close() {
@@ -84,7 +119,7 @@ func (e *E2EEnv) takeChaosLock(ctx context.Context) (func(), error) {
 	}, nil
 }
 
-// takeChaosLockKV creates the lock key, or takes over a stale one. A fresh holder gives an e2eSkip naming it.
+// takeChaosLockKV creates the lock key, or takes over a stale one. A fresh holder gives a chaosHeld naming it.
 func takeChaosLockKV(ctx context.Context, kv jetstream.KeyValue, self chaosLock) (func(context.Context) error, error) {
 	val, err := json.Marshal(self)
 	if err != nil {
@@ -99,7 +134,7 @@ func takeChaosLockKV(ctx context.Context, kv jetstream.KeyValue, self chaosLock)
 		return nil, chaosLockUnavailable(err)
 	}
 	if chaosLockBlocks(cur, self.At) {
-		return nil, e2eSkip(fmt.Sprintf("another e2e run on %s (pid %d) holds the chaos lock since %s; not perturbing", cur.Host, cur.PID, cur.At.Format(time.RFC3339)))
+		return nil, chaosHeld(fmt.Sprintf("another e2e run on %s (pid %d) holds the chaos lock since %s; not perturbing", cur.Host, cur.PID, cur.At.Format(time.RFC3339)))
 	}
 	var rev uint64
 	if cur == nil {
