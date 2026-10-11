@@ -299,6 +299,26 @@ func TestScanCodexSessionCountsGateReaction(t *testing.T) {
 	}
 }
 
+func TestScanCodexSessionIgnoresGateText(t *testing.T) {
+	base := codexDayBase()
+	for _, cmd := range []string{`tools.exec_command({cmd: "cat /home/x/.cos/gate.sh"})`, `tools.exec_command({cmd: "grep -n usageGateFails internal/cos/usage.go"})`} {
+		lines := codexReworkStart(base)
+		lines = append(lines,
+			codexCallLine(codexStamp(base, "10:00:03Z"), "c1", cmd),
+			codexOutputLine(codexStamp(base, "10:00:04Z"), "c1", "LOCAL GATE FAIL: go test ./internal/cos"),
+			codexCountLine(codexStamp(base, "10:00:05Z"), 1500, 600, 50, 160),
+		)
+		rows, err := scanCodexSession(writeRollout(t, t.TempDir(), "a.jsonl", lines...), "delta", time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := codexRowFor(t, rows, base.Format(time.DateOnly), "gpt-6.1-sol")
+		if len(r.Waste) != 0 {
+			t.Fatalf("%s: waste = %v, want none", cmd, r.Waste)
+		}
+	}
+}
+
 func TestScanCodexSessionCountsRebaseReaction(t *testing.T) {
 	base := codexDayBase()
 	lines := codexReworkStart(base)

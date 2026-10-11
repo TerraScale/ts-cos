@@ -368,7 +368,7 @@ func usageTestBash(id, command string) string {
 const usageTestText = `{"type":"text","text":"ok"}`
 
 func TestUsageWasteCountsTheTurnThatReactsToRework(t *testing.T) {
-	gate := usageTestBash("t1", "bash .cos/gate.sh")
+	gate := usageTestBash("t1", "bash .cos/gate.sh 12 cos/x")
 	cases := []struct {
 		name  string
 		lines []string
@@ -389,6 +389,21 @@ func TestUsageWasteCountsTheTurnThatReactsToRework(t *testing.T) {
 			usageTestResult("t1", `"#12 MERGED"`),
 			usageTestMsg("m2", 30, 7, usageTestText),
 		}, nil},
+		{"reading the gate script", []string{
+			usageTestMsg("m1", 10, 5, usageTestBash("t1", "cat /home/x/.cos/gate.sh")),
+			usageTestResult("t1", `"LOCAL GATE FAIL: go test"`),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, nil},
+		{"grep output quoting a failure", []string{
+			usageTestMsg("m1", 10, 5, `{"type":"tool_use","id":"t1","name":"Grep","input":{"pattern":"LOCAL GATE FAIL"}}`),
+			usageTestResult("t1", `"usage.go:127: LOCAL GATE FAIL"`),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, nil},
+		{"gate and rebase in one command", []string{
+			usageTestMsg("m1", 10, 5, usageTestBash("t1", "git rebase origin/main && bash .cos/gate.sh 12 cos/x")),
+			usageTestResult("t1", `"LOCAL GATE FAIL: go test"`),
+			usageTestMsg("m2", 30, 7, usageTestText),
+		}, map[string]int64{"gate": 37}},
 		{"git rebase", []string{
 			usageTestMsg("m1", 10, 5, usageTestBash("t1", "git rebase origin/main")),
 			usageTestResult("t1", `"Successfully rebased"`),
