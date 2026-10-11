@@ -199,7 +199,6 @@ type cliproxyAuthFile struct {
 	Email         string `json:"email"`
 	Status        string `json:"status"`
 	StatusMessage string `json:"status_message"`
-	Disabled      bool   `json:"disabled"`
 	Cooldowns     []struct {
 		Scope            string `json:"scope"`
 		Reason           string `json:"reason"`
@@ -245,7 +244,7 @@ func limitCredentials(files []cliproxyAuthFile, now time.Time) []LimitCredential
 			}
 		}
 		switch {
-		case f.Disabled || f.Status == "disabled":
+		case f.Status == "disabled":
 			c.State, c.Reason = "disabled", f.StatusMessage
 		case c.State == "active" && f.Status == "error":
 			c.State, c.Reason = "error", f.StatusMessage
