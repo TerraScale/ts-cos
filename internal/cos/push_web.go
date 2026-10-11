@@ -155,10 +155,10 @@ func pushDecode(rw http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// pushUser is the signed-in user; Protect always sets it, so "" only appears in unauthenticated tests.
+// pushUser is the signed-in user's name; Protect always sets it, so "" only appears in unauthenticated tests.
 func pushUser(r *http.Request) string {
-	user, _ := r.Context().Value(authUserKey{}).(string)
-	return user
+	u, _ := UserFrom(r.Context())
+	return u.Name
 }
 
 func pushKnown(id string) bool {

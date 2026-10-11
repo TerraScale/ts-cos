@@ -88,9 +88,10 @@ Vault; nobody copies it.
 
 Only `GET /login` is public. Users, sessions and lockouts are three-replica
 JetStream KV (`cos_auth`, `cos_sessions`), so a session or password change from
-one node works on every node at once. On first start each node seeds
-`~/.config/cos/admin.json` (`{"user","bcrypt"}`, 0600) unless the user already
-exists; the file is never rewritten and the hash is never logged.
+one node works on every node at once. `~/.config/cos/admin.json` (`{"user","bcrypt"}`,
+0600) bootstraps the first admin on an empty cluster; users are `uid.<ULID>` plus
+`name.<name>` in `cos_auth`, and per-user store keys start `u.<ULID>.` via `UserKey`.
+The file is never rewritten and the hash is never logged.
 
 - Sessions: random 32-byte token, `HttpOnly`, `SameSite=Lax`, `Secure` over
   HTTPS, 7 days; logout ends the session on every node.

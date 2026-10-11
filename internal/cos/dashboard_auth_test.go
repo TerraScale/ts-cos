@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -116,7 +117,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 		auths[i] = NewAuth(configs[i].Home, js)
 		go auths[i].Start(ctx)
 		servers[i] = httptest.NewServer(auths[i].Protect(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-			fmt.Fprint(rw, "dashboard for ", r.Context().Value(authUserKey{}))
+			authTestDashboard(rw, r)
 		}), http.NotFoundHandler()))
 		t.Cleanup(servers[i].Close)
 	}
@@ -161,7 +162,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 				t.Fatalf("GET %s = %d", path, response.StatusCode)
 			}
 		}
-		if response, _ := c.do(a, "GET", "/", nil, &http.Cookie{Name: sessionCookie, Value: "tester.forged"}); response.StatusCode != http.StatusUnauthorized {
+		if response, _ := c.do(a, "GET", "/", nil, &http.Cookie{Name: sessionCookie, Value: newULID() + ".forged"}); response.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("forged session = %d", response.StatusCode)
 		}
 	})
@@ -274,15 +275,8 @@ func TestAuthAcrossNodes(t *testing.T) {
 	})
 
 	t.Run("failures lock the account on every node, even with the right password", func(t *testing.T) {
-		hash, err := bcrypt.GenerateFromPassword([]byte("locked-password-4"), bcrypt.MinCost)
-		if err != nil {
-			t.Fatal(err)
-		}
 		users, _, _ := auths[0].kv()
-		value, _ := json.Marshal(authUser{Bcrypt: string(hash)})
-		if _, err := users.Put(ctx, "user.locktest", value); err != nil {
-			t.Fatal(err)
-		}
+		authTestUser(t, users, "locktest", "locked-password-4")
 		for i, server := range []*httptest.Server{a, b, d, a, b} {
 			countFailure(server, "locktest", "Cf-Connecting-Ip", fmt.Sprintf("198.51.100.%d", i+1))
 		}
@@ -295,7 +289,8 @@ func TestAuthAcrossNodes(t *testing.T) {
 	})
 
 	t.Run("failures from one address lock it on every node, for any username", func(t *testing.T) {
-		authTestUser(t, auths[0], "carol", "ip-password-3")
+		users, _, _ := auths[0].kv()
+		authTestUser(t, users, "carol", "ip-password-3")
 		for i, server := range []*httptest.Server{a, b, d, a, b} {
 			countFailure(server, fmt.Sprintf("nobody-%d", i+1), "Cf-Connecting-Ip", "203.0.113.77")
 		}
@@ -361,6 +356,77 @@ func TestAuthAcrossNodes(t *testing.T) {
 			t.Fatalf("deleted key found = %v %v", found, err)
 		}
 	})
+
+	t.Run("disabled users cannot sign in, and deleting one signs out its sessions", func(t *testing.T) {
+		users, sessions, lockouts := auths[0].kv()
+		erin := authTestUser(t, users, "erin", "erin-password-1")
+		authTestUser(t, users, "dan", "dan-password-1")
+		dan, rec, revision, _, err := auths[0].account(ctx, "dan")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.DisabledAt = time.Now().UTC()
+		value, _ := json.Marshal(rec)
+		if _, err := users.Update(ctx, "uid."+dan.ID, value, revision); err != nil {
+			t.Fatal(err)
+		}
+		if response, body := login(a, "dan", "dan-password-1"); response.StatusCode != http.StatusUnauthorized || sessionOf(response) != nil || !strings.Contains(body, "Wrong username or password") {
+			t.Fatalf("disabled login = %d %q", response.StatusCode, body)
+		}
+		response, _ := login(b, "erin", "erin-password-1")
+		erinSession := sessionOf(response)
+		if erinSession == nil {
+			t.Fatalf("erin login = %d", response.StatusCode)
+		}
+		if response, body := c.do(d, "GET", "/", nil, erinSession); response.StatusCode != 200 || body != "dashboard for erin" {
+			t.Fatalf("erin before deletion = %d %q", response.StatusCode, body)
+		}
+		if err := deleteUser(ctx, users, sessions, lockouts, erin); err != nil {
+			t.Fatal(err)
+		}
+		if response, _ := c.do(a, "GET", "/", nil, erinSession); response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("session of a deleted user = %d", response.StatusCode)
+		}
+		// A cookie that names the login instead of the ULID never passes.
+		_, token, _ := strings.Cut(erinSession.Value, ".")
+		if response, _ := c.do(a, "GET", "/", nil, &http.Cookie{Name: sessionCookie, Value: "erin." + token}); response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("cookie with a login name = %d", response.StatusCode)
+		}
+	})
+
+	t.Run("sessions belong to their own user, and a password change signs out only that user", func(t *testing.T) {
+		users, _, _ := auths[0].kv()
+		authTestUser(t, users, "alice", "alice-password-1")
+		authTestUser(t, users, "bob", "bob-password-1")
+		signIn := func(server *httptest.Server, user, password string) *http.Cookie {
+			response, _ := login(server, user, password)
+			session := sessionOf(response)
+			if session == nil {
+				t.Fatalf("login %s = %d", user, response.StatusCode)
+			}
+			return session
+		}
+		aliceSession := signIn(a, "alice", "alice-password-1")
+		bobSession := signIn(b, "bob", "bob-password-1")
+		for _, tc := range []struct {
+			session *http.Cookie
+			want    string
+		}{{aliceSession, "dashboard for alice"}, {bobSession, "dashboard for bob"}} {
+			if response, body := c.do(d, "GET", "/", nil, tc.session); response.StatusCode != 200 || body != tc.want {
+				t.Fatalf("session of %q = %d %q", tc.want, response.StatusCode, body)
+			}
+		}
+		change := url.Values{"current": {"bob-password-1"}, "new": {"bob-password-2"}, "confirm": {"bob-password-2"}}
+		if response, body := c.do(d, "POST", "/password", change, bobSession); response.StatusCode != 200 || !strings.Contains(body, "Password changed") {
+			t.Fatalf("bob's password change = %d %q", response.StatusCode, body)
+		}
+		if response, _ := c.do(a, "GET", "/", nil, bobSession); response.StatusCode != http.StatusUnauthorized {
+			t.Fatal("bob's session from before the change still works")
+		}
+		if response, body := c.do(b, "GET", "/", nil, aliceSession); response.StatusCode != 200 || body != "dashboard for alice" {
+			t.Fatalf("alice was signed out by bob's change = %d %q", response.StatusCode, body)
+		}
+	})
 }
 
 // TestForgedSessionsCannotStampedeLeader sends forged cookies past the leader-read budget from one
@@ -377,7 +443,7 @@ func TestForgedSessionsCannotStampedeLeader(t *testing.T) {
 	auth := NewAuth(configs[0].Home, js)
 	go auth.Start(ctx)
 	server := httptest.NewServer(auth.Protect(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(rw, "dashboard for ", r.Context().Value(authUserKey{}))
+		authTestDashboard(rw, r)
 	}), http.NotFoundHandler()))
 	t.Cleanup(server.Close)
 	deadline := time.Now().Add(40 * time.Second)
@@ -392,7 +458,7 @@ func TestForgedSessionsCannotStampedeLeader(t *testing.T) {
 	for i := range 31 {
 		raw := make([]byte, 32)
 		rand.Read(raw)
-		forged := &http.Cookie{Name: sessionCookie, Value: "tester." + base64.RawURLEncoding.EncodeToString(raw)}
+		forged := &http.Cookie{Name: sessionCookie, Value: newULID() + "." + base64.RawURLEncoding.EncodeToString(raw)}
 		response, _ := c.do(server, "GET", "/", nil, forged, header...)
 		if response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusSeeOther {
 			t.Fatalf("forged session %d = %d, want 401 or 303", i+1, response.StatusCode)
@@ -421,7 +487,7 @@ func TestRepeatedSuccessfulLoginsAreNotLimited(t *testing.T) {
 	auth := NewAuth(configs[0].Home, js)
 	go auth.Start(ctx)
 	server := httptest.NewServer(auth.Protect(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(rw, "dashboard for ", r.Context().Value(authUserKey{}))
+		authTestDashboard(rw, r)
 	}), http.NotFoundHandler()))
 	t.Cleanup(server.Close)
 	deadline := time.Now().Add(40 * time.Second)
@@ -441,18 +507,24 @@ func TestRepeatedSuccessfulLoginsAreNotLimited(t *testing.T) {
 	}
 }
 
-// authTestUser adds a seeded user straight to KV, for tests that need more than the admin.
-func authTestUser(t *testing.T, auth *Auth, user, password string) {
+// authTestUser adds a member straight to KV, for tests that need more than the admin.
+func authTestUser(t *testing.T, users jetstream.KeyValue, name, password string) User {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
 		t.Fatal(err)
 	}
-	users, _, _ := auth.kv()
-	value, _ := json.Marshal(authUser{Bcrypt: string(hash)})
-	if _, err := users.Create(context.Background(), "user."+user, value); err != nil {
+	u, err := createUser(context.Background(), users, name, roleMember, string(hash))
+	if err != nil {
 		t.Fatal(err)
 	}
+	return u
+}
+
+// authTestDashboard echoes the signed-in user's login name, so a test can see who a request runs as.
+func authTestDashboard(rw http.ResponseWriter, r *http.Request) {
+	u, _ := UserFrom(r.Context())
+	fmt.Fprint(rw, "dashboard for ", u.Name)
 }
 
 func TestLockoutIPKey(t *testing.T) {
@@ -475,7 +547,7 @@ func TestAuthStartingAsksToRetry(t *testing.T) {
 		req := httptest.NewRequest("GET", path, nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		req.Header.Set("Accept", "text/html")
-		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "tester.token"})
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: newULID() + ".token"})
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "2" {
