@@ -92,6 +92,9 @@ func View(ctx context.Context, store *Store) (Dashboard, error) {
 	}
 	for ticket, outcome := range liveTickets(live) {
 		priority := "P2"
+		if IsP0(ticket, outcome) {
+			priority = "P0"
+		}
 		if fullSendTitle(outcome) {
 			priority = "FULL SEND"
 		}
@@ -164,12 +167,8 @@ func View(ctx context.Context, store *Store) (Dashboard, error) {
 		}
 		v.Tasks = append(v.Tasks, t)
 	}
-	slices.SortStableFunc(v.Tasks, func(a, b Task) int {
-		if d := priorityRank(a.Priority) - priorityRank(b.Priority); d != 0 {
-			return d
-		}
-		return strings.Compare(a.Ticket, b.Ticket)
-	})
+	priority := CurrentBehavior().Models.Priority
+	slices.SortStableFunc(v.Tasks, func(a, b Task) int { return compareTasks(a, b, priority) })
 	return v, nil
 }
 

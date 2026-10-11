@@ -132,5 +132,5 @@ func (w *Web) budgetSave(rw http.ResponseWriter, r *http.Request) {
 func (w *Web) budgetRejected(rw http.ResponseWriter, r *http.Request, in budgetPanelData, alert string, status int) {
 	d := w.budgetPanel(r.Context(), time.Now())
 	d.Thread, d.Daily, d.Alert, d.Tone = in.Thread, in.Daily, alert, "danger"
-	w.renderSettings(rw, r, status, d)
+	w.renderSettings(rw, r, status, d, modelsPanelFor(CurrentBehavior().Models, ""))
 }

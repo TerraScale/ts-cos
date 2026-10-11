@@ -54,7 +54,7 @@ func TestSettingsLocalTimes(t *testing.T) {
 	beat := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
 	a := AutopilotState{Interval: 15, LastBeat: beat.Format(time.RFC3339), Log: []AutopilotEntry{{At: beat.Format(time.RFC3339), Host: "delta", Kind: "beat", Action: "Heartbeat"}}}
 	var buf bytes.Buffer
-	if err := settingsPage(a, budgetPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
+	if err := settingsPage(a, budgetPanelData{}, modelsPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	page := buf.String()
@@ -66,7 +66,7 @@ func TestSettingsLocalTimes(t *testing.T) {
 		t.Fatal("settings shows a raw RFC3339 stamp as text")
 	}
 	buf.Reset()
-	if err := settingsPage(AutopilotState{Interval: 15}, budgetPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
+	if err := settingsPage(AutopilotState{Interval: 15}, budgetPanelData{}, modelsPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "last —") {

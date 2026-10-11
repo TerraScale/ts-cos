@@ -31,7 +31,10 @@ type AdvisorModel struct {
 	Options    []ModelOption `json:"options,omitempty"`
 }
 
-type ModelOption struct{ ID, Value string } // json "id","value"
+type ModelOption struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
+}
 
 type WorkerModel struct {
 	ProviderInstanceID string            `json:"providerInstanceId"`
