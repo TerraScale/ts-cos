@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestSSEStoryFromOtherProcess(t *testing.T) {
+func TestChatSSEHeaderFollowsState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	path := filepath.Join(t.TempDir(), "cos.db")
@@ -28,7 +28,7 @@ func TestSSEStoryFromOtherProcess(t *testing.T) {
 	defer web.Close()
 	server := httptest.NewServer(web.routes())
 	defer server.Close()
-	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/chat/events", nil)
 	response, err := server.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -52,52 +52,82 @@ func TestSSEStoryFromOtherProcess(t *testing.T) {
 			}
 		}
 	}
-	initial := readEvent()
-	if !strings.Contains(initial, "event: datastar-patch-elements\n") || !strings.Contains(initial, "selector #dashboard") || !strings.Contains(initial, "Nothing open") {
-		t.Fatal(initial)
+	header := readEvent()
+	if !strings.Contains(header, "event: datastar-patch-elements\n") || !strings.Contains(header, `<header id="chat-head"`) || !strings.Contains(header, "0 running") {
+		t.Fatal(header)
+	}
+	if messages := readEvent(); !strings.Contains(messages, `<div id="messages"`) {
+		t.Fatal(messages)
 	}
 	other, err := OpenStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if _, err := other.AddNote(ctx, "direction", "Ship <script>alert('x')</script> safely"); err != nil {
+	live := Live{At: "2026-10-10T12:00:00Z", Errors: map[string]string{}, Fleet: []HostFleet{{Host: "delta", Active: 2}}, PRs: []PR{{Repo: "ts-cos", Number: 1, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/1"}, {Repo: "ts-cos", Number: 2, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/2"}}}
+	if err := other.SaveLive(ctx, live); err != nil {
 		t.Fatal(err)
 	}
 	updated := readEvent()
-	if !strings.Contains(updated, "Ship &lt;script&gt;") || strings.Contains(updated, "<script>alert") {
+	if !strings.Contains(updated, "2 running") || !strings.Contains(updated, "2 PRs waiting") {
 		t.Fatal(updated)
 	}
 }
 
-func TestDashboardReadOnly(t *testing.T) {
+func TestChatRoutes(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	h := NewWeb(store, nil).routes()
-	for _, path := range []string{"/", "/status", "/events"} {
+	serve := func(method, path string, datastar bool, body string) *httptest.ResponseRecorder {
+		t.Helper()
 		r := httptest.NewRecorder()
-		req := httptest.NewRequest("POST", path, strings.NewReader("{}"))
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.RemoteAddr = "127.0.0.1:1234"
+		if datastar {
+			req.Header.Set("Datastar-Request", "true")
+		}
 		h.ServeHTTP(r, req)
-		if r.Code != http.StatusMethodNotAllowed {
+		return r
+	}
+	for _, path := range []string{"/status", "/chat/events"} {
+		if r := serve("POST", path, false, "{}"); r.Code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s = %d", path, r.Code)
 		}
 	}
-	r := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "127.0.0.1:1234"
-	h.ServeHTTP(r, req)
+	r := serve("GET", "/", false, "")
 	body := r.Body.String()
-	if r.Code != 200 || !strings.Contains(body, "pico.classless") || !strings.Contains(body, "data-init=\"@get('/events', {retry: 'always', retryMaxCount: 1000})\"") {
-		t.Fatal(r.Code, body)
-	}
-	for _, heading := range []string{"Direction", "Needs you", "Decided for you", "Priorities", "What we're missing", "Suggestions", "Open PRs", "Threads by host"} {
-		if !strings.Contains(body, heading) {
-			t.Error("missing section", heading)
+	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting"} {
+		if r.Code != http.StatusOK || !strings.Contains(body, want) {
+			t.Fatal(r.Code, "missing", want)
 		}
+	}
+	inboxPage := serve("GET", "/inbox", false, "")
+	for _, want := range []string{`data-init="@get('/inbox/events'`, `id="inbox"`, `href="/inbox">Inbox <mark>0</mark>`, "Nothing needs you"} {
+		if inboxPage.Code != http.StatusOK || !strings.Contains(inboxPage.Body.String(), want) {
+			t.Fatal(inboxPage.Code, "inbox page missing", want)
+		}
+	}
+	if settings := serve("GET", "/settings", false, ""); settings.Code != http.StatusOK || !strings.Contains(settings.Body.String(), `href="/password"`) || !strings.Contains(settings.Body.String(), "Heartbeat") {
+		t.Fatal("settings page", settings.Code)
+	}
+	if r := serve("POST", "/chat", false, `{"msg":"hi"}`); r.Code != http.StatusForbidden {
+		t.Errorf("POST /chat without Datastar header = %d", r.Code)
+	}
+	for name, body := range map[string]string{
+		"blank":    `{"msg":"   "}`,
+		"not json": `not json`,
+		"too long": `{"msg":"` + strings.Repeat("x", 20001) + `"}`,
+	} {
+		if r := serve("POST", "/chat", true, body); r.Code != http.StatusBadRequest {
+			t.Errorf("POST /chat %s = %d", name, r.Code)
+		}
+	}
+	// NewChat has no bus, so the store is not ready and the message cannot be saved.
+	if r := serve("POST", "/chat", true, `{"msg":"hi"}`); r.Code != http.StatusServiceUnavailable {
+		t.Errorf("POST /chat without store = %d", r.Code)
 	}
 }
 

@@ -2,7 +2,6 @@ package cos
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -329,4 +328,3 @@ func sortedKeysAny(m map[string]string) []string {
 	slices.Sort(keys)
 	return keys
 }
-func jsonText(v any) string { data, _ := json.Marshal(v); return string(data) }

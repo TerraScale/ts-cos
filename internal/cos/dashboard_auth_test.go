@@ -139,7 +139,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 		if response, _ := c.do(a, "GET", "/", nil, nil, "Accept", "text/html"); response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/login" {
 			t.Fatalf("GET / = %d %s", response.StatusCode, response.Header.Get("Location"))
 		}
-		for _, path := range []string{"/events", "/status", "/password"} {
+		for _, path := range []string{"/chat/events", "/status", "/password"} {
 			if response, _ := c.do(a, "GET", path, nil, nil, "Datastar-Request", "true"); response.StatusCode != http.StatusUnauthorized {
 				t.Fatalf("GET %s = %d", path, response.StatusCode)
 			}
@@ -275,7 +275,7 @@ func TestAuthAcrossNodes(t *testing.T) {
 
 func TestAuthStartingAsksToRetry(t *testing.T) {
 	h := NewAuth(t.TempDir(), nil).Protect(http.NotFoundHandler(), http.NotFoundHandler())
-	for _, path := range []string{"/", "/events", "/password"} {
+	for _, path := range []string{"/", "/chat/events", "/password"} {
 		req := httptest.NewRequest("GET", path, nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		req.Header.Set("Accept", "text/html")
@@ -325,7 +325,7 @@ func TestDashboardShutdownJoinsHandlersBeforeReturn(t *testing.T) {
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- serveDashboard(ctx, server, listener, cancel) }()
 	client := &http.Client{Timeout: 3 * time.Second}
-	req, _ := http.NewRequest("GET", "http://"+listener.Addr().String()+"/events", nil)
+	req, _ := http.NewRequest("GET", "http://"+listener.Addr().String()+"/chat/events", nil)
 	response, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)

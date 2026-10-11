@@ -129,6 +129,7 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos cluster` | Local host, current leader and build revision |
 | `cos prs` | Every open PR authored by mariogk, with CI/review/merge gates |
 | `cos status [--brief]` | Refresh all sources; `--brief` is at most 40 lines |
+| `cos context list\|get\|set\|rm` | Shared context files for the COS agent |
 | `cos projects <host>` | T3 project IDs, titles, and roots |
 | `cos launch <host> '<json>'` | Same launch fields as the old CLI; `projectTitle` can replace `projectId` |
 | `cos thread <host> <id>` / `cos ctx <host> <id>` | Thread summary or context usage |
@@ -278,11 +279,24 @@ sources. `task rm` removes annotations, not a Ku issue. When a previously open
 issue disappears after a successful Ku refresh, its annotations are removed.
 Direction replaces the current direction; other notes append and return an ID.
 
-The dashboard shows direction, needs you (including live worker questions),
-decisions, priorities with reasons/model/PR/next, missing work, suggestions,
-open PRs, and all open threads grouped by host. Datastar SSE patches HTML;
-SQLite/WAL and post-commit notifications push story edits from another process without
-waiting for the 60-second source refresh. No completed-work history is shown.
+The dashboard home is one chat with the COS agent: message list, composer,
+markdown replies with collapsed tool activity, and a header with running threads,
+open PRs and a settings link. Chat entries live in the replicated JetStream KV
+bucket `COS_CHAT`; each node follows it and patches every open page over Datastar
+SSE, so any node shows the same chat within a second and a restarted node catches
+up from JetStream. Header counts follow SQLite changes, including CLI writes.
+
+Shared context files (durable user decisions, preferences, learnings) live in the
+replicated bucket `COS_CONTEXT`:
+
+```sh
+cos context list
+cos context get user-decisions
+cos context set user-decisions '<markdown, at most 16 KiB>'
+cos context rm user-decisions
+```
+
+Only the JetStream meta leader creates buckets; other nodes bind once it exists.
 
 ## Autopilot: heartbeat and rules engine
 
@@ -316,7 +330,8 @@ its SQLite, so a restarted or joining node catches up and every node shows the s
 
 ## Inbox
 
-The Inbox holds everything COS needs from you. Item kinds (`kind`: `question`,
+The Inbox (`/inbox`, linked with its open count from the chat header) holds
+everything COS needs from you. Item kinds (`kind`: `question`,
 `approval`, `decision`, `blocker`, `fyi`):
 
 - **Questions:** 2-4 options, recommended first, plus free text.

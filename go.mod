@@ -9,6 +9,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.54.0
 	github.com/oracle/oci-go-sdk/v65 v65.126.0
+	github.com/yuin/goldmark v1.8.6
 	golang.org/x/crypto v0.57.0
 	modernc.org/sqlite v1.60.1
 )

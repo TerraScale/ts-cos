@@ -329,7 +329,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	server := &http.Server{Handler: w.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
-	pollDone := make(chan struct{})
+	pollDone, chatDone := make(chan struct{}), make(chan struct{})
 	go func() { defer close(pollDone); w.Poll(ctx, cfg, bus) }()
 	behaviorDone := make(chan struct{})
 	go func() { defer close(behaviorDone); RunBehavior(ctx, cfg, bus, behaviors) }()
@@ -338,7 +338,8 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	for _, worker := range serveWorkers {
 		go worker(ctx, cfg, bus)
 	}
-	defer func() { cancel(); <-pollDone }()
+	go func() { defer close(chatDone); w.Chat.Run(ctx, bus) }()
+	defer func() { cancel(); <-pollDone; <-chatDone }()
 	slog.Info("COS dashboard listening", "address", l.Addr().String())
 	err = serveDashboard(ctx, server, l, cancel)
 	if errors.Is(err, http.ErrServerClosed) {

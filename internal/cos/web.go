@@ -1,15 +1,12 @@
 package cos
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,10 +22,11 @@ type Web struct {
 	watchCancel context.CancelFunc
 	watchDone   chan struct{}
 	inbox       atomic.Pointer[Inbox]
+	Chat        *Chat
 }
 
 func NewWeb(s *Store, auth *Auth) *Web {
-	return &Web{Store: s, auth: auth, clients: map[chan struct{}]struct{}{}}
+	return &Web{Store: s, auth: auth, Chat: NewChat(), clients: map[chan struct{}]struct{}{}}
 }
 func (w *Web) Broadcast() {
 	w.mu.Lock()
@@ -47,19 +45,12 @@ func (w *Web) Handler() http.Handler {
 // routes are the dashboard pages behind sign-in.
 func (w *Web) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(rw http.ResponseWriter, r *http.Request) {
-		v, err := View(r.Context(), w.Store)
-		if err != nil {
-			http.Error(rw, "Cannot read COS state", 500)
-			return
-		}
-		rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-		rw.Header().Set("Cache-Control", "no-store")
-		if err := page(v).Render(r.Context(), rw); err != nil {
-			slog.Error("render dashboard", "error", err)
-		}
-	})
-	mux.HandleFunc("GET /events", w.Events)
+	mux.HandleFunc("GET /{$}", w.chatHome)
+	mux.HandleFunc("GET /chat/events", w.chatEvents)
+	mux.HandleFunc("POST /chat", w.chatPost)
+	mux.HandleFunc("GET /settings", w.settings)
+	mux.HandleFunc("GET /inbox", w.inboxPage)
+	mux.HandleFunc("GET /inbox/events", w.inboxEvents)
 	w.autopilotRoutes(mux)
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := View(r.Context(), w.Store)
@@ -108,70 +99,8 @@ func (w *Web) InboxAction(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusNoContent)
 		return
 	}
-	http.Redirect(rw, r, "/#inbox", http.StatusSeeOther)
+	http.Redirect(rw, r, "/inbox", http.StatusSeeOther)
 }
-func (w *Web) Events(rw http.ResponseWriter, r *http.Request) {
-	if _, ok := rw.(http.Flusher); !ok {
-		http.Error(rw, "Streaming unavailable", 500)
-		return
-	}
-	notify := make(chan struct{}, 1)
-	w.mu.Lock()
-	w.clients[notify] = struct{}{}
-	w.mu.Unlock()
-	defer func() { w.mu.Lock(); delete(w.clients, notify); w.mu.Unlock() }()
-	rw.Header().Set("Content-Type", "text/event-stream")
-	rw.Header().Set("Cache-Control", "no-store")
-	rw.Header().Set("X-Accel-Buffering", "no")
-	controller := http.NewResponseController(rw)
-	patch := func() error {
-		v, err := View(r.Context(), w.Store)
-		if err != nil {
-			return err
-		}
-		var b bytes.Buffer
-		if err := dashboard(v).Render(r.Context(), &b); err != nil {
-			return err
-		}
-		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if _, err := fmt.Fprint(rw, "event: datastar-patch-elements\ndata: selector #dashboard\ndata: mode outer\n"); err != nil {
-			return err
-		}
-		for _, line := range strings.Split(b.String(), "\n") {
-			if _, err := fmt.Fprintf(rw, "data: elements %s\n", line); err != nil {
-				return err
-			}
-		}
-		if _, err := fmt.Fprint(rw, "\n"); err != nil {
-			return err
-		}
-		return controller.Flush()
-	}
-	if err := patch(); err != nil {
-		return
-	}
-	heartbeat := time.NewTicker(15 * time.Second)
-	defer heartbeat.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-notify:
-			if err := patch(); err != nil {
-				return
-			}
-		case <-heartbeat.C:
-			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if _, err := fmt.Fprint(rw, ": keepalive\n\n"); err != nil {
-				return
-			}
-			if err := controller.Flush(); err != nil {
-				return
-			}
-		}
-	}
-}
-
 func (w *Web) Watch(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	changes, errs, err := w.Store.Watch(ctx)
@@ -249,35 +178,4 @@ func (w *Web) Poll(ctx context.Context, cfg Config, bus *Bus) {
 		}
 	}
 }
-func integer(n int) string   { return strconv.Itoa(n) }
-func join(s []string) string { return strings.Join(s, ", ") }
-func notesOf(notes []Note, kind string) []Note {
-	out := []Note{}
-	for _, n := range notes {
-		if n.Kind == kind {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-func reviewLabel(p PR) string {
-	if p.ChangesRequested {
-		return "changes requested"
-	}
-	if p.BotApproved {
-		return "approved"
-	}
-	if p.SkipReviewer {
-		return "review bypassed"
-	}
-	return "waiting"
-}
-func mergeLabel(p PR) string {
-	if p.Ready {
-		return "ready"
-	}
-	if !p.Mergeable {
-		return "conflict"
-	}
-	return "clean"
-}
+func integer(n int) string { return strconv.Itoa(n) }
