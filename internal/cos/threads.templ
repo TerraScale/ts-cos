@@ -1,7 +1,7 @@
 package cos
 
 // threadPanel lists the live threads of the chat tab on screen, on the left; the Threads toggle in the chat pane opens it.
-templ threadPanel(threads []panelThread) {
+templ threadPanel(threads []panelThread, actions []ChatEntry) {
 	<aside id="thread-panel" class="cos-thread-panel" aria-label="Threads" data-attr:data-open="$threads">
 		<header>
 			<h2>Threads <span class="ts-meta">{ integer(len(threads)) }</span></h2>
@@ -30,14 +30,55 @@ templ threadPanel(threads []panelThread) {
 							}
 						</div>
 					}
-					<div class="ts-row cos-thread-actions"></div>
+					<div class="ts-row cos-thread-actions">
+						<button type="button" class="ts-btn ts-btn-secondary ts-btn-sm" command="show-modal" commandfor="thread-confirm" data-on:click={ confirmAction("settle", t) }>Settle</button>
+						if t.openPR() {
+							<button type="button" class="ts-btn ts-btn-secondary ts-btn-sm" command="show-modal" commandfor="thread-confirm" data-on:click={ confirmAction("merge", t) }>Force merge</button>
+						}
+						<button type="button" class="ts-btn ts-btn-danger ts-btn-sm" command="show-modal" commandfor="thread-confirm" data-on:click={ confirmAction("delete", t) }>Delete</button>
+						if t.openPR() {
+							<button type="button" class="ts-btn ts-btn-danger ts-btn-sm" command="show-modal" commandfor="thread-confirm" data-on:click={ confirmAction("all", t) }>All three</button>
+						}
+					</div>
 				</div>
 			}
 		</nav>
+		if len(actions) > 0 {
+			<section class="cos-thread-log" aria-label="Recent actions">
+				<h3>Recent actions</h3>
+				<ul>
+					for _, a := range actions {
+						<li class="ts-meta">{ a.At.UTC().Format("15:04") } { a.Text }</li>
+					}
+				</ul>
+			</section>
+		}
 		if len(threads) == 0 {
 			<p class="ts-meta">No threads yet. Threads this tab's COS launches show up here.</p>
 		}
 	</aside>
+}
+
+// threadConfirm is the one native dialog every row button opens. It sits outside the panel, so live patches never close it.
+templ threadConfirm(tab ChatTab) {
+	<dialog id="thread-confirm" class="ts-dialog" aria-labelledby="thread-confirm-title" data-signals="{actOp:'',actHost:'',actThread:'',actTitle:'',actText:''}">
+		<div class="ts-dialog-content">
+			<header class="ts-dialog-head">
+				<div class="ts-dialog-header">
+					<h2 class="ts-dialog-title" id="thread-confirm-title" data-text="$actTitle"></h2>
+					<p class="ts-dialog-description" data-text="$actText"></p>
+				</div>
+			</header>
+			<form method="post" data-attr:action={ jsLiteral(tabAction(tab.ID, "threads")+"/") + " + $actOp" } class="ts-stack">
+				<input type="hidden" name="host" data-attr:value="$actHost"/>
+				<input type="hidden" name="thread" data-attr:value="$actThread"/>
+				<div class="ts-dialog-footer">
+					<button type="button" class="ts-btn ts-btn-secondary" command="close" commandfor="thread-confirm">Cancel</button>
+					<button class="ts-btn ts-btn-danger" type="submit">Confirm</button>
+				</div>
+			</form>
+		</div>
+	</dialog>
 }
 
 // threadToggle opens and closes the Threads panel; the signal lives here because this element is never patched.

@@ -9,10 +9,11 @@ templ chatPage(h chatHeader, v Dashboard, tabs []ChatTab, tab ChatTab, entries [
 			@releaseWatch()
 			@chatHead(h, "chat")
 			<div class="cos-chat-body">
-				@threadPanel(threads)
+				@threadPanel(threads, recentActions(entries))
 				<main id="main" class="cos-chat-main">
 					@chatTabs(tabs, tab)
 					@threadToggle()
+					@threadConfirm(tab)
 					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)
 					</div>

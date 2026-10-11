@@ -52,7 +52,9 @@ type ChatEntry struct {
 	Ask       *ChatAsk  `json:"ask,omitempty"`
 	// Tab is the chat tab the entry belongs to; entries written before tabs existed are the main tab.
 	Tab string `json:"tab,omitempty"`
-	rev uint64
+	// Action marks the outcome of a Threads panel button, shown under the panel as well as in the chat.
+	Action bool `json:"action,omitempty"`
+	rev    uint64
 }
 
 // ChatTab is one chat tab; the leader runs a COS thread per open tab.

@@ -72,7 +72,7 @@ func TestParsePRURL(t *testing.T) {
 func TestThreadPanelEscapesTitle(t *testing.T) {
 	var b bytes.Buffer
 	rows := []panelThread{{Host: "delta", ThreadID: "x", Title: "<script>alert(1)</script>", Status: "idle", Updated: "2026-10-11T10:00:00Z"}}
-	if err := threadPanel(rows).Render(context.Background(), &b); err != nil {
+	if err := threadPanel(rows, nil).Render(context.Background(), &b); err != nil {
 		t.Fatal(err)
 	}
 	out := b.String()
@@ -80,7 +80,7 @@ func TestThreadPanelEscapesTitle(t *testing.T) {
 		t.Fatal(out)
 	}
 	b.Reset()
-	if err := threadPanel(nil).Render(context.Background(), &b); err != nil {
+	if err := threadPanel(nil, nil).Render(context.Background(), &b); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(b.String(), "No threads yet") {

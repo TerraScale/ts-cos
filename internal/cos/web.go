@@ -28,7 +28,11 @@ type Web struct {
 	Chat        *Chat
 	KPI         *KPIBoard
 	Bus         *Bus
+	Cfg         Config
 	agentKV     jetstream.KeyValue // COS_AGENT, opened on first use
+	// merge and call are test seams; nil means Forgejo{Config: Cfg}.Merge and Bus.Call.
+	merge func(ctx context.Context, repo string, number int, order MergeOrder) (any, error)
+	call  func(ctx context.Context, host, command string, args []string, output any) error
 }
 
 func NewWeb(s *Store, auth *Auth) *Web {
@@ -58,6 +62,7 @@ func (w *Web) routes() *http.ServeMux {
 	mux.HandleFunc("POST /tabs", w.createTab)
 	mux.HandleFunc("POST /tabs/{id}/rename", w.renameTab)
 	mux.HandleFunc("POST /tabs/{id}/close", w.closeTab)
+	mux.HandleFunc("POST /tabs/{tab}/threads/{op}", w.threadAction)
 	mux.HandleFunc("GET /settings", w.settings)
 	mux.HandleFunc("POST /settings/models", w.modelsSave)
 	mux.HandleFunc("GET /metrics", w.metricsPage)

@@ -268,6 +268,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	go auth.Start(ctx)
 	w := NewWeb(s, auth)
 	w.Bus = bus
+	w.Cfg = cfg
 	hooks := NewHooks(bus)
 	go hooks.Start(ctx)
 	w.Hooks = hooks
