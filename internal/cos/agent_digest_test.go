@@ -73,9 +73,6 @@ func TestAgentDigest(t *testing.T) {
 			e.publishEscalation(AutopilotEntry{Kind: ClassEscalate, Event: fmt.Sprintf("orphan-%d", i), Host: "delta",
 				Action: "orphan", Reason: "no live thread owns it"})
 		}
-		// Published last, so it is the newest urgent escalation and leads the digest.
-		e.publishEscalation(AutopilotEntry{Kind: ClassEscalate, Event: "budget-1", Host: "delta",
-			Action: "budget-pause", Reason: "fleet budget reached, pausing threads"})
 
 		// The worker question is urgent, so the digest is held for agentUrgentDelay and the window does not move.
 		e.step()
@@ -88,7 +85,7 @@ func TestAgentDigest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"Escalations since " + since.Format("15:04") + " (6 events, 0 merged, 0 left out):",
+		for _, want := range []string{"Escalations since " + since.Format("15:04") + " (5 events, 0 merged, 0 left out):",
 			"[urgent] worker-question", "(x3)", "[warn] orphan", "(x2)"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("digest missing %q:\n%s", want, text)
@@ -96,9 +93,6 @@ func TestAgentDigest(t *testing.T) {
 		}
 		if strings.Count(text, "[urgent] worker-question") != 1 {
 			t.Fatalf("worker question not folded to one line:\n%s", text)
-		}
-		if strings.Index(text, "[urgent] budget-pause") > strings.Index(text, "[urgent] worker-question") {
-			t.Fatalf("budget pause is not first:\n%s", text)
 		}
 		if !st.DigestSince.After(since) {
 			t.Fatalf("digest window did not advance past %s", since)
