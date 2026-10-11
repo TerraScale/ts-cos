@@ -64,6 +64,9 @@ func TestChatSSEHeaderFollowsState(t *testing.T) {
 			t.Fatal(event)
 		}
 	}
+	if nodes := readEvent(); !strings.Contains(nodes, `id="pane-nodes"`) {
+		t.Fatal(nodes)
+	}
 	if work := readEvent(); !strings.Contains(work, `id="pane-work"`) {
 		t.Fatal(work)
 	}
@@ -125,6 +128,10 @@ func TestChatRoutes(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatal("home missing", want)
 		}
+	}
+	// No bus: every expected host is listed as unknown, so its figures show dashes.
+	if !strings.Contains(body, `<a class="btn" href="/nodes">Open nodes</a>`) || !strings.Contains(body, `href="/nodes#`+expectedHosts[0]+`"`) || !strings.Contains(body, "CPU –") {
+		t.Fatal("home missing the Nodes summary")
 	}
 	inboxPage := serve("GET", "/inbox", false, "")
 	for _, want := range []string{`data-init="@get('/inbox/events'`, `data-init="@get(&#39;/release&#39;`, `id="inbox"`, `href="/inbox">Inbox <span class="badge badge-accent">0</span>`, "Nothing needs you"} {

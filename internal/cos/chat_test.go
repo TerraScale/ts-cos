@@ -249,6 +249,9 @@ func TestChatSSEPatches(t *testing.T) {
 			t.Fatal(event)
 		}
 	}
+	if nodes := readEvent(); !strings.Contains(nodes, `id="pane-nodes"`) {
+		t.Fatal(nodes)
+	}
 	if work := readEvent(); !strings.Contains(work, `id="pane-work"`) {
 		t.Fatal(work)
 	}

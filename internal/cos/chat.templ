@@ -1,7 +1,7 @@
 package cos
 
 // The home is the app shell: Chat in the center, Inbox, Nodes and Work beside it. Phones pick one pane with the tab bar.
-templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b workBoard, ok bool) {
+templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b workBoard, ok bool, nodes []NodeCard, nodesOK bool) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("COS · TerraScale")
@@ -29,7 +29,7 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 				</main>
 				<aside class="app-aside" aria-label="Inbox, nodes and work">
 					<section id="pane-inbox" class="pane">@inbox(v)</section>
-					@skeletonPane("pane-nodes", "Nodes", "Nodes panel lands with TS-825")
+					@nodesSummary(nodes, nodesOK)
 					@workPane(b, ok)
 				</aside>
 			</div>
@@ -87,6 +87,27 @@ templ workPane(b workBoard, ok bool) {
 		@workSummary(b)
 	} else {
 		@skeletonPane("pane-work", "Work", "Work board unavailable")
+	}
+}
+
+// nodesSummary is the home's Nodes slot: one line per host beside the chat; the full cards stay on /nodes.
+templ nodesSummary(cards []NodeCard, ok bool) {
+	if ok {
+		<section id="pane-nodes" class="pane panel" aria-labelledby="pane-nodes-heading">
+			<header class="panel-head"><h2 id="pane-nodes-heading">Nodes</h2></header>
+			if len(cards) == 0 {
+				<p class="empty">No nodes have reported yet.</p>
+			} else {
+				<ul class="list">
+					for _, c := range cards {
+						<li><a href={ "/nodes#" + c.Host }><span class="dot" data-state={ c.State }></span> { c.Host }</a> <span class="muted">CPU { c.text(formatFixed(c.Sample.CPU, 0)) }{ c.unit("%") } · Mem { c.text(formatFixed(c.Sample.Mem.UsedPercent(), 0)) }{ c.unit("%") }</span></li>
+					}
+				</ul>
+			}
+			<a class="btn" href="/nodes">Open nodes</a>
+		</section>
+	} else {
+		@skeletonPane("pane-nodes", "Nodes", "Nodes unavailable")
 	}
 }
 

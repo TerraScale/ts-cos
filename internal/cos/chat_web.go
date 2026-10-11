@@ -152,12 +152,23 @@ func (w *Web) homeBoard(ctx context.Context) (workBoard, bool) {
 	return newWorkBoard(data, ""), true
 }
 
+// homeNodes reads the node cards for the home aside; a failed read is logged and reports false.
+func (w *Web) homeNodes(ctx context.Context) ([]NodeCard, bool) {
+	cards, err := NodeCards(ctx, w.Bus)
+	if err != nil {
+		slog.Error("read node cards", "error", err)
+		return nil, false
+	}
+	return cards, true
+}
+
 func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
 	v := w.state(r.Context())
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	h := headerOf(v)
 	b, ok := w.homeBoard(r.Context())
-	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(), b, ok).Render(r.Context(), rw); err != nil {
+	nodes, nodesOK := w.homeNodes(r.Context())
+	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(), b, ok, nodes, nodesOK).Render(r.Context(), rw); err != nil {
 		slog.Error("render chat", "error", err)
 	}
 }
@@ -202,7 +213,12 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Set("X-Accel-Buffering", "no")
 	sent := map[string]bool{}
 	var last chatHeader
-	// home patches the header, KPI tiles, Work summary and Inbox from one state read.
+	// patchNodes repatches the Nodes summary; node samples are not events, so the ticker calls it too.
+	patchNodes := func() error {
+		nodes, ok := w.homeNodes(ctx)
+		return patchElements(ctx, rw, nodesSummary(nodes, ok))
+	}
+	// home patches the header, KPI tiles, Nodes and Work summaries and Inbox from one state read.
 	home := func(v Dashboard) error {
 		h := headerOf(v)
 		last = h
@@ -216,6 +232,9 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if err := patchElements(ctx, rw, countBadge("tab-inbox", "tab-badge", h.Inbox)); err != nil {
+			return err
+		}
+		if err := patchNodes(); err != nil {
 			return err
 		}
 		b, ok := w.homeBoard(ctx)
@@ -271,6 +290,9 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	}
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
+	// Node samples are not events, so the Nodes summary repaints on the same 10 s cadence as /nodes.
+	nodesTick := time.NewTicker(10 * time.Second)
+	defer nodesTick.Stop()
 	for {
 		var err error
 		select {
@@ -285,6 +307,9 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		case <-kpiWake:
 			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err = patchElements(ctx, rw, kpiTiles(w.kpis(last)))
+		case <-nodesTick.C:
+			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			err = patchNodes()
 		case <-keepalive.C:
 			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			_, err = io.WriteString(rw, ": keepalive\n\n")
