@@ -13,7 +13,6 @@ var e2ePending = func() []E2ECheck {
 		{"events.forgejo.out-of-order", "TS-814", "event ordering"},
 		{"events.t3.host-offline", "TS-814", "T3 live events"},
 		{"failure.t3-down", "TS-812", "T3 client host failure handling"},
-		{"failure.forgejo-5xx", "TS-812", "Forgejo client failure handling"},
 		{"failure.sqlite-disk-full", "TS-810", "deployed cluster"},
 	}
 	checks := make([]E2ECheck, len(rows))
