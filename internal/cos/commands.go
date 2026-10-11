@@ -67,6 +67,11 @@ func localObjectJSON(raw string) (map[string]any, error) {
 }
 
 func LocalCommand(ctx context.Context, cfg Config, command string, args []string) (any, error) {
+	return localCommand(ctx, func(ctx context.Context) (*T3, error) { return OpenT3(ctx, cfg, cfg.LocalHost) }, command, args)
+}
+
+// localCommand runs one operation on the T3 that open returns; the e2e check passes a broken T3 to fail one host.
+func localCommand(ctx context.Context, open func(context.Context) (*T3, error), command string, args []string) (any, error) {
 	if command == "asks" {
 		command = "asks-host"
 	}
@@ -76,7 +81,7 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 	if err := threadModelGuard(command, args); err != nil {
 		return nil, err
 	}
-	c, err := OpenT3(ctx, cfg, cfg.LocalHost)
+	c, err := open(ctx)
 	if err != nil {
 		return nil, err
 	}

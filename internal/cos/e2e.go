@@ -359,6 +359,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "threads.no-haiku", Stream: "TS-812", Run: checkNoHaikuThreads},
 		E2ECheck{ID: "failure.t3-schema-change", Stream: "TS-812", Run: checkT3Schema},
 		E2ECheck{ID: "failure.forgejo-5xx", Stream: "TS-812", Run: checkForgejo5xx},
+		E2ECheck{ID: "failure.t3-down", Stream: "TS-812", Run: checkT3Down},
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
 		E2ECheck{ID: "memory.recall", Stream: "TS-828", Run: checkMemoryRecall},
 		E2ECheck{ID: "access.login.tailnet", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginTailnet)},

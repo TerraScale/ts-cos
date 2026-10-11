@@ -381,7 +381,9 @@ func ConnectBus(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	b := &Bus{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	// A client that serves endpoints (the e2e check's ghost host) writes these maps in handle.
+	b := &Bus{ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		active: make(map[string]context.CancelFunc), pending: make(map[string]*time.Timer)}
 	b.conn, err = connectBus(ctx, credential)
 	if err != nil {
 		b.Close()
@@ -463,24 +465,7 @@ func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHa
 		b.Close()
 		return nil, err
 	}
-	b.service, err = micro.AddService(b.conn, micro.Config{
-		Name: "cos", Version: "0.1.0", Metadata: map[string]string{"host": cfg.LocalHost, "version": Version},
-		Description: "COS host operations", QueueGroup: "cos-" + cfg.LocalHost,
-	})
-	if err == nil {
-		err = b.service.AddEndpoint("cancel", micro.HandlerFunc(b.handleCancel),
-			micro.WithEndpointSubject("cos."+cfg.LocalHost+".cancel"))
-	}
-	if err == nil {
-		for _, command := range busCommands {
-			err = b.service.AddEndpoint(command, micro.HandlerFunc(func(req micro.Request) {
-				b.handle(ctx, handler, command, req)
-			}), micro.WithEndpointSubject("cos."+cfg.LocalHost+"."+command))
-			if err != nil {
-				break
-			}
-		}
-	}
+	err = b.addService(cfg.LocalHost, handler)
 	if err == nil {
 		err = b.conn.FlushWithContext(ready)
 	}
@@ -497,6 +482,30 @@ func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHa
 	b.tasks.Go(func() { b.elect(ctx) })
 	b.watch(ctx)
 	return b, nil
+}
+
+// addService registers host's cos micro service on this connection: the operation endpoints and cancel.
+func (b *Bus) addService(host string, handler OperationHandler) error {
+	var err error
+	b.service, err = micro.AddService(b.conn, micro.Config{
+		Name: "cos", Version: "0.1.0", Metadata: map[string]string{"host": host, "version": Version},
+		Description: "COS host operations", QueueGroup: "cos-" + host,
+	})
+	if err == nil {
+		err = b.service.AddEndpoint("cancel", micro.HandlerFunc(b.handleCancel),
+			micro.WithEndpointSubject("cos."+host+".cancel"))
+	}
+	if err == nil {
+		for _, command := range busCommands {
+			err = b.service.AddEndpoint(command, micro.HandlerFunc(func(req micro.Request) {
+				b.handle(b.ctx, handler, command, req)
+			}), micro.WithEndpointSubject("cos."+host+"."+command))
+			if err != nil {
+				break
+			}
+		}
+	}
+	return err
 }
 
 func (b *Bus) handle(ctx context.Context, handler OperationHandler, command string, req micro.Request) {

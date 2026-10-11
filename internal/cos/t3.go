@@ -115,7 +115,7 @@ func (c *T3) HTTP(ctx context.Context, method, path string, input, output any) e
 	req.Header.Set("x-t3-orchestration-protocol", "2")
 	res, err := c.Config.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("T3 %s %s: connection failed", c.Host, path)
+		return OperationError(fmt.Sprintf("T3 %s %s: connection failed", c.Host, path))
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 64<<20))
 	res.Body.Close()
@@ -157,7 +157,7 @@ func (c *T3) call(ctx context.Context, tag string, payload any, onValue func(jso
 	wsURL := "ws" + strings.TrimPrefix(c.BaseURL, "http") + "/ws?orchestrationProtocol=2&wsTicket=" + url.QueryEscape(ticket.Ticket)
 	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: c.Config.HTTP})
 	if err != nil {
-		return fmt.Errorf("T3 %s websocket connection failed", c.Host)
+		return OperationError(fmt.Sprintf("T3 %s websocket connection failed", c.Host))
 	}
 	defer ws.CloseNow()
 	ws.SetReadLimit(64 << 20)
