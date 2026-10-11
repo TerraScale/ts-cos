@@ -204,9 +204,13 @@ func (a *Autopilot) lead(ctx context.Context) {
 	if a.engine != nil {
 		go a.engine.Run(ctx)
 	}
+	announced := a.announce(ctx)
 	ticker := time.NewTicker(autopilotTick)
 	defer ticker.Stop()
 	for {
+		if !announced {
+			announced = a.announce(ctx)
+		}
 		if interval, last, ok := a.schedule(ctx); ok && time.Since(last) >= interval {
 			a.beat(ctx, "scheduled every "+interval.String())
 		}
@@ -216,6 +220,15 @@ func (a *Autopilot) lead(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// announce writes this host as the leader so every node's panel can show it; false when the write failed.
+func (a *Autopilot) announce(ctx context.Context) bool {
+	if _, err := a.settings.Put(ctx, "leader", []byte(a.Host)); err != nil {
+		slog.Warn("autopilot leader announce", "error", err)
+		return false
+	}
+	return true
 }
 
 // schedule reads the interval and last beat; ok is false when KV is unreadable,
@@ -338,9 +351,10 @@ func (a *Autopilot) follow(ctx context.Context) {
 			var keys []string
 			_ = json.Unmarshal([]byte(value), &keys) // a deleted key clears the set
 			s.Paused = keys
+		case "leader":
+			s.Leader = value
 		}
 	})
-	go a.watch(ctx, func() (jetstream.KeyValue, error) { return leaseKV(ctx, a.js, false) }, func(s *AutopilotState, _, value string) { s.Leader = value })
 	for ctx.Err() == nil {
 		if err := a.followLog(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("autopilot log mirror", "error", err)

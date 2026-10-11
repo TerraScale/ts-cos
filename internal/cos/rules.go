@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -259,7 +260,23 @@ type RulesEngine struct {
 	PR      func(ctx context.Context, repo string, number int) (*PRFacts, error)
 	Merge   func(ctx context.Context, repo string, number int) error
 	Call    func(ctx context.Context, host, command string, args []string) error
+	kvMu    sync.Mutex
 	memory  jetstream.KeyValue
+}
+
+// settingsKV opens the replicated COS_AUTOPILOT bucket once; consume, Handle and the
+// paused-set read share it.
+func (r *RulesEngine) settingsKV(ctx context.Context) (jetstream.KeyValue, error) {
+	r.kvMu.Lock()
+	defer r.kvMu.Unlock()
+	if r.memory == nil {
+		kv, err := r.JS.KeyValue(ctx, autopilotSettings)
+		if err != nil {
+			return nil, err
+		}
+		r.memory = kv
+	}
+	return r.memory, nil
 }
 
 // NewRulesEngine wires the real executors; StartAutopilot supplies JS and Publish.
@@ -295,8 +312,7 @@ func (r *RulesEngine) consume(ctx context.Context) error {
 	if err := EnsureEventStreams(setup, r.JS); err != nil {
 		return err
 	}
-	var err error
-	if r.memory, err = r.JS.KeyValue(setup, autopilotSettings); err != nil {
+	if _, err := r.settingsKV(setup); err != nil {
 		return err
 	}
 	consumer, err := r.JS.CreateOrUpdateConsumer(setup, EventsStream, jetstream.ConsumerConfig{
@@ -342,7 +358,11 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 	if err != nil {
 		return err
 	}
-	paused, err := pausedSet(ctx, r.memory)
+	kv, err := r.settingsKV(ctx)
+	if err != nil {
+		return err // retried: a pause must never be missed
+	}
+	paused, err := pausedSet(ctx, kv)
 	if err != nil {
 		return err // retried: a pause must never be missed
 	}
@@ -367,7 +387,7 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 		if thread != "" {
 			sum := sha256.Sum256([]byte(thread))
 			key = "wake." + hex.EncodeToString(sum[:12])
-			if entry, err := r.memory.Get(ctx, key); err == nil {
+			if entry, err := kv.Get(ctx, key); err == nil {
 				_ = json.Unmarshal(entry.Value(), &memory)
 			}
 		}
@@ -397,7 +417,7 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 				next.Count = memory.Count + 1
 			}
 			if data, err := json.Marshal(next); err == nil && key != "" {
-				_, _ = r.memory.Put(ctx, key, data)
+				_, _ = kv.Put(ctx, key, data)
 			}
 		}
 		r.Publish(ctx, entry)
