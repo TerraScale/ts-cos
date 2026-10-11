@@ -1,0 +1,464 @@
+/* Tables, lists, key-value definitions, pagination, progress, code, and charts. */
+
+.ts-table-wrap {
+  position: relative;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+/* An open row menu must not be clipped by the scroll container. */
+.ts-table-wrap:has(details.ts-menu[open]) {
+  overflow: visible;
+}
+
+.ts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ts-fs-md);
+}
+
+.ts-table th,
+.ts-table td {
+  padding: var(--ts-s3) var(--ts-s4);
+  border-bottom: 1px solid var(--ts-line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.ts-table th {
+  color: var(--ts-ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ts-table tbody tr {
+  transition: background-color var(--ts-fast) var(--ts-ease);
+}
+
+.ts-table tbody tr:hover {
+  background: color-mix(in oklab, var(--ts-accent) 5%, transparent);
+}
+
+.ts-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.ts-table th.ts-num,
+.ts-table td.ts-num,
+.ts-table-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ts-table-strong {
+  color: var(--ts-ink);
+  font-weight: 600;
+}
+
+.ts-table-mono {
+  font-family: var(--ts-font-mono);
+  font-size: var(--ts-fs-sm);
+}
+
+.ts-table-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ts-table-actions > .ts-row {
+  flex-wrap: nowrap;
+  gap: var(--ts-s1);
+}
+
+/* Tables align with the section edge: no outer cell padding. */
+.ts-table th:first-child,
+.ts-table td:first-child {
+  padding-left: 0;
+}
+
+.ts-table th:last-child,
+.ts-table td:last-child {
+  padding-right: 0;
+}
+
+.ts-table thead th {
+  border-bottom-color: var(--ts-line-strong);
+}
+
+/* Divided rows: members, keys, steps. */
+.ts-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  list-style: none;
+}
+
+.ts-list-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ts-s3);
+  min-width: 0;
+  padding: var(--ts-s3) 0;
+  border-bottom: 1px solid var(--ts-line);
+}
+
+.ts-list-item:last-child {
+  border-bottom: 0;
+}
+
+.ts-list-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ts-list-main > * {
+  justify-self: start;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ts-list-main > .ts-truncate {
+  justify-self: stretch;
+}
+
+/* Key-value definitions. Accepts dt/dd pairs directly or wrapped in divs. */
+.ts-kv {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  gap: var(--ts-s3) var(--ts-s6);
+}
+
+.ts-kv > div {
+  display: contents;
+}
+
+.ts-kv dt {
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-sm);
+}
+
+.ts-kv dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Pagination. */
+.ts-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ts-s3);
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-sm);
+}
+
+/* Progress. */
+.ts-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--ts-radius-pill);
+  background: var(--ts-surface-3);
+}
+
+.ts-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ts-accent);
+  transition: width var(--ts-base) var(--ts-ease);
+}
+
+/* Finite progress values keep the strict style-src policy intact. */
+.ts-progress-bar[data-progress="33"] { width: 33%; }
+.ts-progress-bar[data-progress="66"] { width: 66%; }
+.ts-progress-bar[data-progress="100"] { width: 100%; }
+
+.ts-progress-bar-success { background: var(--ts-success); }
+.ts-progress-bar-warning { background: var(--ts-warning); }
+.ts-progress-bar-danger { background: var(--ts-danger); }
+
+/* Code. */
+.ts-code,
+.ts-snippet {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--ts-radius);
+  background: var(--ts-surface);
+}
+
+.ts-snippet-header {
+  padding: var(--ts-s2) var(--ts-s4);
+  border-bottom: 1px solid var(--ts-line);
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-xs);
+  font-weight: 600;
+}
+
+/* Long lines wrap instead of scrolling, so code stays readable without a
+   keyboard-inaccessible scroll area and reflows on narrow screens. */
+.ts-code,
+.ts-snippet-body {
+  margin: 0;
+  padding: var(--ts-s4);
+  color: #c9d4ff;
+  font-family: var(--ts-font-mono);
+  font-size: var(--ts-fs-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ts-snippet > .ts-snippet-body {
+  border-radius: 0;
+}
+
+code:not(pre code) {
+  padding: 1px 6px;
+  border-radius: var(--ts-radius-sm);
+  background: var(--ts-surface-3);
+}
+
+/* Charts rendered by internal/ui/charts. */
+.ts-chart-shell {
+  display: grid;
+  gap: var(--ts-s2);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.ts-chart {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ts-chart .ts-chart-grid {
+  stroke: var(--ts-line);
+  stroke-dasharray: 3 4;
+}
+
+.ts-chart .ts-chart-baseline {
+  stroke: var(--ts-line-strong);
+  stroke-dasharray: none;
+}
+
+.ts-chart .ts-chart-axis {
+  fill: var(--ts-ink-3);
+  font-family: var(--ts-font-mono);
+  font-size: 11px;
+}
+
+.ts-chart .ts-chart-line {
+  fill: none;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ts-chart .ts-chart-series-1 { stroke: var(--ts-chart-1); }
+.ts-chart .ts-chart-series-2 { stroke: var(--ts-chart-2); }
+
+.ts-chart-fill-start { stop-color: var(--ts-chart-1); stop-opacity: 0.32; }
+.ts-chart-fill-end { stop-color: var(--ts-chart-1); stop-opacity: 0; }
+
+/* Hover columns: a guide line, dots per value, and a tooltip, revealed on
+   hover and keyboard focus. The focused column tints its band instead of
+   drawing an outline around the hidden tooltip. */
+.ts-chart-column {
+  outline: none;
+}
+
+.ts-chart-hit {
+  fill: transparent;
+  transition: fill var(--ts-fast) var(--ts-ease);
+}
+
+.ts-chart-column:focus-visible .ts-chart-hit {
+  fill: var(--ts-accent-soft);
+}
+
+.ts-chart-guide {
+  stroke: var(--ts-line-strong);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ts-chart-dot {
+  fill: var(--ts-canvas);
+  stroke: var(--ts-chart-1);
+  stroke-width: 2;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ts-chart-dot.ts-cat-2 { stroke: var(--ts-cat-2); }
+.ts-chart-dot.ts-cat-3 { stroke: var(--ts-cat-3); }
+.ts-chart-dot.ts-chart-marker { opacity: 1; }
+
+.ts-chart-column:is(:hover, :focus-visible) :is(.ts-chart-guide, .ts-chart-dot, .ts-chart-tip),
+.ts-chart-column:last-of-type .ts-chart-dot {
+  opacity: 1;
+}
+
+/* Line tooltip, drawn in SVG by charts.lineTip. */
+.ts-chart-tip {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ts-fast) var(--ts-ease);
+}
+
+.ts-chart-tip-box {
+  fill: var(--ts-surface-2);
+  stroke: var(--ts-line-strong);
+  filter: drop-shadow(0 8px 12px rgb(0 0 0 / 0.45));
+}
+
+.ts-chart .ts-chart-tip text {
+  fill: var(--ts-ink-2);
+  font-family: var(--ts-font-mono);
+  font-size: 11px;
+}
+
+.ts-chart .ts-chart-tip .ts-chart-tip-label {
+  fill: var(--ts-ink-3);
+}
+
+.ts-chart .ts-chart-tip .ts-chart-tip-value {
+  fill: var(--ts-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-chart-tip-swatch {
+  stroke: var(--series, var(--ts-chart-1));
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.ts-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ts-s4);
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-xs);
+}
+
+.ts-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ts-chart-swatch {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ts-chart-1);
+}
+
+.ts-chart-swatch-2 {
+  background: var(--ts-chart-2);
+}
+
+.ts-cat-1 { --series: var(--ts-cat-1); }
+.ts-cat-2 { --series: var(--ts-cat-2); }
+.ts-cat-3 { --series: var(--ts-cat-3); }
+.ts-chart .ts-chart-line[class*="ts-cat-"] { stroke: var(--series); }
+span.ts-chart-swatch[class*="ts-cat-"] { background: var(--series); }
+svg.ts-chart-swatch {
+  width: 32px;
+  height: 8px;
+  flex: none;
+  background: none;
+  stroke: var(--series, var(--ts-chart-1));
+  stroke-width: 2.25;
+  stroke-linecap: round;
+}
+
+/* Share bar and utilization ring (SVG, sized by viewBox attributes). Each
+   sits in a focusable meter that shows its name and value above it. */
+.ts-chart-meter {
+  position: relative;
+  display: block;
+  border-radius: var(--ts-radius-sm);
+}
+
+.ts-chart-meter > svg {
+  display: block;
+}
+
+/* Tooltips start at the meter's left edge, so meters flush with the page
+   edge never push them out of view. */
+.ts-chart-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: var(--ts-z-tooltip);
+  display: flex;
+  align-items: baseline;
+  gap: var(--ts-s3);
+  padding: 6px var(--ts-s3);
+  border-radius: var(--ts-radius);
+  background: var(--ts-surface-2);
+  box-shadow: var(--ts-shadow-overlay);
+  color: var(--ts-ink);
+  font-family: var(--ts-font-mono);
+  font-size: var(--ts-fs-xs);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: opacity var(--ts-fast) var(--ts-ease), transform var(--ts-fast) var(--ts-ease);
+}
+
+.ts-chart-meter:is(:hover, :focus-visible) > .ts-chart-tooltip {
+  opacity: 1;
+  transform: none;
+}
+
+.ts-chart-tooltip-label {
+  color: var(--ts-ink-3);
+}
+
+.ts-chart-tooltip strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-svg-sharebar {
+  display: block;
+  width: 100%;
+  height: 6px;
+}
+
+.ts-svg-sharebar-track { fill: var(--ts-surface-3); }
+.ts-svg-sharebar-fill { fill: var(--ts-accent); }
+
+.ts-ring {
+  width: 96px;
+  height: 96px;
+  transform: rotate(-90deg);
+}
+
+.ts-ring circle {
+  fill: none;
+  stroke-width: 10;
+}
+
+.ts-ring-track { stroke: var(--ts-surface-3); }
+
+.ts-ring-fill {
+  stroke: var(--ts-accent);
+  stroke-linecap: round;
+}
+
+.ts-ring-warning .ts-ring-fill { stroke: var(--ts-warning); }
+.ts-ring-danger .ts-ring-fill { stroke: var(--ts-danger); }

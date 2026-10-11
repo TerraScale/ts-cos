@@ -1,0 +1,50 @@
+/* COS-only rules on top of the kit: chat page layout, usage bars, compact meter row and sparkline. */
+
+/* 11. Chat page layout: chat column, Inbox column beside it (under the top bar) */
+.cos-chat { height: 100dvh; overflow: hidden; }
+.cos-chat-body {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.cos-chat-main { min-height: 0; display: flex; flex-direction: column; }
+.cos-inbox-col {
+  display: none;
+  min-height: 0;
+  overflow-y: auto;
+  container-type: inline-size;
+  border-inline-start: 1px solid var(--ts-line);
+  padding: var(--ts-s4);
+}
+@media (min-width: 60rem) {
+  .cos-chat-body { grid-template-columns: minmax(0, 1fr) 22rem; }
+  .cos-inbox-col { display: block; }
+}
+@media (min-width: 80rem) {
+  .cos-chat-body { grid-template-columns: minmax(0, 1fr) 26rem; }
+}
+/* Phones and narrow windows: the top bar's Inbox toggle swaps the chat for the Inbox */
+@media (max-width: 59.99rem) {
+  .cos-chat[data-tab=inbox] .cos-chat-main { display: none; }
+  .cos-chat[data-tab=inbox] .cos-inbox-col { display: block; }
+}
+
+/* Usage bars: ts-svg-sharebar fill levels */
+.ts-svg-sharebar-fill[data-level="warning"] { fill: var(--ts-warning); }
+.ts-svg-sharebar-fill[data-level="danger"] { fill: var(--ts-danger); }
+
+/* Compact usage row (label | SVG share bar | value) and a 24px sparkline, for tiles inside ui.Card. */
+.cos-meter-row {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr) 3rem;
+  align-items: center;
+  gap: var(--ts-s2);
+  font-size: var(--ts-fs-sm);
+}
+.cos-meter-label { color: var(--ts-ink-2); }
+.cos-meter-row > .ts-num { text-align: end; }
+.cos-spark { display: block; width: 100%; height: 24px; color: var(--ts-chart-1); }
+.cos-spark[data-series="2"] { color: var(--ts-chart-2); }
+.cos-spark-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.cos-spark-area { fill: currentColor; opacity: 0.14; stroke: none; }

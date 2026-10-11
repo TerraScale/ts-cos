@@ -65,7 +65,7 @@ func TestCSSBundleLayersAndFiles(t *testing.T) {
 	}
 	// The first rule of each file must reach the bundle, so a missing file or wrong wrapper fails here.
 	firstRule := regexp.MustCompile(`(?m)^[^\s/*][^\n]*\{$`)
-	for _, file := range []string{"tokens.css", "base.css", "layout.css", "legacy.css"} {
+	for _, file := range []string{"tokens.css", "base.css", "layout.css", "legacy.css", "shell.css", "controls.css", "surfaces.css", "data.css", "overlays.css", "auth.css", "cos.css"} {
 		data, err := staticFS.ReadFile("static/css/" + file)
 		if err != nil {
 			t.Fatal(err)
@@ -75,7 +75,7 @@ func TestCSSBundleLayersAndFiles(t *testing.T) {
 			t.Errorf("%s: first rule %q missing from bundle", file, rule)
 		}
 	}
-	for _, wrap := range []string{"@layer base {", "@layer layout {", "@layer legacy {"} {
+	for _, wrap := range []string{"@layer base {", "@layer layout {", "@layer legacy {", "@layer components {", "@layer features {"} {
 		if !strings.Contains(string(cosCSS), wrap) {
 			t.Errorf("bundle lacks %q", wrap)
 		}

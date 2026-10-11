@@ -1,0 +1,452 @@
+/* Dropdown menus (ui.Dropdown), dialogs (ui.Dialog), tooltips, and the
+   region map. */
+
+details.ts-menu {
+  position: relative;
+}
+
+details.ts-menu > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.ts-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.ts-menu > .ts-menu-panel {
+  position: absolute;
+  top: calc(100% + var(--ts-s1));
+  z-index: var(--ts-z-dropdown);
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  min-width: 14rem;
+  max-width: min(90vw, 22rem);
+  padding: var(--ts-s1);
+  border: 1px solid var(--ts-line-strong);
+  border-radius: var(--ts-radius-lg);
+  background: var(--ts-glass);
+  box-shadow: 0 16px 32px -20px rgb(0 0 0 / 0.8);
+  backdrop-filter: blur(20px) saturate(1.4);
+}
+
+details.ts-menu[open] > .ts-menu-panel {
+  animation: ts-pop-in var(--ts-fast) var(--ts-ease);
+}
+
+details.ts-menu-end > .ts-menu-panel {
+  right: 0;
+}
+
+details.ts-menu-up > .ts-menu-panel {
+  top: auto;
+  bottom: calc(100% + var(--ts-s1));
+}
+
+.ts-menu-heading {
+  padding: var(--ts-s2) var(--ts-s2) var(--ts-s1);
+  color: var(--ts-ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ts-menu-panel > .ts-input {
+  margin-bottom: var(--ts-s1);
+}
+
+.ts-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-s2);
+  width: 100%;
+  min-height: 34px;
+  padding: 0 var(--ts-s2);
+  border: 0;
+  border-radius: var(--ts-radius);
+  background: transparent;
+  color: var(--ts-ink-2);
+  font-size: var(--ts-fs-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ts-menu-item:hover,
+.ts-menu-item:focus-visible {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--ts-ink);
+  text-decoration: none;
+}
+
+/* Keyboard focus keeps the solid ring, drawn inside the item, so it never
+   looks like hover or the current item. */
+.ts-menu-item:focus-visible {
+  outline-offset: -2px;
+}
+
+.ts-menu-item[aria-current="true"],
+.ts-menu-item[aria-current="page"] {
+  background: rgb(255 255 255 / 0.04);
+  color: var(--ts-ink);
+  font-weight: 600;
+}
+
+.ts-menu-item > svg {
+  flex: none;
+  color: var(--ts-ink-3);
+  transition: color var(--ts-fast) var(--ts-ease);
+}
+
+/* Toned items tint their icon, fully on hover. */
+.ts-menu-item[data-tone] > svg {
+  color: color-mix(in oklab, var(--tone) 75%, var(--ts-ink-3));
+}
+
+.ts-menu-item[data-tone]:hover > svg,
+.ts-menu-item[data-tone]:focus-visible > svg {
+  color: var(--tone);
+}
+
+.ts-menu-item-danger:hover,
+.ts-menu-item-danger:focus-visible,
+.ts-menu-item-danger:hover > svg,
+.ts-menu-item-danger:focus-visible > svg {
+  color: var(--ts-danger);
+}
+
+.ts-menu-item-danger:hover,
+.ts-menu-item-danger:focus-visible {
+  background: color-mix(in oklab, var(--ts-danger) 12%, transparent);
+}
+
+.ts-menu-check {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+  color: var(--ts-success);
+}
+
+.ts-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-menu-separator {
+  margin: var(--ts-s1) calc(-1 * var(--ts-s1));
+  border-color: var(--ts-line);
+}
+
+/* Dialogs: native <dialog>, opened with command="show-modal" or data-init. */
+dialog.ts-dialog {
+  width: min(34rem, calc(100vw - 2 * var(--ts-s4)));
+  max-height: calc(100dvh - 2 * var(--ts-s6));
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--ts-line-strong);
+  border-radius: var(--ts-radius-lg);
+  background: var(--ts-surface);
+  color: var(--ts-ink);
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 24px 48px -24px rgb(0 0 0 / 0.8);
+}
+
+dialog.ts-dialog-wide {
+  width: min(48rem, calc(100vw - 2 * var(--ts-s4)));
+}
+
+dialog.ts-dialog[open] {
+  animation: ts-pop-in var(--ts-base) var(--ts-ease);
+}
+
+dialog.ts-dialog::backdrop {
+  background: var(--ts-scrim);
+  backdrop-filter: blur(4px);
+}
+
+.ts-dialog-content {
+  display: grid;
+  gap: var(--ts-s5);
+  padding: var(--ts-s6);
+}
+
+/* Title block beside the close button (ui.Dialog). */
+.ts-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ts-s4);
+}
+
+.ts-dialog-head > .ts-icon-btn {
+  margin: calc(-1 * var(--ts-s1)) calc(-1 * var(--ts-s2)) 0 0;
+}
+
+.ts-dialog-header {
+  display: grid;
+  gap: var(--ts-s1);
+}
+
+.ts-billing-dialog-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--ts-s3);
+}
+
+.ts-dialog-title {
+  font-size: var(--ts-fs-lg);
+  font-weight: 700;
+}
+
+.ts-dialog-description {
+  color: var(--ts-ink-2);
+}
+
+.ts-dialog-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--ts-s2);
+}
+
+/* Tooltip from data-tip (hover and focus, pure CSS). */
+.ts-tip {
+  position: relative;
+  display: inline-flex;
+}
+
+.ts-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  z-index: var(--ts-z-tooltip);
+  padding: var(--ts-s1) var(--ts-s2);
+  border-radius: var(--ts-radius-sm);
+  background: var(--ts-surface-3);
+  color: var(--ts-ink);
+  font-size: var(--ts-fs-xs);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition: opacity var(--ts-fast) var(--ts-ease);
+}
+
+.ts-tip:hover::after,
+.ts-tip:focus-within::after {
+  opacity: 1;
+}
+
+/* Region map (ui.RegionMap). Hub nodes are HTML so they stay 8px at any
+   map size; they sit at the hub coordinates of the 136×80 map viewBox. */
+.ts-region-map {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 136 / 80;
+  overflow: hidden;
+  container-type: inline-size;
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-lg);
+  background: var(--ts-surface);
+}
+
+.ts-region-map-image,
+.ts-region-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ts-region-map-image {
+  filter: brightness(1.35) saturate(1.1);
+}
+
+.ts-region-arc {
+  fill: none;
+  stroke: rgb(106 145 255 / 0.7);
+  stroke-dasharray: 2 3;
+  stroke-linecap: round;
+  stroke-width: 0.22;
+  animation: ts-line-flow 6s linear infinite;
+}
+
+.ts-region-arc:nth-child(2) { animation-delay: 0.45s; }
+
+.ts-region-node {
+  position: absolute;
+  width: 0;
+  height: 0;
+  transition: opacity var(--ts-base) var(--ts-ease);
+}
+
+.ts-region-node[data-region="SFO"] { top: 35.73%; left: 15.44%; }
+.ts-region-node[data-region="GRU"] { top: 74.7%; left: 36.76%; }
+
+.ts-region-node-core,
+.ts-region-node-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.ts-region-node-core {
+  background: #8aa8ff;
+  box-shadow: 0 0 0 2px var(--ts-canvas);
+}
+
+.ts-region-node-ring {
+  border: 1.5px solid rgb(106 145 255 / 0.8);
+  animation: ts-pin-pulse 2.6s var(--ts-ease) infinite;
+}
+
+.ts-region-node:nth-of-type(2) .ts-region-node-ring { animation-delay: 0.3s; }
+.ts-region-node:nth-of-type(3) .ts-region-node-ring { animation-delay: 0.6s; }
+
+/* Select-driven maps light up only the chosen hubs. */
+.ts-region-map[data-select-id] .ts-region-node {
+  opacity: 0.3;
+}
+
+.ts-region-map[data-select-id] button.ts-region-node {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.ts-region-map[data-select-id] button.ts-region-node:hover,
+.ts-region-map[data-select-id] button.ts-region-node:focus-visible {
+  opacity: 1;
+  z-index: 2;
+}
+
+.ts-region-map[data-select-id] .ts-region-node-flag {
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  width: 20px;
+  height: 15px;
+  border: 1px solid var(--ts-line-strong);
+  border-radius: 2px;
+  object-fit: cover;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* The ring hugs the hub, clear of its flag and label. */
+.ts-region-map[data-select-id] button.ts-region-node:focus-visible {
+  outline: 2px solid var(--ts-accent);
+  outline-offset: -6px;
+  border-radius: 50%;
+}
+
+.ts-region-map[data-select-id] .ts-region-node-core,
+.ts-region-map[data-select-id] .ts-region-node-ring {
+  top: 50%;
+  left: 50%;
+}
+
+.ts-region-map[data-select-id] .ts-region-node-label {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: calc(50% + 14px);
+  padding: 5px 8px;
+  border: 1px solid var(--ts-line-strong);
+  border-radius: var(--ts-radius);
+  background: var(--ts-surface);
+  color: var(--ts-ink);
+  text-align: left;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity var(--ts-fast) var(--ts-ease);
+}
+
+/* Both labels point right, so neither crosses the left edge. SFO's hangs
+   just below its hub, clear of GRU's flag down to a 186px-wide map. */
+.ts-region-map[data-select-id] button.ts-region-node[data-region="SFO"] .ts-region-node-label {
+  transform: translateY(calc(-50% + 6px));
+}
+
+@container (width < 15rem) {
+  .ts-region-map[data-select-id] .ts-region-node-label {
+    padding: 2px 6px;
+    font-size: 11px;
+  }
+}
+
+.ts-region-map[data-select-id] .ts-region-node-label strong { display: block; }
+
+.ts-region-node-ping {
+  display: block;
+  margin-top: 2px;
+  color: var(--ts-ink-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-region-map[data-select-id] button.ts-region-node:hover .ts-region-node-label,
+.ts-region-map[data-select-id] button.ts-region-node:focus-visible .ts-region-node-label,
+.ts-region-map[data-select-id] button.ts-region-node[aria-pressed="true"] .ts-region-node-label {
+  opacity: 1;
+}
+
+.ts-region-map[data-select-id] button.ts-region-node[aria-pressed="true"] {
+  z-index: 2;
+}
+
+.ts-region-map[data-select-id]:has(button.ts-region-node:is(:hover, :focus-visible, :active))
+  button.ts-region-node[aria-pressed="true"]:not(:is(:hover, :focus-visible, :active)) .ts-region-node-label {
+  opacity: 0;
+}
+
+@media (pointer: coarse) {
+  .ts-region-map[data-select-id] button.ts-region-node:active .ts-region-node-label {
+    opacity: 1;
+  }
+}
+
+.ts-region-map[data-select-id] .ts-region-node-ring {
+  animation: none;
+  opacity: 0;
+}
+
+.ts-region-map[data-selected~="SFO"] .ts-region-node[data-region="SFO"],
+.ts-region-map[data-selected~="GRU"] .ts-region-node[data-region="GRU"] {
+  opacity: 1;
+}
+
+.ts-region-map[data-selected~="SFO"] [data-region="SFO"] .ts-region-node-ring,
+.ts-region-map[data-selected~="GRU"] [data-region="GRU"] .ts-region-node-ring {
+  animation: ts-pin-pulse 2.6s var(--ts-ease) infinite;
+}
+
+@keyframes ts-line-flow {
+  to { stroke-dashoffset: -20; }
+}
+
+@keyframes ts-pin-pulse {
+  0% { opacity: 0.9; transform: translate(-50%, -50%) scale(1); }
+  80%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(3.8); }
+}
