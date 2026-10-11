@@ -179,7 +179,7 @@ func (p *Push) chatReplies(ctx context.Context) {
 	sub, unsubscribe := p.chat.Subscribe()
 	defer unsubscribe()
 	seen := map[string]bool{}
-	for _, e := range p.chat.Entries() {
+	for _, e := range p.chat.Entries(chatMainTab) {
 		if !e.Streaming {
 			seen[e.ID] = true
 		}
