@@ -199,14 +199,15 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 			return append(out, d(ClassRecord, "merged", ref+" merged; the ticket's work is complete"))
 		case pr.State != "open":
 			return append(out, d(ClassRecord, "closed", ref+" closed"))
+		// Conflict before size: Forgejo's line counts are stale while a PR conflicts.
+		case !pr.Mergeable:
+			return wake("conflict", ref+" conflicts with "+pr.Base, pr.SHA, data)
 		case pr.Lines > prLineLimit:
 			return wake("size", fmt.Sprintf("%s changes %d lines (> %d)", ref, pr.Lines, prLineLimit), pr.SHA, data)
 		case pr.Ready && pr.Cos:
 			x := d(ClassAct, "merge-ready", ref+" is READY: mergeable, CI green, ts-reviewer approved")
 			x.Merge = &pr.PR
 			return append(out, x)
-		case !pr.Mergeable:
-			return wake("conflict", ref+" conflicts with "+pr.Base, pr.SHA, data)
 		case pr.CI == "failure":
 			return wake("ci", ref+" CI failed: "+strings.Join(pr.Failing, ", "), pr.SHA, data)
 		case pr.ChangesRequested:

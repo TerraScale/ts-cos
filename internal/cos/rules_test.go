@@ -204,6 +204,12 @@ func TestClassify(t *testing.T) {
 			},
 		},
 		{
+			name:  "oversized conflicting PR wakes for the conflict, not the size",
+			event: rulesPREvent(KindPRSynchronized, 7),
+			pr:    rulesPR(func(p *PRFacts) { p.Lines = 2000; p.Mergeable = false }),
+			want:  []Decision{{Class: ClassAct, Rule: "conflict"}},
+		},
+		{
 			name:  "merged slice wakes the owner for the next slice",
 			event: rulesPREvent(KindPRMerged, 7),
 			pr:    rulesPR(func(p *PRFacts) { p.Merged, p.State, p.Body = true, "closed", "Part of TS-1" }),
