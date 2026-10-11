@@ -104,6 +104,9 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 		if err == nil {
 			_, err = openKV(ctx, b, memoryBucket)
 		}
+		if err == nil {
+			_, err = openKV(ctx, b, savingsBucket)
+		}
 		var kv jetstream.KeyValue
 		if err == nil {
 			kv, err = openKV(ctx, b, chatBucket)

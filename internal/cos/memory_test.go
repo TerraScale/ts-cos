@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -116,7 +117,10 @@ func TestMemoryRecallPinnedAlwaysIncluded(t *testing.T) {
 	if r.Entries[len(r.Entries)-1].Text != memorySeed[0].text {
 		t.Fatalf("canary match missing after pins: %+v", r.Entries)
 	}
-	if r.Entries[1].ID != "ctx.focus.0" || r.Entries[2].ID != "ctx.focus.1" {
+	// Pins sort newest first and the focus file's time has whole seconds, so only the paragraphs' relative order is fixed.
+	i0 := slices.IndexFunc(r.Entries, func(e MemoryEntry) bool { return e.ID == "ctx.focus.0" })
+	i1 := slices.IndexFunc(r.Entries, func(e MemoryEntry) bool { return e.ID == "ctx.focus.1" })
+	if i0 < 0 || i1 != i0+1 {
 		t.Fatalf("focus paragraph order: %+v", r.Entries)
 	}
 	if got := r.Text(); !strings.Contains(got, "- [fact] Ship TS-828 before Friday. (#focus)\n") {

@@ -564,6 +564,14 @@ Answering emits a `user.answer` event on `cos.events.>`.
   read as entries.
 - `BuildDigest`: a capped 4 KiB wake digest with dedup, coalescing, and priority
   ordering. Wired into the COS agent in slice 2.
+- `cos savings [days]`: per-day avoided tokens by kind and wall-clock seconds
+  saved. Days are UTC. Worker and rule-action savings sit on the tokens page.
+- `cos plan '<PlanInput>'`: splits a task into up to 4 parallel Haiku 5.5 worker
+  briefs per wave under the Opus 5.5 advisor. Files a worker owns never overlap
+  within a wave.
+- `cos plan done '<PlanResult>'`: records wall-clock seconds saved by parallel
+  workers in the savings ledger. Worker and advisor tokens are printed, not
+  recorded.
 
 ## TS-769 slices
 

@@ -58,6 +58,10 @@ func contextFiles(ctx context.Context, kv jetstream.KeyValue, withText bool) ([]
 		}
 		out = append(out, f)
 	}
+	// ListKeys ends the channel silently when ctx ends; a short list must not pass as complete.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

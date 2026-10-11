@@ -205,6 +205,10 @@ func memoryEntries(ctx context.Context, mem jetstream.KeyValue) ([]MemoryEntry, 
 		}
 		out = append(out, e)
 	}
+	// ListKeys ends the channel silently when ctx ends; a short list must not pass as complete.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	slices.SortFunc(out, func(a, b MemoryEntry) int { return b.At.Compare(a.At) })
 	return out, nil
 }
