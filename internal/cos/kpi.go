@@ -116,7 +116,10 @@ func (b *KPIBoard) follow(ctx context.Context, js jetstream.JetStream, cfg jetst
 		if begin != nil {
 			begin()
 		}
-		cons, err := js.OrderedConsumer(ctx, EventsStream, cfg)
+		// ctx may only end at midnight; a create request lost while the cluster forms must time out and retry.
+		create, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cons, err := js.OrderedConsumer(create, EventsStream, cfg)
+		cancel()
 		var cc jetstream.ConsumeContext
 		if err == nil {
 			cc, err = cons.Consume(b.apply)
