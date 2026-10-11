@@ -116,11 +116,11 @@ func heartbeatSub(a AutopilotState) string {
 	if a.Interval == 0 {
 		return "no heartbeat set"
 	}
-	next, err := time.Parse(time.RFC3339, a.NextBeat())
-	if err != nil {
+	next := a.NextBeatTime()
+	if next.IsZero() {
 		return "waiting for the first beat"
 	}
-	return "next " + next.Local().Format("15:04")
+	return "next " + clock(next)
 }
 
 // settings hosts the heartbeat presets (TS-813), token budgets (TS-826); account settings join it here.

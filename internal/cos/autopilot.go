@@ -60,11 +60,20 @@ type AutopilotState struct {
 }
 
 func (s AutopilotState) NextBeat() string {
-	last, err := time.Parse(time.RFC3339, s.LastBeat)
-	if err != nil {
+	next := s.NextBeatTime()
+	if next.IsZero() {
 		return "after the leader's first check"
 	}
-	return last.Add(time.Duration(s.Interval) * time.Minute).UTC().Format(time.RFC3339)
+	return next.UTC().Format(time.RFC3339)
+}
+
+// NextBeatTime is the next heartbeat; zero until a beat has been recorded.
+func (s AutopilotState) NextBeatTime() time.Time {
+	last := parseStamp(s.LastBeat)
+	if last.IsZero() {
+		return last
+	}
+	return last.Add(time.Duration(s.Interval) * time.Minute)
 }
 
 // leaderEligible is a rule as code: COS never runs anything on the user's desktop.

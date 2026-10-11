@@ -64,10 +64,3 @@ func boolText(b bool) string {
 	}
 	return "false"
 }
-
-func orNone(s string) string {
-	if s == "" {
-		return "none"
-	}
-	return s
-}

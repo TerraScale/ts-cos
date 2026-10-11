@@ -14,7 +14,7 @@ templ autopilotPanel(a AutopilotState) {
 			<p role="alert" class="alert" data-tone="danger">{ a.Error }</p>
 		}
 		<div class="stack">
-			<p class="meta">Every { integer(a.Interval) } minutes · last { orNone(a.LastBeat) } · next { a.NextBeat() }</p>
+			<p class="meta">Every { integer(a.Interval) } minutes · last @when(parseStamp(a.LastBeat)) · next @when(a.NextBeatTime())</p>
 			<div class="row settings-controls">
 				<div class="segmented" role="group" aria-label="Heartbeat interval">
 					for _, m := range autopilotPresets {
@@ -33,7 +33,7 @@ templ autopilotPanel(a AutopilotState) {
 								<tr><td colspan="5">No actions yet.</td></tr>
 							}
 							for _, e := range a.Log {
-								<tr><td>{ e.At }<span class="sub">{ e.Host }</span></td><td>{ e.Kind }</td><td>{ e.Target }</td><td>{ e.Action }</td><td>{ e.Reason }</td></tr>
+								<tr><td>@when(parseStamp(e.At))<span class="sub">{ e.Host }</span></td><td>{ e.Kind }</td><td>{ e.Target }</td><td>{ e.Action }</td><td>{ e.Reason }</td></tr>
 							}
 						</tbody>
 					</table>

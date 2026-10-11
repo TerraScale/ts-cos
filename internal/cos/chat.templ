@@ -183,7 +183,14 @@ templ chatHead(h chatHeader) {
 			<!-- TS-813 heartbeat state -->
 			<li id="heartbeat-slot" class="stat">
 				if h.Autopilot.Interval > 0 {
-					<a href="/settings">Heartbeat { integer(h.Autopilot.Interval) } min · next { h.Autopilot.NextBeat() }</a>
+					<a href="/settings">
+						Heartbeat { integer(h.Autopilot.Interval) } min ·
+						if next := h.Autopilot.NextBeatTime(); next.IsZero() {
+							after the leader's first check
+						} else {
+							next @when(next)
+						}
+					</a>
 				}
 			</li>
 			<li class="stat">{ integer(h.Running) } running</li>
