@@ -267,6 +267,10 @@ func noteCommand(ctx context.Context, s *Store, args []string, w io.Writer) erro
 	return output(w, v)
 }
 
+// serveWorkers run beside the dashboard on every node; features register them
+// from their own files with init() so Serve stays unchanged.
+var serveWorkers []func(context.Context, Config, *Bus)
+
 func Serve(ctx context.Context, cfg Config, args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -314,6 +318,9 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	pollDone := make(chan struct{})
 	go func() { defer close(pollDone); w.Poll(ctx, cfg, bus) }()
 	go runTunnel(ctx)
+	for _, worker := range serveWorkers {
+		go worker(ctx, cfg, bus)
+	}
 	defer func() { cancel(); <-pollDone }()
 	slog.Info("COS dashboard listening", "address", l.Addr().String())
 	err = serveDashboard(ctx, server, l, cancel)

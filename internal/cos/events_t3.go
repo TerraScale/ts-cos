@@ -1,0 +1,245 @@
+package cos
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Each node ingests only its local T3, so an offline host never stops the others
+// and no HTTP crosses nodes; the replicated stream carries events to every node.
+
+const (
+	t3BackoffMin = time.Second
+	t3BackoffMax = 30 * time.Second
+)
+
+// Context usage high-water marks; each crossing emits one context.high.
+var t3ContextMarks = []int{80, 90}
+
+var t3TicketRef = regexp.MustCompile(`\b[A-Z][A-Z0-9]{1,9}-[0-9]+\b`)
+
+type t3Tracker struct {
+	host    string
+	runs    map[string]string // thread -> last terminal run:status
+	pending map[string]string // thread -> pending runtime request ID
+	context map[string]int    // thread -> last context percent
+}
+
+func newT3Tracker(host string) *t3Tracker {
+	return &t3Tracker{host: host, runs: map[string]string{}, pending: map[string]string{}, context: map[string]int{}}
+}
+
+func t3TurnKind(status string) (EventKind, Severity, bool) {
+	switch status {
+	case "completed":
+		return KindTurnCompleted, SeverityInfo, true
+	case "failed":
+		return KindTurnFailed, SeverityWarn, true
+	case "interrupted", "cancelled":
+		return KindTurnInterrupted, SeverityInfo, true
+	}
+	return "", "", false
+}
+
+func (t *t3Tracker) event(row t3ShellRow, id string, kind EventKind, severity Severity, at time.Time, summary string, data map[string]any) Event {
+	ticket := t3TicketRef.FindString(row.Title + " " + strings.ToUpper(row.Branch))
+	if len(ticket) > 64 {
+		ticket = ""
+	}
+	data["title"] = EventText(row.Title, 200)
+	if row.ModelSelection.Model != "" {
+		data["model"] = EventText(row.ModelSelection.Model, 100)
+	}
+	if row.Lineage.Parent != "" && len(row.Lineage.Parent) <= 256 {
+		data["parent"] = row.Lineage.Parent
+	}
+	raw, _ := json.Marshal(data)
+	thread := row.ID
+	if len(thread) > 256 {
+		thread = ""
+	}
+	return Event{ID: id, Source: SourceT3, Kind: kind, Time: at.UTC(), Severity: severity,
+		Summary: EventText(EventText(row.Title, 120)+": "+summary, eventSummaryMax),
+		Host:    t.host, Ticket: ticket, Thread: thread, Data: raw}
+}
+
+// observe turns one live thread row into turn and pending-request events. Rows from
+// a (re)connect snapshot only emit turns that ended inside the dedup window, so a
+// restart catches up on missed turns without replaying old history twice.
+func (t *t3Tracker) observe(row t3ShellRow, snapshot bool, now time.Time) (events []Event, ended bool) {
+	if row.ID == "" || row.ArchivedAt != nil || row.DeletedAt != nil {
+		return nil, false
+	}
+	if kind, severity, ok := t3TurnKind(row.Status); ok && row.LatestRunID != "" && row.LatestRunCompletedAt != "" {
+		key := row.LatestRunID + ":" + row.Status
+		at, err := time.Parse(time.RFC3339Nano, row.LatestRunCompletedAt)
+		if t.runs[row.ID] != key && err == nil {
+			t.runs[row.ID] = key
+			if !snapshot || now.Sub(at) < eventsDedup {
+				data := map[string]any{"run": row.LatestRunID, "status": row.Status}
+				var lastError string
+				if json.Unmarshal(row.LastError, &lastError) != nil {
+					lastError = string(row.LastError)
+				}
+				if lastError = EventText(lastError, 500); lastError != "" && lastError != "null" {
+					data["error"] = lastError
+				}
+				events = append(events, t.event(row, NewEventID(SourceT3, key), kind, severity, at, "turn "+row.Status, data))
+				ended = true
+			}
+		}
+	}
+	if request := row.PendingRuntimeRequest; request == nil {
+		delete(t.pending, row.ID)
+	} else if request.ID != "" && t.pending[row.ID] != request.ID {
+		t.pending[row.ID] = request.ID
+		at, err := time.Parse(time.RFC3339Nano, request.CreatedAt)
+		if err != nil {
+			at = now
+		}
+		data := map[string]any{"request": request.ID, "requestKind": EventText(request.Kind, 100)}
+		events = append(events, t.event(row, NewEventID(SourceT3, "request", request.ID), KindRequestPending, SeverityUrgent, at,
+			"waiting for "+EventText(request.Kind, 60), data))
+	}
+	return events, ended
+}
+
+// ended derives context.high and worker.needs_user from the projection of a thread
+// whose turn just ended; one read per turn keeps the stream cheap.
+func (t *t3Tracker) ended(row t3ShellRow, p Projection, now time.Time) []Event {
+	var events []Event
+	usage := ContextOf(p)
+	previous := t.context[row.ID]
+	t.context[row.ID] = usage.Pct
+	for _, mark := range t3ContextMarks {
+		if previous < mark && usage.Pct >= mark {
+			data := map[string]any{"percent": usage.Pct, "used": usage.UsedTokens, "max": usage.MaxTokens, "mark": mark}
+			events = append(events, t.event(row, NewEventID(SourceT3, row.LatestRunID, "context", strconv.Itoa(mark)), KindContextHigh, SeverityWarn, now,
+				"context "+strconv.Itoa(usage.Pct)+"% used", data))
+		}
+	}
+	var reply string
+	for _, m := range p.Messages {
+		if m.Role == "assistant" {
+			reply = m.Text
+		}
+	}
+	for i, ask := range ParseAsks(reply) {
+		if ask.Question == "" {
+			continue
+		}
+		options := make([]string, 0, len(ask.Options))
+		for _, option := range ask.Options[:min(len(ask.Options), 8)] {
+			options = append(options, EventText(option, 200))
+		}
+		data := map[string]any{"question": EventText(ask.Question, 1000), "options": options, "why": EventText(ask.Why, 1000)}
+		events = append(events, t.event(row, NewEventID(SourceT3, row.LatestRunID, "needs-user", strconv.Itoa(i)), KindNeedsUser, SeverityUrgent, now,
+			"NEEDS-USER "+ask.Question, data))
+	}
+	return events
+}
+
+func init() { serveWorkers = append(serveWorkers, RunT3Events) }
+
+// RunT3Events publishes the local T3 host's live thread events until ctx ends,
+// reconnecting with backoff.
+func RunT3Events(ctx context.Context, cfg Config, bus *Bus) {
+	js, err := bus.JetStream()
+	if err != nil {
+		slog.Error("COS T3 events unavailable", "error", err)
+		return
+	}
+	publish := func(ctx context.Context, e Event) error {
+		_, err := PublishEvent(ctx, js, e)
+		return err
+	}
+	retry(ctx, "COS event streams", func() error {
+		// Bound each attempt: stream creation waits for a meta leader while the cluster forms.
+		attempt, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		return EnsureEventStreams(attempt, js)
+	})
+	runT3Events(ctx, cfg.LocalHost, func(ctx context.Context) (*T3, error) { return OpenT3(ctx, cfg, cfg.LocalHost) }, publish)
+}
+
+func runT3Events(ctx context.Context, host string, open func(context.Context) (*T3, error), publish func(context.Context, Event) error) {
+	tracker := newT3Tracker(host)
+	backoff := t3BackoffMin
+	for ctx.Err() == nil {
+		started := time.Now()
+		err := ingestT3(ctx, tracker, open, publish)
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(started) > time.Minute {
+			backoff = t3BackoffMin
+		}
+		slog.Warn("COS T3 event stream reconnecting", "host", host, "error", err, "in", backoff)
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, t3BackoffMax)
+	}
+}
+
+func ingestT3(ctx context.Context, tracker *t3Tracker, open func(context.Context) (*T3, error), publish func(context.Context, Event) error) error {
+	c, err := open(ctx)
+	if err != nil {
+		return err
+	}
+	return t3SubscribeShell(ctx, c, func(value t3ShellValue) error {
+		var rows []t3ShellRow
+		snapshot := value.Kind == "snapshot"
+		if snapshot {
+			rows = value.Snapshot.Threads
+		} else if value.Kind == "thread.updated" {
+			rows = []t3ShellRow{value.Thread}
+		}
+		for _, row := range rows {
+			events, ended := tracker.observe(row, snapshot, time.Now())
+			if ended && !snapshot {
+				if p, err := c.Projection(ctx, row.ID); err == nil {
+					events = append(events, tracker.ended(row, p, time.Now())...)
+				} else if ctx.Err() == nil {
+					slog.Warn("COS T3 projection failed; context and NEEDS-USER events skipped", "host", tracker.host, "thread", row.ID, "error", err)
+				}
+			}
+			for _, e := range events {
+				if err := e.Validate(); err != nil {
+					slog.Error("COS T3 event dropped", "id", e.ID, "error", err)
+					continue
+				}
+				// Holding the T3 Ack while JetStream is unavailable keeps the event.
+				retry(ctx, "COS T3 event publish", func() error { return publish(ctx, e) })
+			}
+		}
+		return ctx.Err()
+	})
+}
+
+// retry runs fn with backoff until it succeeds or ctx ends.
+func retry(ctx context.Context, what string, fn func() error) {
+	backoff := t3BackoffMin
+	for {
+		err := fn()
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			slog.Warn(what+" failed; retrying", "error", err, "in", backoff)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, t3BackoffMax)
+	}
+}

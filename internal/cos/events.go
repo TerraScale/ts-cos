@@ -2,6 +2,8 @@ package cos
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -228,4 +230,23 @@ func PublishEvent(ctx context.Context, js jetstream.JetStream, e Event) (duplica
 // JetStream exposes the bus connection's JetStream API to event producers and consumers.
 func (b *Bus) JetStream() (jetstream.JetStream, error) {
 	return jetstream.New(b.conn)
+}
+
+// NewEventID joins source event ID parts, hashing IDs too long for Nats-Msg-Id.
+func NewEventID(source EventSource, parts ...string) string {
+	id := string(source) + ":" + strings.Join(parts, ":")
+	if len(id) > 256 || strings.IndexFunc(id, notGraphic) >= 0 {
+		sum := sha256.Sum256([]byte(id))
+		id = string(source) + ":" + hex.EncodeToString(sum[:20])
+	}
+	return id
+}
+
+// EventText makes external text a valid one-line summary or payload field of at most n runes.
+func EventText(s string, n int) string {
+	s = strings.Join(strings.FieldsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || notGraphic(r) }), " ")
+	if r := []rune(s); len(r) > n {
+		s = string(r[:n-1]) + "…"
+	}
+	return s
 }
