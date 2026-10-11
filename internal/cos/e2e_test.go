@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os/exec"
 	"regexp"
@@ -567,6 +569,122 @@ func TestAgreedLeader(t *testing.T) {
 			got, _, err := env.agreedLeader(t.Context(), e2eHosts, "", 0)
 			if got != tc.want || (err == nil) != (tc.want != "") {
 				t.Fatalf("agreedLeader = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestE2EAccessHelpers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/login" && r.PostFormValue("password") == "right":
+			http.SetCookie(rw, &http.Cookie{Name: sessionCookie, Value: "u.token"})
+			http.Redirect(rw, r, "/", http.StatusSeeOther)
+		case r.Method == "POST" && r.URL.Path == "/login" && r.PostFormValue("password") == "nocookie":
+			http.Redirect(rw, r, "/", http.StatusSeeOther)
+		case r.Method == "POST":
+			http.Error(rw, "Wrong username or password.", http.StatusUnauthorized)
+		case r.URL.Path == "/" && strings.Contains(r.Header.Get("Cookie"), "u.token"):
+			rw.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/" && strings.Contains(r.Header.Get("Cookie"), "broken"):
+			rw.WriteHeader(http.StatusInternalServerError)
+		default:
+			http.Redirect(rw, r, "/login", http.StatusSeeOther)
+		}
+	}))
+	defer srv.Close()
+	ctx := t.Context()
+	if cookie, status, _, err := signIn(ctx, srv.URL, "u", "right"); err != nil || status != 303 || cookie != "u.token" {
+		t.Fatalf("signIn right = %q %d %v", cookie, status, err)
+	}
+	if _, status, body, err := signIn(ctx, srv.URL, "u", "wrong"); err != nil || status != 401 || !strings.Contains(body, "Wrong") {
+		t.Fatalf("signIn wrong = %d %v", status, err)
+	}
+	if _, _, _, err := signIn(ctx, srv.URL, "u", "nocookie"); err == nil {
+		t.Fatal("a 303 without a session must be an error")
+	}
+	for cookie, want := range map[string]bool{"u.token": true, "": false, "stale": false} {
+		if ok, err := signedIn(ctx, srv.URL, cookie); err != nil || ok != want {
+			t.Errorf("signedIn(%q) = %t %v, want %t", cookie, ok, err, want)
+		}
+	}
+	if _, err := signedIn(ctx, srv.URL, "broken"); err == nil {
+		t.Error("HTTP 500 must be an error, not signed out")
+	}
+}
+
+func TestE2ENodeURLPicksTailnet(t *testing.T) {
+	env := &E2EEnv{run: func(context.Context, string, string) (string, error) {
+		return "10.10.10.102/24\nfd7a:115c:a1e0::9b37:9c60/128\n100.115.156.95/32\n", nil
+	}}
+	if got, err := env.nodeURL(t.Context(), "beta"); err != nil || got != "http://100.115.156.95:8790" {
+		t.Fatalf("nodeURL = %q %v", got, err)
+	}
+	env.run = func(context.Context, string, string) (string, error) { return "10.10.10.102/24\n", nil }
+	if _, err := env.nodeURL(t.Context(), "beta"); err == nil {
+		t.Fatal("a host without a tailnet IPv4 must fail")
+	}
+}
+
+func TestE2EOnDemandRunsOnlyByExactID(t *testing.T) {
+	run := func(context.Context, *E2EEnv) (string, error) { return "", nil }
+	checks := []E2ECheck{{ID: "cluster.leader-freeze", Stream: "TS-810", Run: run}, {ID: "cluster.leader-kill", Stream: "TS-810", OnDemand: true, Run: run}}
+	for _, tc := range []struct {
+		args []string
+		want int
+	}{{nil, 1}, {[]string{"cluster"}, 1}, {[]string{"cluster.leader-kill"}, 1}, {[]string{"cluster", "cluster.leader-kill"}, 2}} {
+		if got := len(runE2E(t.Context(), &E2EEnv{}, checks, tc.args).Checks); got != tc.want {
+			t.Errorf("args %v ran %d checks, want %d", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestHaikuThreads(t *testing.T) {
+	thread := func(id, model, title string, lineage *struct {
+		Parent   string `json:"parent"`
+		Relation string `json:"rel"`
+	}) FleetThread {
+		return FleetThread{ThreadID: id, Model: model, Title: title, Lineage: lineage}
+	}
+	subagent := &struct {
+		Parent   string `json:"parent"`
+		Relation string `json:"rel"`
+	}{"parent-1", "subagent"}
+	fork := &struct {
+		Parent   string `json:"parent"`
+		Relation string `json:"rel"`
+	}{"parent-1", "fork"}
+	fleets := []HostFleet{{Host: "delta", Threads: []FleetThread{
+		thread("top", "claude-haiku-5-5", "top-level haiku", nil),
+		thread("sub", "claude-haiku-5-5", "delegated review", subagent),
+		thread("forked", "claude-haiku-5-5", "forked haiku", fork),
+		thread("opus", "claude-opus-5-5", "opus thread", nil),
+	}}}
+	bad := haikuThreads(fleets)
+	want := []string{`delta/top (claude-haiku-5-5, "top-level haiku")`, `delta/forked (claude-haiku-5-5, "forked haiku")`}
+	if !slices.Equal(bad, want) {
+		t.Errorf("haikuThreads = %q, want %q", bad, want)
+	}
+}
+
+func TestAdvisorProblems(t *testing.T) {
+	const good = `Opus 5.5 advises. Haiku runs as delegate_task {"providerInstanceId":"claudeAgent","model":"claude-haiku-5-5"}.`
+	const noAdvisor = "delegate_task to claude-haiku-5-5"
+	tests := []struct {
+		name, text string
+		want       []string
+	}{
+		{"good", good, nil},
+		{"launch", good + ` {"instanceId":"claudeAgent","model":"claude-haiku-5-5"}`, []string{"brief.md: launches a Haiku thread"}},
+		{"prose", good + " Then use a Haiku 5.5 thread.", []string{"brief.md: tells agents to use a Haiku 5.5 thread"}},
+		{"empty", "", []string{"brief.md: no Opus 5.5 advisor", "brief.md: no claude-haiku-5-5 delegate", "brief.md: no delegate_task"}},
+		{"no advisor", noAdvisor, []string{"brief.md: no Opus 5.5 advisor"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := advisorProblems("brief.md", tc.text)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("advisorProblems = %q, want %q", got, tc.want)
 			}
 		})
 	}

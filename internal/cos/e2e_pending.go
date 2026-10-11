@@ -1,21 +1,12 @@
 package cos
 
-import "strings"
-
 // e2ePending lists checks whose features are not on main yet. Each reports "skip" with its
 // owning stream until the feature lands and the check gets a real implementation.
 var e2ePending = func() []E2ECheck {
 	rows := [][3]string{
-		{"access.login.tailnet", "TS-810", "login page"},
-		{"access.login.public", "TS-810", "cos.terrascale.tech and login page"},
-		{"access.wrong-password", "TS-810", "login page"},
-		{"access.lockout", "TS-810", "login rate limiting"},
-		{"access.session-cross-node", "TS-810", "replicated sessions"},
-		{"access.logout", "TS-810", "logout"},
-		{"access.password-change", "TS-810", "password change with a temporary account"},
 		{"chat.non-leader-message", "TS-811", "COS chat"},
 		{"chat.reply-all-nodes", "TS-811", "COS chat streaming"},
-		{"chat.spawn-haiku-thread", "TS-811", "COS agent runtime"},
+		{"chat.spawn-thread", "TS-811", "COS agent runtime (probe threads run on Opus 5.5)"},
 		{"chat.focus-restart", "TS-811", "COS focus change"},
 		{"chat.context-compaction", "TS-811", "COS context ownership"},
 		{"chat.wake-budget-digest", "TS-811", "COS wake budget"},
@@ -48,7 +39,7 @@ var e2ePending = func() []E2ECheck {
 	}
 	checks := make([]E2ECheck, len(rows))
 	for i, r := range rows {
-		checks[i] = E2ECheck{ID: r[0], Stream: r[1], Smoke: strings.HasPrefix(r[0], "access.login."), Run: pending(r[1] + ": " + r[2] + " is not on main yet")}
+		checks[i] = E2ECheck{ID: r[0], Stream: r[1], Run: pending(r[1] + ": " + r[2] + " is not on main yet")}
 	}
 	return checks
 }()

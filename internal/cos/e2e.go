@@ -62,7 +62,9 @@ type E2ECheck struct {
 	ID     string
 	Stream string // owning ticket, reported with every result
 	Smoke  bool   // also part of the fast health gate (cos e2e --smoke, < 30 s, TS-818)
-	Run    func(ctx context.Context, env *E2EEnv) (evidence string, err error)
+	// OnDemand checks run only when named by their exact ID (for example a real crash).
+	OnDemand bool
+	Run      func(ctx context.Context, env *E2EEnv) (evidence string, err error)
 }
 
 var e2eRegistered []E2ECheck
@@ -193,7 +195,7 @@ func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) 
 	defer cancel()
 	report := E2EReport{StartedAt: time.Now().UTC(), Runner: env.cfg.LocalHost, Version: Version, Summary: map[string]int{"pass": 0, "fail": 0, "skip": 0}, Checks: []E2EResult{}}
 	for _, c := range checks {
-		if smoke && !c.Smoke || len(filter) > 0 && !slicesHasPrefix(filter, c.ID) {
+		if smoke && !c.Smoke || len(filter) > 0 && !slicesHasPrefix(filter, c.ID) || c.OnDemand && !slices.Contains(filter, c.ID) {
 			continue
 		}
 		start := time.Now()
@@ -240,8 +242,20 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "cluster.leader", Stream: "TS-810", Smoke: true, Run: checkLeader},
 		E2ECheck{ID: "cluster.restart", Stream: "TS-810", Run: checkRestartCatchUp},
 		E2ECheck{ID: "cluster.partition", Stream: "TS-810", Run: checkPartition},
-		E2ECheck{ID: "cluster.leader-kill", Stream: "TS-810", Run: checkLeaderKill},
+		E2ECheck{ID: "cluster.leader-freeze", Stream: "TS-810", Run: checkLeaderFreeze},
+		// SIGKILL proves a real crash, systemd restart and rejoin from the store, but each run counts
+		// as an automatic restart, so it runs only on demand: cos e2e cluster.leader-kill.
+		E2ECheck{ID: "cluster.leader-kill", Stream: "TS-810", OnDemand: true, Run: checkLeaderKill},
 		E2ECheck{ID: "rules.heartbeat-leader", Stream: "TS-813", Smoke: true, Run: checkHeartbeatLeader},
+		E2ECheck{ID: "threads.no-haiku", Stream: "TS-812", Run: checkNoHaikuThreads},
+		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
+		E2ECheck{ID: "access.login.tailnet", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginTailnet)},
+		E2ECheck{ID: "access.login.public", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginPublic)},
+		E2ECheck{ID: "access.wrong-password", Stream: "TS-810", Run: accessCheck(checkWrongPassword)},
+		E2ECheck{ID: "access.lockout", Stream: "TS-810", Run: accessCheck(checkLockout)},
+		E2ECheck{ID: "access.session-cross-node", Stream: "TS-810", Run: accessCheck(checkSessionCrossNode)},
+		E2ECheck{ID: "access.logout", Stream: "TS-810", Run: accessCheck(checkLogout)},
+		E2ECheck{ID: "access.password-change", Stream: "TS-810", Run: accessCheck(checkPasswordChange)},
 		E2ECheck{ID: "gate.self-change", Stream: "TS-817", Run: checkSelfGate},
 	)
 	return append(append(checks, e2ePending...), e2eRegistered...)
