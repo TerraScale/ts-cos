@@ -94,6 +94,31 @@ func TestUsageSummaryByThreadUsesFleetTitleAndHaikuParallelism(t *testing.T) {
 	}
 }
 
+func TestUsageThreadPrefersTopLevelAdvisorOverChild(t *testing.T) {
+	type lineage = struct {
+		Parent   string `json:"parent"`
+		Relation string `json:"rel"`
+	}
+	row := UsageRow{Host: "beta", Branch: "cos/ts-826-x", Project: "proj"}
+	child := FleetThread{ThreadID: "thread:delegated-task:1", Title: "child", Branch: "cos/ts-826-x", Lineage: &lineage{Parent: "root"}}
+	root := FleetThread{ThreadID: "root", Title: "TS-826 advisor", Branch: "cos/ts-826-x"}
+
+	// The child is listed first; the top-level advisor still owns the group.
+	live := Live{Fleet: []HostFleet{{Host: "beta", Threads: []FleetThread{child, root}}}}
+	t1 := UsageTotal{Key: "beta/proj"}
+	usageThread(&t1, row, live)
+	if t1.Thread != "root" || t1.Label != "TS-826 advisor" {
+		t.Fatalf("group thread = %q %q, want root", t1.Thread, t1.Label)
+	}
+
+	// With only the child live, the group still resolves to it.
+	t2 := UsageTotal{Key: "beta/proj"}
+	usageThread(&t2, row, Live{Fleet: []HostFleet{{Host: "beta", Threads: []FleetThread{child}}}})
+	if t2.Thread != child.ThreadID {
+		t.Fatalf("group thread = %q, want child %q", t2.Thread, child.ThreadID)
+	}
+}
+
 func TestUsageParallelEndAtStartDoesNotOverlap(t *testing.T) {
 	at := time.Date(2026, 10, 10, 10, 5, 0, 0, time.UTC)
 	haiku := func(session string, first, last time.Time) UsageRow {

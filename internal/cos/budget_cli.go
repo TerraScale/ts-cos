@@ -23,12 +23,14 @@ type budgetRow struct {
 }
 
 type budgetReport struct {
-	Day         string           `json:"day"`
-	ThreadLimit int64            `json:"threadLimit"`
-	DailyLimit  int64            `json:"dailyLimit"`
-	Raises      map[string]int64 `json:"raises"`
-	DailyUsed   int64            `json:"dailyUsed"`
-	Threads     []budgetRow      `json:"threads"`
+	Day           string           `json:"day"`
+	ThreadLimit   int64            `json:"threadLimit"`
+	DailyLimit    int64            `json:"dailyLimit"`
+	ThreadDefault bool             `json:"threadDefault"` // true when no setting holds the limit; it is the default from the last 7 days
+	DailyDefault  bool             `json:"dailyDefault"`
+	Raises        map[string]int64 `json:"raises"`
+	DailyUsed     int64            `json:"dailyUsed"`
+	Threads       []budgetRow      `json:"threads"`
 }
 
 func budgetCommand(ctx context.Context, cfg Config, args []string, w io.Writer) error {
@@ -83,6 +85,7 @@ func budgetCommand(ctx context.Context, cfg Config, args []string, w io.Writer) 
 // report lists threads most used first, so the group nearest its limit is on top.
 func (st budgetState) report() budgetReport {
 	r := budgetReport{Day: st.Day, ThreadLimit: st.Limits.Thread, DailyLimit: st.Limits.limit(budgetDaily, st.Limits.Daily),
+		ThreadDefault: st.Limits.ThreadDefault, DailyDefault: st.Limits.DailyDefault,
 		Raises: st.Limits.Raises, DailyUsed: budgetUsed(st.Daily), Threads: []budgetRow{}}
 	for _, t := range st.Totals {
 		used := budgetUsed(t)

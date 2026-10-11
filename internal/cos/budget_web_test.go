@@ -101,7 +101,7 @@ func TestSettingsBudgetPanelRenders(t *testing.T) {
 		`name="daily" type="text" inputmode="numeric" required value="100M"`,
 		`max="100000000" low="80000000" high="100000000" optimum="0" value="11100000"`,
 		`max="15000000" low="12000000" high="15000000" optimum="0" value="8100000"`,
-		"8.1M / 15M", "raised today", "never paused", "Default 10M", "Default 100M",
+		"8.1M / 15M", "raised today", "never paused", "Saved setting", "Default 100M from the last 7 days",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings missing %q", want)

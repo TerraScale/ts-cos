@@ -11,7 +11,7 @@ import (
 
 const budgetTestDay = "2026-10-11"
 
-var budgetTestLimits = budgetLimits{Thread: budgetThreadDefault, Daily: budgetDailyDefault, Raises: map[string]int64{}}
+var budgetTestLimits = budgetLimits{Thread: budgetThreadFloor, Daily: budgetDailyFloor, Raises: map[string]int64{}}
 
 func budgetTestTotal(used int64) UsageTotal {
 	return UsageTotal{Key: "beta/proj", Label: "TS-1 tokens", Host: "beta", Thread: "t1", Ticket: "TS-1", Input: used}
@@ -152,7 +152,7 @@ func TestBudgetClassify(t *testing.T) {
 		t.Fatalf("pause = %+v", got[0])
 	}
 	budgetItemValid(t, got[1].Inbox)
-	if got[1].Inbox.Kind != "question" || strings.Join(got[1].Inbox.Options, "|") != strings.Join(budgetThreadOptions, "|") {
+	if got[1].Inbox.Kind != "question" || strings.Join(got[1].Inbox.Options, "|") != strings.Join(budgetThreadOptionsFor(10_000_000), "|") {
 		t.Fatalf("pause inbox = %+v", got[1].Inbox)
 	}
 
@@ -182,7 +182,7 @@ func TestBudgetClassify(t *testing.T) {
 		t.Fatalf("fleet wake = %+v, want one wake for live t1 only", got[0])
 	}
 	budgetItemValid(t, got[1].Inbox)
-	if strings.Join(got[1].Inbox.Options, "|") != strings.Join(budgetFleetOptions, "|") {
+	if strings.Join(got[1].Inbox.Options, "|") != strings.Join(budgetFleetOptionsFor(100_000_000), "|") {
 		t.Fatalf("fleet options = %v", got[1].Inbox.Options)
 	}
 }
@@ -228,19 +228,27 @@ func TestBudgetRaise(t *testing.T) {
 		want   int64
 		ok     bool
 	}{
-		{thread, AnswerData{Option: budgetResume}, 15_000_000, true},
-		{thread, AnswerData{Option: budgetRaise2x}, 20_000_000, true},
+		{thread, AnswerData{Option: "Resume: allow 15M tokens today"}, 15_000_000, true},
+		{thread, AnswerData{Option: "Raise to 20M tokens today"}, 20_000_000, true},
+		{thread, AnswerData{Option: "Resume with +50% today"}, 15_000_000, true},
+		{thread, AnswerData{Option: "Raise to 2x today"}, 20_000_000, true},
+		{thread, AnswerData{Option: "Resume with +50% over today's use"}, 15_000_000, true},
+		{thread, AnswerData{Option: "Raise to 2x today's use"}, 20_000_000, true},
 		{thread, AnswerData{Option: budgetKeep}, 0, false},
 		{thread, AnswerData{Text: "go ahead"}, 0, false},
-		{fleet, AnswerData{Option: budgetResumeAll}, 125_000_000, true},
-		{fleet, AnswerData{Option: budgetRaiseAll}, 200_000_000, true},
+		{fleet, AnswerData{Option: "Resume all: allow 125M tokens today"}, 125_000_000, true},
+		{fleet, AnswerData{Option: "Raise today's limit to 200M tokens"}, 200_000_000, true},
+		{fleet, AnswerData{Option: "Resume all with +25% today"}, 125_000_000, true},
+		{fleet, AnswerData{Option: "Raise today's budget to 2x"}, 200_000_000, true},
+		{fleet, AnswerData{Option: "Resume all with +25% over today's use"}, 125_000_000, true},
+		{fleet, AnswerData{Option: "Raise today's budget to 2x today's use"}, 200_000_000, true},
 		{fleet, AnswerData{Option: budgetKeep}, 0, false},
 		{fleet, AnswerData{Text: "more please"}, 0, false},
 	}
 	for _, c := range cases {
 		item := c.item
 		item.Answer = &c.answer
-		key, value, ok := budgetRaise(item)
+		key, value, ok := budgetRaise(item, 0)
 		if ok != c.ok || value != c.want {
 			t.Errorf("%+v -> (%d, %v), want (%d, %v)", c.answer, value, ok, c.want, c.ok)
 		}
@@ -248,11 +256,73 @@ func TestBudgetRaise(t *testing.T) {
 			t.Errorf("key %q is not a raise key for %s", key, budgetTestDay)
 		}
 	}
-	if key, _, _ := budgetRaise(fleet); key != "" {
+	if key, _, _ := budgetRaise(fleet, 0); key != "" {
 		t.Errorf("unanswered item raised %q", key)
 	}
-	if _, _, ok := budgetRaise(InboxItem{Source: "cos", Key: thread.Key, Answer: &AnswerData{Option: budgetRaise2x}}); ok {
+	if _, _, ok := budgetRaise(InboxItem{Source: "cos", Key: thread.Key, Answer: &AnswerData{Option: "Raise to 2x today"}}, 0); ok {
 		t.Error("non-budget item raised a limit")
+	}
+}
+
+func TestBudgetRaiseStartsFromTodaysUse(t *testing.T) {
+	fleet := InboxItem{Source: string(SourceBudget), Key: "budget:" + budgetTestDay + ":daily:100:100000000",
+		Answer: &AnswerData{Option: "Resume all: allow 125M tokens today"}}
+	for _, c := range []struct {
+		name string
+		used int64
+		want int64
+	}{
+		{"used above limit", 139_000_000, 173_750_000},
+		{"used below limit", 40_000_000, 125_000_000},
+		{"no rows today", 0, 125_000_000},
+	} {
+		_, got, ok := budgetRaise(fleet, c.used)
+		if !ok || got != c.want {
+			t.Errorf("%s: raise = (%d, %v), want (%d, true)", c.name, got, ok, c.want)
+		}
+		if got <= c.used && c.used > 0 {
+			t.Errorf("%s: raise %d does not clear used %d", c.name, got, c.used)
+		}
+	}
+
+	scope := budgetScope("beta/proj")
+	thread := InboxItem{Source: string(SourceBudget), Key: "budget:" + budgetTestDay + ":" + scope + ":100:10000000",
+		Answer: &AnswerData{Option: "Raise to 2x today's use"}}
+	if _, got, _ := budgetRaise(thread, 16_000_000); got != 32_000_000 {
+		t.Errorf("thread raise 2x over 16M used = %d, want 32000000", got)
+	}
+
+	st := budgetState{Day: budgetTestDay, Daily: UsageTotal{Input: 139_000_000}, Totals: []UsageTotal{budgetTestTotal(16_000_000)}}
+	if got := budgetUsedFor(st, budgetDaily); got != 139_000_000 {
+		t.Errorf("daily used = %d, want 139000000", got)
+	}
+	if got := budgetUsedFor(st, scope); got != 16_000_000 {
+		t.Errorf("thread used = %d, want 16000000", got)
+	}
+	if got := budgetUsedFor(st, budgetScope("beta/other")); got != 0 {
+		t.Errorf("unknown scope used = %d, want 0", got)
+	}
+}
+
+func TestBudgetRaiseDoesNotRecross(t *testing.T) {
+	totals := []UsageTotal{budgetTestTotal(139_000_000)}
+	daily := UsageTotal{Input: 139_000_000}
+	item := InboxItem{Source: string(SourceBudget), Key: "budget:" + budgetTestDay + ":daily:100:100000000",
+		Answer: &AnswerData{Option: "Resume all: allow 125M tokens today"}}
+	_, value, ok := budgetRaise(item, budgetUsed(daily))
+	if !ok {
+		t.Fatal("budgetRaise rejected the answer")
+	}
+	raised := budgetTestLimits
+	raised.Raises = map[string]int64{budgetDaily: value}
+	for _, e := range budgetCrossings(totals, daily, raised, budgetTestDay) {
+		var d budgetData
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d.Scope == budgetDaily && e.Kind == KindBudgetExceeded {
+			t.Fatalf("sweep after the raise re-crossed 100%%: %+v", e)
+		}
 	}
 }
 
@@ -283,12 +353,61 @@ func TestBudgetLoadLimits(t *testing.T) {
 		budgetRaiseKey(budgetTestDay, scope):      []byte("30000000"),
 		budgetRaiseKey("2026-10-10", budgetDaily): []byte("999"),
 	}}
-	l, err := budgetLoadLimits(ctx, kv, budgetTestDay, []string{budgetDaily, scope})
+	def := budgetLimits{Thread: 30_000_000, Daily: 170_000_000}
+	l, err := budgetLoadLimits(ctx, kv, budgetTestDay, []string{budgetDaily, scope}, def)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Thread != 20_000_000 || l.Daily != budgetDailyDefault || l.Raises[scope] != 30_000_000 || len(l.Raises) != 1 {
+	if l.Thread != 20_000_000 || l.ThreadDefault || l.Daily != 170_000_000 || !l.DailyDefault || l.Raises[scope] != 30_000_000 || len(l.Raises) != 1 {
 		t.Fatalf("limits = %+v", l)
+	}
+}
+
+func TestBudgetDefaults(t *testing.T) {
+	row := func(day, project string, input int64) UsageRow {
+		return UsageRow{Day: day, Host: "beta", Project: project, Input: input}
+	}
+	for _, c := range []struct {
+		name          string
+		rows          []UsageRow
+		thread, daily int64
+	}{
+		{"no history", nil, budgetThreadFloor, budgetDailyFloor},
+		{"83M peak day doubles to 170M", []UsageRow{row("2026-10-10", "proj", 83_000_000)}, 170_000_000, 170_000_000},
+		{"today is excluded", []UsageRow{row(budgetTestDay, "proj", 500_000_000)}, budgetThreadFloor, budgetDailyFloor},
+		{"13.7M thread peak doubles to 30M", []UsageRow{row("2026-10-09", "proj", 13_700_000)}, 30_000_000, budgetDailyFloor},
+		{"day older than 7 days is excluded", []UsageRow{row("2026-10-03", "proj", 900_000_000)}, budgetThreadFloor, budgetDailyFloor},
+	} {
+		thread, daily := budgetDefaults(c.rows, budgetTestDay)
+		if thread != c.thread || daily != c.daily {
+			t.Errorf("%s: defaults = (%d, %d), want (%d, %d)", c.name, thread, daily, c.thread, c.daily)
+		}
+	}
+}
+
+func TestBudgetPauseOptionsCarryTokens(t *testing.T) {
+	if got := strings.Join(budgetThreadOptionsFor(120_000_000), "|"); got != "Resume: allow 180M tokens today|Raise to 240M tokens today|Keep paused until 00:00 UTC" {
+		t.Errorf("thread options = %q", got)
+	}
+	if got := strings.Join(budgetFleetOptionsFor(120_000_000), "|"); got != "Resume all: allow 150M tokens today|Raise today's limit to 240M tokens|Keep paused until 00:00 UTC" {
+		t.Errorf("fleet options = %q", got)
+	}
+}
+
+func TestBudgetTitleSaysSubscriptionNotBill(t *testing.T) {
+	e, ok := budgetEvent(budgetData{Scope: budgetDaily, Day: budgetTestDay, Used: 139_000_000, Limit: 100_000_000,
+		Cost: 94.49, Label: strings.Repeat("x", 120)}, "", "", "")
+	if !ok || !strings.Contains(e.Summary, "not a bill.") || !strings.Contains(e.Summary, "Claude subscription limits") {
+		t.Errorf("summary = %q", e.Summary)
+	}
+}
+
+func TestBudgetHint(t *testing.T) {
+	if got := budgetHint(30_000_000, true); got != "Default 30M from the last 7 days · e.g. 15M or 500k" {
+		t.Errorf("default hint = %q", got)
+	}
+	if got := budgetHint(15_000_000, false); got != "Saved setting · e.g. 15M or 500k" {
+		t.Errorf("saved hint = %q", got)
 	}
 }
 

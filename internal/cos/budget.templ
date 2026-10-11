@@ -13,12 +13,12 @@ templ budgetSection(d budgetPanelData) {
 				<div class="field">
 					<label class="field-label" for="budget-thread">Per thread, per day</label>
 					<input id="budget-thread" name="thread" type="text" inputmode="numeric" required value={ d.Thread } aria-describedby="budget-thread-hint"/>
-					<span id="budget-thread-hint" class="field-hint">Default 10M · e.g. 15M or 500k</span>
+					<span id="budget-thread-hint" class="field-hint">{ d.ThreadHint }</span>
 				</div>
 				<div class="field">
 					<label class="field-label" for="budget-daily">All threads, per day</label>
 					<input id="budget-daily" name="daily" type="text" inputmode="numeric" required value={ d.Daily } aria-describedby="budget-daily-hint"/>
-					<span id="budget-daily-hint" class="field-hint">Default 100M · e.g. 15M or 500k</span>
+					<span id="budget-daily-hint" class="field-hint">{ d.DailyHint }</span>
 				</div>
 				<div class="row">
 					<button class="btn-primary" type="submit">Save</button>

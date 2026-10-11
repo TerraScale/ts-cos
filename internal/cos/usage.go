@@ -712,12 +712,22 @@ func latestUsage(rows []UsageRow) UsageRow {
 
 func usageThread(t *UsageTotal, latest UsageRow, live Live) {
 	t.Host, t.Label = latest.Host, cmp.Or(latest.Worktree, latest.Project)
+	// A delegated child shares its parent's branch, so the top-level advisor wins over it.
+	var top, child *FleetThread
 	for _, h := range live.Fleet {
-		for _, th := range h.Threads {
-			if h.Host == latest.Host && latest.Branch != "" && th.Branch == latest.Branch && t.Thread == "" {
-				t.Thread, t.Label = th.ThreadID, cmp.Or(th.Title, t.Label)
+		for i, th := range h.Threads {
+			if h.Host != latest.Host || latest.Branch == "" || th.Branch != latest.Branch {
+				continue
+			}
+			if th.Lineage == nil {
+				top = cmp.Or(top, &h.Threads[i])
+			} else {
+				child = cmp.Or(child, &h.Threads[i])
 			}
 		}
+	}
+	if pick := cmp.Or(top, child); pick != nil {
+		t.Thread, t.Label = pick.ThreadID, cmp.Or(pick.Title, t.Label)
 	}
 	if latest.Kind == "cos" {
 		t.Label = "COS agent"

@@ -20,31 +20,34 @@ import (
 // cache writes and output count; cache reads are left out because they run about 20x
 // the volume at 5% of the price. Cost is still shown next to every budget.
 const (
-	budgetThreadDefault  = 10_000_000
-	budgetDailyDefault   = 100_000_000
+	// Floors for the defaults; the defaults grow past them from the last 7 days of use.
+	budgetThreadFloor    = 10_000_000
+	budgetDailyFloor     = 100_000_000
+	budgetHistoryDays    = 7
 	budgetSettingsThread = "budget.thread"
 	budgetSettingsDaily  = "budget.daily"
 	budgetWarnPercent    = 80
 	budgetMaxTokens      = 1_000_000_000_000
 	budgetDaily          = "daily"
 	budgetCOSLabel       = "COS agent"
-	budgetLabelMax       = 80
+	budgetLabelMax       = 40
 	// shortcut: the daily event lists at most 50 threads to fit its 4 KB data limit; upgrade by reading usage in Handle.
 	budgetPauseMax = 50
 )
 
-const (
-	budgetResume    = "Resume with +50% today"
-	budgetRaise2x   = "Raise to 2x today"
-	budgetKeep      = "Keep paused"
-	budgetResumeAll = "Resume all with +25% today"
-	budgetRaiseAll  = "Raise today's budget to 2x"
-)
+const budgetKeep = "Keep paused until 00:00 UTC"
 
-var (
-	budgetThreadOptions = []string{budgetResume, budgetRaise2x, budgetKeep}
-	budgetFleetOptions  = []string{budgetResumeAll, budgetRaiseAll, budgetKeep}
-)
+// budgetThreadOptionsFor and budgetFleetOptionsFor are the answers a pause question offers,
+// worked out from today's use when it is filed. budgetRaise matches them by their prefix.
+func budgetThreadOptionsFor(used int64) []string {
+	return []string{"Resume: allow " + budgetHuman(used+used/2) + " tokens today",
+		"Raise to " + budgetHuman(2*used) + " tokens today", budgetKeep}
+}
+
+func budgetFleetOptionsFor(used int64) []string {
+	return []string{"Resume all: allow " + budgetHuman(used+used/4) + " tokens today",
+		"Raise today's limit to " + budgetHuman(2*used) + " tokens", budgetKeep}
+}
 
 // budgetData is the payload of budget.warn and budget.exceeded.
 type budgetData struct {
@@ -63,10 +66,12 @@ type budgetThread struct {
 	Thread string `json:"thread"`
 }
 
-// budgetLimits are the base limits from settings plus today's raises, by scope.
+// budgetLimits are the base limits from settings plus today's raises, by scope. A base that
+// no setting holds is a default from the last 7 days, and its flag says so.
 type budgetLimits struct {
-	Thread, Daily int64
-	Raises        map[string]int64
+	Thread, Daily               int64
+	ThreadDefault, DailyDefault bool
+	Raises                      map[string]int64
 }
 
 func (l budgetLimits) limit(scope string, base int64) int64 {
@@ -137,8 +142,9 @@ func budgetEvent(d budgetData, host, thread, ticket string) (Event, bool) {
 	data, _ := json.Marshal(d)
 	e := Event{ID: NewEventID(SourceBudget, d.Day, d.Scope, strconv.FormatInt(mark, 10), strconv.FormatInt(d.Limit, 10)),
 		Source: SourceBudget, Kind: KindBudgetWarn, Time: time.Now().UTC(), Severity: SeverityWarn,
-		Summary: EventText(fmt.Sprintf("%s used %s of %s tokens today (%d%%, $%.2f)", d.Label, budgetHuman(d.Used), budgetHuman(d.Limit), d.Percent, d.Cost), eventSummaryMax),
-		Host:    host, Ticket: ticket, Thread: thread, Data: data}
+		Summary: EventText(fmt.Sprintf("%s used %s of %s tokens today (%d%%). Tokens count against your Claude subscription limits; $%.2f is the API list-price equivalent, not a bill.",
+			d.Label, budgetHuman(d.Used), budgetHuman(d.Limit), d.Percent, d.Cost), eventSummaryMax),
+		Host: host, Ticket: ticket, Thread: thread, Data: data}
 	if mark == 100 {
 		e.Kind, e.Severity = KindBudgetExceeded, SeverityUrgent
 	}
@@ -209,7 +215,7 @@ func budgetDecisions(e Event, live Live, owner *FleetThread) []Decision {
 	return []Decision{
 		{Class: ClassAct, Rule: "budget-pause", Reason: e.Summary, Host: e.Host, Thread: thread, Ticket: e.Ticket, Wake: wake},
 		{Class: ClassEscalate, Rule: "budget-pause", Reason: e.Summary, Host: e.Host, Thread: thread, Ticket: e.Ticket,
-			Inbox: inbox("question", budgetThreadOptions, key)},
+			Inbox: inbox("question", budgetThreadOptionsFor(b.Used), key)},
 	}
 }
 
@@ -226,12 +232,35 @@ func budgetPauseFleet(e Event, b budgetData, live Live, key string) []Decision {
 		}
 	}
 	return append(out, Decision{Class: ClassEscalate, Rule: "budget-pause", Reason: e.Summary,
-		Inbox: &InboxInput{Kind: "question", Title: e.Summary, Options: budgetFleetOptions, Source: string(SourceBudget), Key: key}})
+		Inbox: &InboxInput{Kind: "question", Title: e.Summary, Options: budgetFleetOptionsFor(b.Used), Source: string(SourceBudget), Key: key}})
+}
+
+// budgetItemScope is the scope a budget item key names, or "" when the key is not one.
+func budgetItemScope(item InboxItem) string {
+	parts := strings.Split(item.Key, ":")
+	if len(parts) != 5 {
+		return ""
+	}
+	return parts[2]
+}
+
+// budgetUsedFor is today's use for one scope; a scope with no rows today has used nothing.
+func budgetUsedFor(st budgetState, scope string) int64 {
+	if scope == budgetDaily {
+		return budgetUsed(st.Daily)
+	}
+	for _, t := range st.Totals {
+		if budgetScope(t.Key) == scope {
+			return budgetUsed(t)
+		}
+	}
+	return 0
 }
 
 // budgetRaise maps an answered budget item to the raised limit its option grants for that
-// day. Keep paused and free text grant nothing.
-func budgetRaise(item InboxItem) (key string, value int64, ok bool) {
+// day. The raise starts from the larger of the crossed limit and used, so it always clears
+// today's use. Keep paused and free text grant nothing.
+func budgetRaise(item InboxItem, used int64) (key string, value int64, ok bool) {
 	parts := strings.Split(item.Key, ":")
 	if item.Source != string(SourceBudget) || item.Answer == nil || len(parts) != 5 {
 		return "", 0, false
@@ -240,17 +269,26 @@ func budgetRaise(item InboxItem) (key string, value int64, ok bool) {
 	if err != nil {
 		return "", 0, false
 	}
-	switch item.Answer.Option {
-	case budgetResume:
-		value = limit + limit/2
-	case budgetRaise2x, budgetRaiseAll:
-		value = 2 * limit
-	case budgetResumeAll:
-		value = limit + limit/4
-	default:
+	grow, ok := budgetGrowth(item.Answer.Option)
+	if !ok {
 		return "", 0, false
 	}
-	return budgetRaiseKey(parts[1], parts[2]), value, true
+	return budgetRaiseKey(parts[1], parts[2]), grow(max(limit, used)), true
+}
+
+// budgetGrowth maps an answer to its factor by prefix. The first two cases of each pair are
+// the labels filed now; the rest are the labels filed before the limits were worked out from
+// today's use, which items still carry. Keep paused matches none.
+func budgetGrowth(option string) (func(int64) int64, bool) {
+	switch {
+	case strings.HasPrefix(option, "Resume all:"), strings.HasPrefix(option, "Resume all with +25%"):
+		return func(n int64) int64 { return n + n/4 }, true
+	case strings.HasPrefix(option, "Resume:"), strings.HasPrefix(option, "Resume with +50%"):
+		return func(n int64) int64 { return n + n/2 }, true
+	case strings.HasPrefix(option, "Raise to "), strings.HasPrefix(option, "Raise today's "):
+		return func(n int64) int64 { return 2 * n }, true
+	}
+	return nil, false
 }
 
 // budgetGet reads one integer setting; ok is false when the key is absent.
@@ -275,18 +313,24 @@ func budgetSetLimit(ctx context.Context, kv jetstream.KeyValue, setting string, 
 	return err
 }
 
-// budgetLoadLimits reads the base limits and the day's raises. A non-positive base is
-// ignored so a bad setting never makes every percentage divide by zero.
-func budgetLoadLimits(ctx context.Context, kv jetstream.KeyValue, day string, scopes []string) (budgetLimits, error) {
-	l := budgetLimits{Thread: budgetThreadDefault, Daily: budgetDailyDefault, Raises: map[string]int64{}}
-	for key, base := range map[string]*int64{budgetSettingsThread: &l.Thread, budgetSettingsDaily: &l.Daily} {
-		n, ok, err := budgetGet(ctx, kv, key)
-		if err != nil {
-			return l, err
-		}
-		if ok && n > 0 {
-			*base = n
-		}
+// budgetLoadLimits reads the base limits and the day's raises. def supplies each base that no
+// setting holds. A non-positive base is ignored so a bad setting never makes every percentage
+// divide by zero.
+func budgetLoadLimits(ctx context.Context, kv jetstream.KeyValue, day string, scopes []string, def budgetLimits) (budgetLimits, error) {
+	l := budgetLimits{Thread: def.Thread, Daily: def.Daily, ThreadDefault: true, DailyDefault: true, Raises: map[string]int64{}}
+	thread, ok, err := budgetGet(ctx, kv, budgetSettingsThread)
+	if err != nil {
+		return l, err
+	}
+	if ok && thread > 0 {
+		l.Thread, l.ThreadDefault = thread, false
+	}
+	daily, ok, err := budgetGet(ctx, kv, budgetSettingsDaily)
+	if err != nil {
+		return l, err
+	}
+	if ok && daily > 0 {
+		l.Daily, l.DailyDefault = daily, false
 	}
 	for _, scope := range scopes {
 		n, ok, err := budgetGet(ctx, kv, budgetRaiseKey(day, scope))
@@ -316,22 +360,67 @@ func loadBudgets(ctx context.Context, store *Store, settings jetstream.KeyValue,
 	if err != nil {
 		return st, err
 	}
-	st.Limits, err = budgetLoadLimits(ctx, settings, st.Day, scopes)
+	st.Limits, err = budgetLoadLimits(ctx, settings, st.Day, scopes, st.Limits)
 	return st, err
 }
 
-// budgetUsage reads today's totals and the scopes they name; the limits are left unset.
+// budgetHistoryStart is the first of the budgetHistoryDays complete days before today.
+func budgetHistoryStart(today string) string {
+	t, err := time.Parse(time.DateOnly, today)
+	if err != nil {
+		return today
+	}
+	return t.AddDate(0, 0, -budgetHistoryDays).Format(time.DateOnly)
+}
+
+// budgetDefaults sizes the base limits from the complete days before today, so a runaway
+// today cannot raise its own limit. Each default is twice the peak and never below its floor.
+func budgetDefaults(rows []UsageRow, today string) (thread, daily int64) {
+	start := budgetHistoryStart(today)
+	byDay := map[string][]UsageRow{}
+	byThread := map[[3]string][]UsageRow{}
+	for _, r := range rows {
+		if r.Day < start || r.Day >= today {
+			continue
+		}
+		byDay[r.Day] = append(byDay[r.Day], r)
+		k := [3]string{r.Day, r.Host, r.Project}
+		byThread[k] = append(byThread[k], r)
+	}
+	var peakDay, peakThread int64
+	for _, rs := range byDay {
+		peakDay = max(peakDay, budgetUsed(usageTotal(budgetDaily, rs)))
+	}
+	for _, rs := range byThread {
+		peakThread = max(peakThread, budgetUsed(usageTotal("thread", rs)))
+	}
+	return max(budgetThreadFloor, budgetRoundUp(2*peakThread, 5_000_000)),
+		max(budgetDailyFloor, budgetRoundUp(2*peakDay, 10_000_000))
+}
+
+func budgetRoundUp(n, step int64) int64 { return (n + step - 1) / step * step }
+
+// budgetUsage reads today's totals, the scopes they name, and the defaults from the history
+// window; the setting-backed limits are left for budgetLoadLimits.
 func budgetUsage(ctx context.Context, store *Store, now time.Time) (budgetState, []string, error) {
 	day := now.UTC().Format(time.DateOnly)
-	rows, err := store.Usage(ctx, day) // on or after today; no rows are dated later
+	rows, err := store.Usage(ctx, budgetHistoryStart(day)) // history and today; no rows are dated later
 	if err != nil {
 		return budgetState{}, nil, err
+	}
+	var today []UsageRow
+	for _, r := range rows {
+		if r.Day >= day {
+			today = append(today, r)
+		}
 	}
 	live, err := store.Live(ctx)
 	if err != nil {
 		return budgetState{}, nil, err
 	}
-	st := budgetState{Day: day, Totals: SummarizeUsage(rows, live, "thread"), Daily: usageTotal(budgetDaily, rows)}
+	st := budgetState{Day: day, Totals: SummarizeUsage(today, live, "thread"), Daily: usageTotal(budgetDaily, today)}
+	st.Limits = budgetLimits{ThreadDefault: true, DailyDefault: true}
+	st.Limits.Thread, st.Limits.Daily = budgetDefaults(rows, day)
 	scopes := []string{budgetDaily}
 	for _, t := range st.Totals {
 		scopes = append(scopes, budgetScope(t.Key))
@@ -384,7 +473,7 @@ func budgetSweep(ctx context.Context, bus *Bus, store *Store) error {
 // resumes every paused thread; a repeat stores nothing, so nothing is resumed twice.
 func budgetApply(ctx context.Context, bus *Bus, settings jetstream.KeyValue, st budgetState, history []InboxItem) error {
 	for _, item := range history {
-		key, value, ok := budgetRaise(item)
+		key, value, ok := budgetRaise(item, budgetUsedFor(st, budgetItemScope(item)))
 		if !ok || !strings.HasPrefix(key, budgetRaiseKey(st.Day, "")) {
 			continue
 		}

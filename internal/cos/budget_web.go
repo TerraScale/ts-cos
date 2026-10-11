@@ -19,9 +19,18 @@ const budgetUnavailable = "Budgets unavailable until COS NATS is ready"
 
 // budgetPanelData is the Token budgets section: the base limits as the form takes them, and today's meters.
 type budgetPanelData struct {
-	Thread, Daily string
-	Alert, Tone   string
-	Meters        []budgetMeter
+	Thread, Daily         string
+	ThreadHint, DailyHint string
+	Alert, Tone           string
+	Meters                []budgetMeter
+}
+
+// budgetHint says where a base limit comes from: the history default, or a saved setting.
+func budgetHint(n int64, fromHistory bool) string {
+	if fromHistory {
+		return "Default " + budgetHuman(n) + " from the last 7 days · e.g. 15M or 500k"
+	}
+	return "Saved setting · e.g. 15M or 500k"
 }
 
 // budgetMeter is one usage row; the string fields are what the <meter> attributes take.
@@ -49,10 +58,9 @@ func (w *Web) budgetPanel(ctx context.Context, now time.Time) budgetPanelData {
 		slog.Error("read budget usage", "error", err)
 		return budgetPanelData{Alert: "Cannot read today's token usage", Tone: "warn"}
 	}
-	st.Limits = budgetLimits{Thread: budgetThreadDefault, Daily: budgetDailyDefault}
 	d := budgetPanelData{Alert: budgetUnavailable, Tone: "warn"}
 	if kv := w.budgetKV(); kv != nil {
-		limits, err := budgetLoadLimits(ctx, kv, st.Day, scopes)
+		limits, err := budgetLoadLimits(ctx, kv, st.Day, scopes, st.Limits)
 		if err != nil {
 			slog.Error("read budget limits", "error", err)
 		} else {
@@ -60,6 +68,7 @@ func (w *Web) budgetPanel(ctx context.Context, now time.Time) budgetPanelData {
 		}
 	}
 	d.Thread, d.Daily = budgetInput(st.Limits.Thread), budgetInput(st.Limits.Daily)
+	d.ThreadHint, d.DailyHint = budgetHint(st.Limits.Thread, st.Limits.ThreadDefault), budgetHint(st.Limits.Daily, st.Limits.DailyDefault)
 	rep := st.report()
 	d.Meters = []budgetMeter{budgetMeterRow("All threads", rep.DailyUsed, rep.DailyLimit)}
 	d.Meters[0].Raised = rep.Raises[budgetDaily] > st.Limits.Daily
