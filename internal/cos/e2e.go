@@ -308,6 +308,11 @@ func e2eChecks() []E2ECheck {
 					return checkKPIsLive(ctx, e, h, urls[slices.Index(e2eHosts, h)], u)
 				})(ctx, e)
 			}},
+			E2ECheck{ID: "tokens.savings." + h, Stream: "TS-828", Run: func(ctx context.Context, e *E2EEnv) (string, error) {
+				return accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
+					return checkTokensSavings(ctx, e, h, urls[slices.Index(e2eHosts, h)], u)
+				})(ctx, e)
+			}},
 		)
 	}
 	for _, h := range e2eHosts {
