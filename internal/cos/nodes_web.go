@@ -20,7 +20,7 @@ func (w *Web) nodesPage(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := nodesPage(cards).Render(r.Context(), rw); err != nil {
+	if err := nodesPage(clusterOrEmpty(r.Context(), w.Bus), cards).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render nodes", err)
 	}
 }
@@ -38,7 +38,7 @@ func (w *Web) nodesEvents(rw http.ResponseWriter, r *http.Request) {
 			return err // end the stream so the browser reconnects instead of freezing
 		}
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := patchElements(ctx, rw, nodesGrid(cards)); err != nil {
+		if err := patchElements(ctx, rw, nodesGrid(clusterOrEmpty(ctx, w.Bus), cards)); err != nil {
 			return err
 		}
 		return controller.Flush()

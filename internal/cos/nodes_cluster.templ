@@ -1,0 +1,80 @@
+package cos
+
+// nodesCluster is the NATS cluster tile: members, streams and both leaders, with the stream and build detail behind a closed disclosure.
+templ nodesCluster(v ClusterView, cards []NodeCard) {
+	<section class="card card-compact" id="cluster">
+		<div class="row">
+			<span class="dot" data-state={ v.state() }></span>
+			<strong>NATS cluster</strong>
+		</div>
+		if v.Known {
+			<p class="muted">{ integer(v.membersUp()) }/{ integer(len(v.Members)) } members · { integer(v.streamsInSync()) }/{ integer(len(v.Streams)) } streams in sync</p>
+			<p class="muted">COS leader { orDash(v.COSLeader) } · meta leader { orDash(v.MetaLeader) }</p>
+			<details class="disclosure">
+				<summary>Streams and builds</summary>
+				@clusterStreams(v.Streams)
+				@clusterBuilds(v.COSLeader, cards)
+			</details>
+		} else {
+			<p class="muted">cluster unknown</p>
+		}
+	</section>
+}
+
+// clusterStreams lists each stream's leader and replicas in sync; a lagging stream gets a degraded dot.
+templ clusterStreams(streams []ClusterStream) {
+	<div class="table-wrap">
+		<table class="table table-compact">
+			<thead>
+				<tr>
+					<th scope="col">Stream</th>
+					<th scope="col">Leader</th>
+					<th scope="col" class="num">In sync</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, s := range streams {
+					<tr>
+						<th scope="row">{ s.Name }</th>
+						<td>{ orDash(s.Leader) }</td>
+						<td class="num">
+							if s.InSync < s.Replicas {
+								<span class="dot" data-state="degraded"></span>
+							}
+							{ integer(s.InSync) }/{ integer(s.Replicas) }
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// clusterBuilds lists each node's build; a node on another revision than the COS leader's is marked differs.
+templ clusterBuilds(leader string, cards []NodeCard) {
+	<div class="table-wrap">
+		<table class="table table-compact">
+			<thead>
+				<tr>
+					<th scope="col">Host</th>
+					<th scope="col">Revision</th>
+					<th scope="col">Built</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, c := range cards {
+					<tr>
+						<th scope="row">{ c.Host }</th>
+						<td>
+							{ buildRevisionText(c) }
+							if buildDiffers(cards, leader, c) {
+								<span class="badge">differs</span>
+							}
+						</td>
+						<td>{ buildTimeText(c) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}

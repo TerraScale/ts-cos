@@ -1,7 +1,7 @@
 package cos
 
 // nodesPage is the overview: one live card per node, repatched by nodesEvents.
-templ nodesPage(cards []NodeCard) {
+templ nodesPage(cluster ClusterView, cards []NodeCard) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Nodes · COS")
@@ -10,7 +10,7 @@ templ nodesPage(cards []NodeCard) {
 			<main class="page">
 				<section class="panel" aria-labelledby="nodes-heading">
 					<header class="panel-head"><h1 id="nodes-heading">Nodes</h1></header>
-					@nodesGrid(cards)
+					@nodesGrid(cluster, cards)
 				</section>
 			</main>
 		</body>
@@ -30,8 +30,8 @@ templ nodesTopbar() {
 }
 
 // nodesGrid is the patch target: every card redraws when /nodes/events sends it.
-// Desktop is 2×2; the NATS cluster tile fills the empty fourth cell in the next PR.
-templ nodesGrid(cards []NodeCard) {
+// Desktop is 2×2; the NATS cluster tile takes the last cell.
+templ nodesGrid(cluster ClusterView, cards []NodeCard) {
 	<div id="nodes-grid" class="grid-2">
 		if len(cards) == 0 {
 			<p class="empty">No nodes have reported yet.</p>
@@ -41,6 +41,9 @@ templ nodesGrid(cards []NodeCard) {
 				@nodeCard(c)
 			</div>
 		}
+		<div>
+			@nodesCluster(cluster, cards)
+		</div>
 	</div>
 }
 

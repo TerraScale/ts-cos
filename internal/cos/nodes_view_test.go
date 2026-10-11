@@ -93,7 +93,7 @@ var nonFinite = regexp.MustCompile(`NaN|\bInf\b`)
 
 func TestNodesPageRender(t *testing.T) {
 	var buf bytes.Buffer
-	if err := nodesPage(nodeFixtureCards(time.Now())).Render(context.Background(), &buf); err != nil {
+	if err := nodesPage(ClusterView{}, nodeFixtureCards(time.Now())).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	html := buf.String()
