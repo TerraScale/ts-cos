@@ -51,6 +51,8 @@ func (w *Web) routes() *http.ServeMux {
 	mux.HandleFunc("GET /settings", w.settings)
 	mux.HandleFunc("GET /inbox", w.inboxPage)
 	mux.HandleFunc("GET /inbox/events", w.inboxEvents)
+	mux.HandleFunc("GET /tokens", w.tokensPage)
+	mux.HandleFunc("GET /tokens/events", w.tokensEvents)
 	w.autopilotRoutes(mux)
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := View(r.Context(), w.Store)

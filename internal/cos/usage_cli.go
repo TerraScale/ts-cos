@@ -24,7 +24,7 @@ func usageCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 	if len(args) > 1 {
 		by = args[1]
 	}
-	back, ok := map[string]int{"today": 0, "7d": 6, "30d": 29}[window]
+	back, ok := tokenWindows[window]
 	if !ok || !slices.Contains([]string{"thread", "ticket", "day", "model", "kind"}, by) {
 		return usage
 	}
