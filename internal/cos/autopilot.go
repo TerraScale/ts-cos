@@ -79,6 +79,7 @@ type Autopilot struct {
 	settings  jetstream.KeyValue
 	reconcile func(context.Context) []AutopilotEntry
 	engine    *RulesEngine // run while this node leads
+	compactor *Compactor   // worker compaction, run by the leader's beat
 
 	mu       sync.Mutex
 	leading  context.Context // non-nil while this node holds the cluster lease
@@ -94,6 +95,9 @@ func StartAutopilot(ctx context.Context, host string, bus *Bus, store *Store, re
 		return nil, err
 	}
 	a := &Autopilot{Host: host, bus: bus, store: store, conn: bus.conn, js: js, reconcile: reconcile, engine: engine}
+	a.compactor = &Compactor{Call: bus.Call, KV: func(ctx context.Context) (jetstream.KeyValue, error) {
+		return js.KeyValue(ctx, autopilotSettings)
+	}, Publish: a.publish}
 	if engine != nil {
 		engine.JS, engine.Publish = js, a.publish
 	}
@@ -274,6 +278,9 @@ func (a *Autopilot) beat(ctx context.Context, reason string) {
 	a.publish(ctx, AutopilotEntry{Kind: "beat", Action: "Heartbeat", Reason: reason})
 	for _, e := range a.reconcile(ctx) {
 		a.publish(ctx, e)
+	}
+	if live, err := a.store.Live(ctx); err == nil && ctx.Err() == nil {
+		a.compactor.Beat(ctx, live)
 	}
 }
 

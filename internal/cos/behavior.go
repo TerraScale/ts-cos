@@ -47,6 +47,8 @@ var behaviorTemplates = map[string]any{
 	"changes":  []SelfChange{{Summary: "Header label reads Fleet", SHA: "0123456789abcdef", Ticket: "TS-900", At: time.Unix(0, 0).UTC()}},
 	"selfbrief": SelfBrief{Ticket: "TS-900", Branch: "cos/ts-900-self", Summary: "Header label reads Fleet", Request: "rename the header to Fleet",
 		CheckFile: "checks/TS-900.json", Check: `{"summary": "Header reads Fleet", "path": "/", "contains": ["Fleet"]}`},
+	"compact_focus": nil,
+	"fresh_brief":   freshBrief{LastReply: "Pushed PR #90"},
 }
 
 // Templates that become chat status lines: one short line each.

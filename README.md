@@ -474,6 +474,16 @@ duplicate the real one under a different event ID and count as a second failure
 for same-failure escalation. The step uses no tokens, and its feed entry reads
 `Reconciler: N synthetic events` only when it published something.
 
+**Worker auto-compaction (TS-813).** Each beat reads the context use of every idle
+top-level worker thread; subagents and running threads are never touched. At 70%
+or more the thread is compacted with a handoff brief (`compact_focus.tmpl`), at
+most once per 30 minutes. Five minutes later, a thread still at 50% or more is
+replaced by a fresh Opus 5.5 thread (effort high) on the same worktree, seeded with
+its last reply (`fresh_brief.tmpl`); the old thread is settled, not deleted. When a
+ticket leaves the paused set, its idle threads are compacted and sent `RESUME`.
+Each action or failure is one feed entry. Per-thread state lives in `COS_AUTOPILOT`
+under `compact.<hash>`, so a new leader keeps it.
+
 ## Inbox
 
 The Inbox (`/inbox`, linked with its open count from the chat header) holds
