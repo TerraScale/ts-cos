@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -655,5 +656,48 @@ func TestCompactorRecordsHeldRefusal(t *testing.T) {
 	c.report(t.Context(), "delta", "t1", "compact", "", errors.New("boom"))
 	if len(got) != 2 || got[0].Kind != "record" || got[0].Reason != held.Error() || got[1].Kind != "error" {
 		t.Fatalf("entries = %+v, want a held record then an error", got)
+	}
+}
+
+// A request the bus could not deliver never reached T3: the claim stays, nothing is filed, and the stale-claim path re-sends the same message ID once.
+func TestSendNoResponderRedeliversSameID(t *testing.T) {
+	e := newSendTestEnv(t)
+	e.addThread("t1", "")
+	e.setHeadroom(false)
+	e.mustSend("t1", "once", "queue")
+	e.setHeadroom(true)
+	d := e.deliverer()
+	if err := d.tick(e.ctx); err != nil { // the first tick only schedules the entry
+		t.Fatal(err)
+	}
+	e.advance(sendStagger + sendJitter)
+	e.callErr = fmt.Errorf("COS node beta unavailable: %w", nats.ErrNoResponders)
+	if err := d.tick(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	q, ok := e.entry("t1")
+	if !ok || q.MessageID == "" || q.Error != "" || len(e.files) != 0 {
+		t.Fatalf("entry %+v, files %+v; want a kept claim, no error, no Inbox item", q, e.files)
+	}
+	id := q.MessageID
+	e.callErr = nil
+	for range 3 { // inside the claim window nothing is sent again
+		e.advance(sendTick)
+		if err := d.tick(e.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(e.calls) != 1 {
+		t.Fatalf("calls before the claim went stale = %d, want 1", len(e.calls))
+	}
+	e.advance(sendClaimStale)
+	if err := d.tick(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.calls) != 2 || e.calls[1][2] != "deliver:"+id || len(e.t3.dispatched) != 1 {
+		t.Fatalf("calls = %v, dispatched %d; want one re-send with %s", e.calls, len(e.t3.dispatched), id)
+	}
+	if _, ok := e.entry("t1"); ok {
+		t.Fatal("entry survived its redelivery")
 	}
 }

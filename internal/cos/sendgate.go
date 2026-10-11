@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -637,12 +638,20 @@ func (d *sendDeliverer) deliver(ctx context.Context, kv jetstream.KeyValue, key 
 	switch {
 	case ctx.Err() != nil:
 		return ctx.Err() // the claim stays; a later leader re-sends the same message ID
+	case err != nil && busUnreachable(err):
+		return nil // the request never reached T3, so the claim stays and the stale-claim path re-sends the same ID
 	case err != nil:
 		return d.fail(ctx, kv, key, e, text, err)
 	case out.Action == "busy" || out.Action == "queued":
 		return editSend(ctx, kv, key, releaseClaim)
 	}
 	return settleSend(ctx, kv, key, e.Texts)
+}
+
+// busUnreachable reports the bus's own transport failures: the handler never ran, so nothing reached T3.
+func busUnreachable(err error) bool {
+	return errors.Is(err, nats.ErrNoResponders) || errors.Is(err, context.DeadlineExceeded) ||
+		slices.Contains([]string{"COS request failed; local node unavailable", "COS bus closed"}, err.Error())
 }
 
 // fail keeps the error as the entry's state and files one Inbox item; nothing is resent.
