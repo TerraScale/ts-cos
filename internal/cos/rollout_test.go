@@ -371,9 +371,14 @@ func TestSourceBuildsStampedRevision(t *testing.T) {
 	if err := src.build(ctx, js, revision, change); err != nil {
 		t.Fatal(err)
 	}
-	store, _ := js.ObjectStore(ctx, buildsBucket)
-	info, err := store.GetInfo(ctx, revision)
-	if err != nil || info.Description != change || info.Size < 1<<20 {
+	store, err := js.ObjectStore(ctx, buildsBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The build is replicated to 3 nodes; under load a read from another replica can land before the write is visible.
+	var info *jetstream.ObjectInfo
+	busTestReady(t, "stored build "+revision, func() bool { info, err = store.GetInfo(ctx, revision); return err == nil })
+	if info.Description != change || info.Size < 1<<20 {
 		t.Fatalf("stored build %+v, %v", info, err)
 	}
 	if info.Metadata["rollout"] != strconv.Itoa(rolloutProtocol) {
