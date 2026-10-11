@@ -173,6 +173,7 @@ refused while one is active.
 cos deploy            # roll out main now (same checks; refused while a rollout runs)
 cos deploy <branch>   # roll out a branch or commit, e.g. to prove a rollback
 cos deploy status     # the current or last rollout
+cos deploy why        # what the leader's last main check found and why it is (not) rolling
 ```
 
 Every step is an event on `cos.events.deploy.>`: `deploy.started`,

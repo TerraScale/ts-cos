@@ -344,12 +344,28 @@ func rolledBackFYI(ctx context.Context, bus *Bus, host string, r Rollout) error 
 	slices.Sort(restored)
 	_, err = inbox.Add(ctx, InboxInput{Kind: "fyi", Source: "deploy", Key: "deploy:" + r.ID,
 		Title: deployLine("Deploy rolled back: "+r.Change, inboxTitleMax),
-		Context: fmt.Sprintf("Build %.12s failed its health gate: %s.\nRestored: %s. Nothing to do: a newer green main build deploys by itself.",
+		Context: fmt.Sprintf("Build %.12s failed its health gate: %s.\nRestored: %s. Nothing to do: the next main build deploys by itself.",
 			r.To, deployLine(r.Failure, 1000), strings.Join(restored, ", "))})
 	return err
 }
 
 func failedKey(revision string) string { return "failed." + revision }
+
+// pollKey holds what the leader's last main check found, so `cos deploy why` can say
+// why nothing is rolling (2026-10-11: the controller idled 20 min without a word).
+const pollKey = "poll"
+
+type pollNote struct {
+	At        time.Time `json:"at"`
+	Leader    string    `json:"leader"`
+	Candidate string    `json:"candidate,omitempty"`
+	Reason    string    `json:"reason"`
+}
+
+func recordPoll(ctx context.Context, kv jetstream.KeyValue, leader, candidate, reason string) {
+	data, _ := json.Marshal(pollNote{At: time.Now().UTC(), Leader: leader, Candidate: candidate, Reason: reason})
+	_, _ = kv.Put(ctx, pollKey, data)
+}
 
 // failedRevision is "failed.<revision>" in cos_deploy. A gate can time out because the
 // cluster was busy rather than because the build is bad, so such a rollback is retried
@@ -457,15 +473,26 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 			e, err := kv.Get(ctx, failedKey(revision))
 			return err == nil && failedBlocks(e.Value(), time.Now())
 		})
-		if err != nil || head == current {
+		if err != nil {
+			recordPoll(ctx, kv, cfg.LocalHost, "", err.Error())
+			return nil
+		}
+		if head == current {
+			recordPoll(ctx, kv, cfg.LocalHost, head, "the cluster already runs it")
 			return nil
 		}
 		hosts, err := bus.Hosts(ctx)
 		if err != nil {
 			return err
 		}
-		if plan, err := planRollout(ctx, busOps{bus, cfg}, hosts, cfg.LocalHost, head); err != nil || len(plan) == 0 {
+		plan, err := planRollout(ctx, busOps{bus, cfg}, hosts, cfg.LocalHost, head)
+		if err != nil {
+			recordPoll(ctx, kv, cfg.LocalHost, head, "waiting: "+err.Error())
 			return err
+		}
+		if len(plan) == 0 {
+			recordPoll(ctx, kv, cfg.LocalHost, head, "every host already runs it")
+			return nil
 		}
 		started, err := beginRollout(ctx, cfg, bus, kv, head, cfg.LocalHost)
 		if errors.As(err, new(buildError)) {
@@ -474,8 +501,10 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 			_, _ = kv.Put(ctx, failedKey(head), value)
 		}
 		if err != nil {
+			recordPoll(ctx, kv, cfg.LocalHost, head, "not started: "+err.Error())
 			return err
 		}
+		recordPoll(ctx, kv, cfg.LocalHost, head, "rolling out (rollout "+started.ID+")")
 		slog.Info("rollout started", "id", started.ID, "revision", started.To, "hosts", started.Hosts)
 		return nil
 	}
@@ -517,13 +546,14 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 }
 
 func init() {
-	cliCommands["deploy"] = cliCommand{Usage: "deploy [<branch|commit>|status]", Run: deployCommand}
+	cliCommands["deploy"] = cliCommand{Usage: "deploy [<branch|commit>|status|why]", Run: deployCommand}
 }
 
-// deployCommand: `cos deploy [<branch|commit>]` rolls a build out now; `cos deploy status` shows the last rollout.
+// deployCommand: `cos deploy [<branch|commit>]` rolls a build out now; `cos deploy status` shows the last rollout
+// and `cos deploy why` the leader's last main check.
 func deployCommand(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	if len(args) > 1 {
-		return errors.New("usage: cos deploy [<branch|commit>|status]")
+		return errors.New("usage: cos deploy [<branch|commit>|status|why]")
 	}
 	bus, err := ConnectBus(ctx, cfg)
 	if err != nil {
@@ -544,6 +574,20 @@ func deployCommand(ctx context.Context, cfg Config, args []string, w io.Writer) 
 			return err
 		}
 		return output(w, r)
+	}
+	if len(args) == 1 && args[0] == "why" {
+		e, err := kv.Get(ctx, pollKey)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return output(w, map[string]string{"reason": "no main check recorded yet"})
+		}
+		if err != nil {
+			return err
+		}
+		var note pollNote
+		if err := json.Unmarshal(e.Value(), &note); err != nil {
+			return err
+		}
+		return output(w, note)
 	}
 	ref := "main"
 	if len(args) == 1 {

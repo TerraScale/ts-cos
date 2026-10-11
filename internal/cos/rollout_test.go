@@ -551,3 +551,22 @@ func TestGateNeedsTwoHealthyReadings(t *testing.T) {
 		t.Fatalf("second consecutive healthy reading must pass: %v %v", event, err)
 	}
 }
+
+func TestRecordPollRoundTrips(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, buses := releaseCluster(t, ctx)
+	js, _ := buses[0].JetStream()
+	var kv jetstream.KeyValue
+	var err error
+	busTestReady(t, "deploy KV", func() bool { kv, err = deployKV(ctx, js); return err == nil })
+	recordPoll(ctx, kv, "beta", testRevision(4), "waiting: delta is on trial")
+	e, err := kv.Get(ctx, pollKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p pollNote
+	if json.Unmarshal(e.Value(), &p) != nil || p.Leader != "beta" || p.Candidate != testRevision(4) || p.Reason != "waiting: delta is on trial" || p.At.IsZero() {
+		t.Fatalf("poll note %s", e.Value())
+	}
+}
