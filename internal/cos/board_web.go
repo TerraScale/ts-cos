@@ -184,7 +184,7 @@ func eventTone(kind EventKind) string {
 	switch {
 	case strings.Contains(string(kind), "failed"), strings.Contains(string(kind), "conflict"), strings.Contains(string(kind), "exceeded"):
 		return "danger"
-	case kind == KindReview, kind == KindRequestPending, kind == KindBudgetWarn:
+	case kind == KindReview, kind == KindRequestPending:
 		return "warn"
 	case kind == KindPRMerged, kind == kindDeployDone:
 		return "ok"

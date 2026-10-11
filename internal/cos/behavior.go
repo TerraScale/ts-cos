@@ -51,6 +51,7 @@ var behaviorTemplates = map[string]any{
 	"compact_focus": nil,
 	"fresh_brief":   freshBrief{LastReply: "Pushed PR #90"},
 	"advise_split":  adviseData{Advisor: "claude-opus-5-5", Worker: "claude-haiku-5-5", Target: `{"providerInstanceId":"claudeAgent","model":"claude-haiku-5-5"}`},
+	"handoff_brief": handoffBrief{FromPair: "sol", FromModel: "gpt-6.1-sol", Reason: "run failed: boom", Wake: "COS wake", LastReply: "Pushed PR #90"},
 }
 
 // Templates that become chat status lines: one short line each.

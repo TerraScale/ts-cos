@@ -452,18 +452,7 @@ func (c *T3) Tidy(ctx context.Context) (TreeResult, error) {
 // handoffCompactTokens is the context use above which a handoff compacts the thread first.
 const handoffCompactTokens = 20000
 
-// Handoff moves an idle thread to sel's model; the gate sends the brief after it.
-func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any) (any, error) {
-	window := 200000
-	for _, key := range []string{"instanceId", "model"} {
-		switch sel[key] {
-		case "codex":
-			window = 258400
-		case "claudeAgent":
-			window = 1000000
-		}
-	}
-	budget := window / 2
+func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief string) (any, error) {
 	p, err := c.WaitIdle(ctx, id, 20*time.Minute)
 	if err != nil {
 		return nil, err
@@ -480,13 +469,15 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any) (any, e
 		usage = compacted.After
 		steps = append(steps, map[string]any{"afterCompact": usage})
 	}
-	if usage.UsedTokens > budget {
-		return map[string]any{"action": "fresh-thread-needed", "budget": budget, "ctx": usage, "steps": steps}, nil
-	}
 	if _, err := c.Dispatch(ctx, map[string]any{"type": "thread.model-selection.set", "threadId": id, "modelSelection": sel}); err != nil {
 		return nil, err
 	}
-	return map[string]any{"action": "handed-off", "to": sel["model"], "budget": budget, "ctx": usage, "steps": steps}, nil
+	if brief != "" {
+		if _, err := c.Send(ctx, id, brief, SendQueue); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"action": "handed-off", "to": sel["model"], "ctx": usage, "steps": steps}, nil
 }
 
 // InventoryThread is one live thread in cleanup planning output.

@@ -260,3 +260,96 @@ func TestCodexTotalsMatchScanner(t *testing.T) {
 		t.Fatalf("codexTotals = %+v, scanner = %+v; want equal and non-empty", got, want)
 	}
 }
+
+// codexCallLine is a custom_tool_call, the shape of codex's exec tool, whose input is the JS source.
+func codexCallLine(ts, callID, input string) string {
+	return fmt.Sprintf(`{"timestamp":%q,"type":"response_item","payload":{"type":"custom_tool_call","call_id":%q,"name":"exec","input":%q}}`+"\n", ts, callID, input)
+}
+
+// codexOutputLine is a custom_tool_call_output whose output is a list of input_text blocks.
+func codexOutputLine(ts, callID, text string) string {
+	return fmt.Sprintf(`{"timestamp":%q,"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":%q,"output":[{"type":"input_text","text":%q}]}}`+"\n", ts, callID, text)
+}
+
+// codexReworkStart is a session's first lines. Each rework test then adds a rework call, its output and a token_count
+// whose delta over this start is 300 uncached input, 50 cache writes and 60 output, so usageTokens counts 410.
+func codexReworkStart(base time.Time) []string {
+	return []string{
+		codexMetaLine(codexStamp(base, "10:00:00Z"), "s1", "/home/mariogk/.t3/worktrees/ts-cos/cos-ts-826-x", "cos/ts-826-x"),
+		codexTurnLine(codexStamp(base, "10:00:01Z"), "gpt-6.1-sol", "xhigh"),
+		codexCountLine(codexStamp(base, "10:00:02Z"), 1000, 400, 0, 100),
+	}
+}
+
+func TestScanCodexSessionCountsGateReaction(t *testing.T) {
+	base := codexDayBase()
+	lines := codexReworkStart(base)
+	lines = append(lines,
+		codexCallLine(codexStamp(base, "10:00:03Z"), "c1", `tools.exec_command({cmd: "sh .cos/gate.sh 12 cos/x"})`),
+		codexOutputLine(codexStamp(base, "10:00:04Z"), "c1", "LOCAL GATE FAIL: go test ./internal/cos"),
+		codexCountLine(codexStamp(base, "10:00:05Z"), 1500, 600, 50, 160),
+	)
+	rows, err := scanCodexSession(writeRollout(t, t.TempDir(), "a.jsonl", lines...), "delta", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := codexRowFor(t, rows, base.Format(time.DateOnly), "gpt-6.1-sol")
+	if r.Waste["gate"] != 410 || len(r.Waste) != 1 {
+		t.Fatalf("waste = %v, want gate 410 only", r.Waste)
+	}
+}
+
+func TestScanCodexSessionCountsRebaseReaction(t *testing.T) {
+	base := codexDayBase()
+	lines := codexReworkStart(base)
+	lines = append(lines,
+		codexCallLine(codexStamp(base, "10:00:03Z"), "c1", `tools.exec_command({cmd: "git rebase origin/main"})`),
+		codexOutputLine(codexStamp(base, "10:00:04Z"), "c1", "CONFLICT (content): Merge conflict in x.go"),
+		codexCountLine(codexStamp(base, "10:00:05Z"), 1500, 600, 50, 160),
+	)
+	rows, err := scanCodexSession(writeRollout(t, t.TempDir(), "a.jsonl", lines...), "delta", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := codexRowFor(t, rows, base.Format(time.DateOnly), "gpt-6.1-sol")
+	if r.Waste["rebase"] != 410 || len(r.Waste) != 1 {
+		t.Fatalf("waste = %v, want rebase 410 only", r.Waste)
+	}
+}
+
+func TestScanCodexSessionIgnoresPassingGate(t *testing.T) {
+	base := codexDayBase()
+	lines := codexReworkStart(base)
+	lines = append(lines,
+		codexCallLine(codexStamp(base, "10:00:03Z"), "c1", `tools.exec_command({cmd: "sh .cos/gate.sh 12 cos/x"})`),
+		codexOutputLine(codexStamp(base, "10:00:04Z"), "c1", "#12 MERGED"),
+		codexCountLine(codexStamp(base, "10:00:05Z"), 1500, 600, 50, 160),
+	)
+	rows, err := scanCodexSession(writeRollout(t, t.TempDir(), "a.jsonl", lines...), "delta", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := codexRowFor(t, rows, base.Format(time.DateOnly), "gpt-6.1-sol")
+	if len(r.Waste) != 0 {
+		t.Fatalf("waste = %v, want none", r.Waste)
+	}
+}
+
+func TestScanCodexSessionDuplicateKeepsPendingRework(t *testing.T) {
+	base := codexDayBase()
+	lines := codexReworkStart(base)
+	lines = append(lines,
+		codexCallLine(codexStamp(base, "10:00:03Z"), "c1", `tools.exec_command({cmd: "sh .cos/gate.sh 12 cos/x"})`),
+		codexOutputLine(codexStamp(base, "10:00:04Z"), "c1", "NOT MERGED: ci failing"),
+		codexCountLine(codexStamp(base, "10:00:04Z"), 1000, 400, 0, 100), // duplicate: zero delta
+		codexCountLine(codexStamp(base, "10:00:05Z"), 1500, 600, 50, 160),
+	)
+	rows, err := scanCodexSession(writeRollout(t, t.TempDir(), "a.jsonl", lines...), "delta", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := codexRowFor(t, rows, base.Format(time.DateOnly), "gpt-6.1-sol")
+	if r.Waste["gate"] != 410 || len(r.Waste) != 1 {
+		t.Fatalf("waste = %v, want gate 410 only", r.Waste)
+	}
+}

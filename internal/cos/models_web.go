@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"time"
 )
 
 // modelsPanelData is the Model policy section on Settings: the policy as it runs now, and the form that changes it.
@@ -110,5 +109,5 @@ func (w *Web) modelsSave(rw http.ResponseWriter, r *http.Request) {
 
 // modelsRejected re-renders Settings with why the Model policy change did not happen.
 func (w *Web) modelsRejected(rw http.ResponseWriter, r *http.Request, alert string, status int) {
-	w.renderSettings(rw, r, status, w.budgetPanel(r.Context(), time.Now()), modelsPanelFor(CurrentBehavior().Models, alert))
+	w.renderSettings(rw, r, status, modelsPanelFor(CurrentBehavior().Models, alert))
 }
