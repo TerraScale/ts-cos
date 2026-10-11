@@ -305,8 +305,8 @@ func TestClassify(t *testing.T) {
 		},
 		{
 			name:  "credential cooldown is transient",
-			event: Event{ID: "t3:turn-21", Source: SourceT3, Kind: KindTurnFailed, Summary: "API Error: Server is temporarily limiting requests (not your usage limit) · All credentials for model claude-opus-5-5 are cooling down", Host: "beta", Thread: "t1"},
-			want:  []Decision{{Class: ClassRecord, Rule: "transient-failure"}},
+			event: Event{ID: "t3:turn-21", Source: SourceT3, Kind: KindTurnFailed, Summary: "TS-1 · ts-cos: x: turn failed", Host: "beta", Thread: "t1", Data: json.RawMessage(`{"error":"API Error: Server is temporarily limiting requests (not your usage limit) · All credentials for model claude-opus-5-5 are cooling down"}`)},
+			want:  []Decision{{Class: ClassRecord, Rule: "limit-failure"}},
 			check: func(t *testing.T, got []Decision) {
 				if got[0].Wake != "" || got[0].Model != nil {
 					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
