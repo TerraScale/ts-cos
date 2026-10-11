@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"time"
 
 	"git.terrascale.tech/TerraScale/ts-cos/checks"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Every committed self-change acceptance check is also a live `cos e2e` check, so a
@@ -86,4 +89,27 @@ func checkSelfGate(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", fmt.Errorf("%s is not on 3 current replicas (configured %d)", selfBucket, info.Config.Replicas)
 	}
 	return selfBucket + " on 3 replicas; guard refuses login, deploy, CI, e2e and self-change paths", nil
+}
+
+// e2eRetryJS retries fn while JetStream is briefly unavailable (503, no responders or an attempt timing out during a leader election or a chaos freeze),
+// for up to 30 s; any other error returns at once.
+func e2eRetryJS[T any](ctx context.Context, fn func(context.Context) (T, error)) (T, error) {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		v, err := fn(ctx)
+		transient := jetStream503(err) || errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+		if err == nil || !transient || time.Now().After(deadline) {
+			return v, err
+		}
+		select {
+		case <-ctx.Done():
+			return v, err
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func jetStream503(err error) bool {
+	var api *jetstream.APIError
+	return errors.As(err, &api) && api.Code == 503 || errors.Is(err, nats.ErrNoResponders) || errors.Is(err, jetstream.ErrNoStreamResponse)
 }

@@ -24,17 +24,19 @@ func checkAdvisorPrinciple(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 	js, err := jetstream.New(bus.conn)
 	if err != nil {
 		return "", err
 	}
-	kv, err := js.KeyValue(ctx, behaviorBucket)
-	if err != nil {
-		return "", err
-	}
-	entry, err := kv.Get(ctx, behaviorKey)
+	entry, err := e2eRetryJS(ctx, func(ctx context.Context) (jetstream.KeyValueEntry, error) {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		kv, err := js.KeyValue(ctx, behaviorBucket)
+		if err != nil {
+			return nil, err
+		}
+		return kv.Get(ctx, behaviorKey)
+	})
 	if err != nil {
 		return "", err
 	}
