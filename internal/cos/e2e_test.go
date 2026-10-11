@@ -426,6 +426,44 @@ func TestE2EHostFactsCaches(t *testing.T) {
 	}
 }
 
+func TestNodeCollectorBuilt(t *testing.T) {
+	tests := []struct {
+		name, out string
+		built     bool
+		wantErr   bool
+	}{
+		{"collector", "usage: cos nodes [<host> [1h|24h|7d]]", true, false},
+		{"predates collector", `unknown command "nodes"; use cos help`, false, false},
+		{"no running process", "", false, true},
+		{"unexpected output", "bash: /proc/42/exe: No such file", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			probes := 0
+			env := &E2EEnv{cfg: Config{LocalHost: "delta"}, run: func(_ context.Context, host, script string) (string, error) {
+				if script == e2eFactsScript {
+					return factsText(with("Version", versionJSON(testSHA, false))), nil
+				}
+				if script != collectorProbeScript {
+					return "", fmt.Errorf("unexpected script for %s", host)
+				}
+				probes++
+				return tc.out, nil
+			}}
+			built, rev, err := env.nodeCollectorBuilt(t.Context(), "beta")
+			if (err != nil) != tc.wantErr || built != tc.built {
+				t.Fatalf("built=%t err=%v, want built=%t wantErr=%t", built, err, tc.built, tc.wantErr)
+			}
+			if err == nil && rev != "0123456789ab" {
+				t.Fatalf("revision = %q, want the 12-character prefix", rev)
+			}
+			if _, _, err := env.nodeCollectorBuilt(t.Context(), "beta"); err == nil && probes != 1 {
+				t.Fatalf("second call probed %d times, want the cached 1", probes)
+			}
+		})
+	}
+}
+
 func TestE2EFactsParse(t *testing.T) {
 	env := &E2EEnv{cfg: Config{LocalHost: "delta"}, run: func(context.Context, string, string) (string, error) {
 		return "noise line\nLoadState=loaded\nLogSample=level=ERROR boom\n", nil

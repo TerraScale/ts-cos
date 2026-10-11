@@ -101,11 +101,12 @@ type E2EEnv struct {
 	run  func(ctx context.Context, host, script string) (string, error)
 	main func(ctx context.Context) (e2eMain, error)
 
-	once     sync.Once
-	mainHead e2eMain
-	mainErr  error
-	mu       sync.Mutex
-	facts    map[string]e2eFacts
+	once       sync.Once
+	mainHead   e2eMain
+	mainErr    error
+	mu         sync.Mutex
+	facts      map[string]e2eFacts
+	collectors map[string]collectorProbe
 }
 
 // Host runs a bash script on a COS host (locally or over ssh) and returns its combined output.

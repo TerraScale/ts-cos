@@ -2,6 +2,7 @@ package cos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,6 +23,62 @@ func nodeStreamInfo(ctx context.Context, js jetstream.JetStream, name string) (*
 	return st.Info(ctx)
 }
 
+// collectorProbeScript runs the running binary's `nodes` with too many arguments: a build with the collector prints
+// usage, an older one rejects the command. Both answer before connecting anywhere.
+const collectorProbeScript = `pid=$(systemctl --user show ` + e2eUnit + ` -p MainPID --value); if [ "${pid:-0}" != 0 ]; then /proc/$pid/exe nodes probe probe probe 2>&1 | head -3; fi`
+
+// collectorProbe is one host's answer: whether its running build has the node collector, and its revision.
+type collectorProbe struct {
+	built bool
+	rev   string
+}
+
+// nodeCollectorBuilt probes host's running build for the node collector, once per run.
+func (e *E2EEnv) nodeCollectorBuilt(ctx context.Context, host string) (bool, string, error) {
+	e.mu.Lock()
+	c, ok := e.collectors[host]
+	e.mu.Unlock()
+	if ok {
+		return c.built, c.rev, nil
+	}
+	f, err := e.deployed(ctx, host)
+	if err != nil {
+		return false, "", err
+	}
+	var v struct {
+		Revision string `json:"revision"`
+	}
+	_ = json.Unmarshal([]byte(f["Version"]), &v)
+	c.rev = v.Revision[:min(len(v.Revision), 12)]
+	out, err := e.run(ctx, host, collectorProbeScript)
+	if err != nil {
+		return false, "", err
+	}
+	switch out = strings.TrimSpace(out); {
+	case out == "":
+		return false, "", fmt.Errorf("%s: %s has no running process", host, e2eUnit)
+	case strings.Contains(out, "usage: cos nodes"):
+		c.built = true
+	case strings.Contains(out, `unknown command "nodes"`):
+		// An older build rejects the command: built stays false.
+	default:
+		return false, "", fmt.Errorf("%s: unexpected collector probe output: %q", host, e2eClip(out, 200))
+	}
+	e.mu.Lock()
+	if e.collectors == nil {
+		e.collectors = map[string]collectorProbe{}
+	}
+	e.collectors[host] = c
+	e.mu.Unlock()
+	return c.built, c.rev, nil
+}
+
+// nodeOutdated reports whether host's running build predates the node collector, and that build's revision.
+func (e *E2EEnv) nodeOutdated(ctx context.Context, host string) (string, bool, error) {
+	built, rev, err := e.nodeCollectorBuilt(ctx, host)
+	return rev, err == nil && !built, err
+}
+
 // checkNodeData proves a host's newest sample is fresh and complete.
 func checkNodeData(host string) func(context.Context, *E2EEnv) (string, error) {
 	return func(ctx context.Context, e *E2EEnv) (string, error) {
@@ -38,6 +95,15 @@ func checkNodeData(host string) func(context.Context, *E2EEnv) (string, error) {
 			return "", err
 		}
 		s, err := NodeLatest(ctx, js, host)
+		if errors.Is(err, jetstream.ErrMsgNotFound) {
+			rev, outdated, perr := e.nodeOutdated(ctx, host)
+			if perr != nil {
+				return "", perr
+			}
+			if outdated {
+				return "", e2eSkip(fmt.Sprintf("TS-825: %s runs %s, which predates the node collector", host, rev))
+			}
+		}
 		if err != nil {
 			return "", fmt.Errorf("%s: no node sample: %w", host, err)
 		}
@@ -88,7 +154,7 @@ func checkNodeDownsampling(ctx context.Context, e *E2EEnv) (string, error) {
 	if age := time.Since(raw.State.FirstTime); age > nodesRawAge+5*time.Minute {
 		return "", fmt.Errorf("raw stream keeps a sample %s old, want at most 6h05m", age.Round(time.Second))
 	}
-	var warming []string
+	var warming, without []string
 	for _, h := range e2eHosts {
 		series, err := nodeRange(ctx, js, "1m", h, 10*time.Minute)
 		if err != nil {
@@ -105,6 +171,14 @@ func checkNodeDownsampling(ctx context.Context, e *E2EEnv) (string, error) {
 				return "", fmt.Errorf("%s: raw samples: %w", h, err)
 			}
 			if len(raw) == 0 {
+				rev, outdated, err := e.nodeOutdated(ctx, h)
+				if err != nil {
+					return "", err
+				}
+				if outdated {
+					without = append(without, fmt.Sprintf("%s runs %s without the collector", h, rev))
+					continue
+				}
 				return "", fmt.Errorf("%s: no raw samples in the last 10 min", h)
 			}
 			if raw[len(raw)-1].Time.Sub(raw[0].Time) < 2*time.Minute {
@@ -124,9 +198,15 @@ func checkNodeDownsampling(ctx context.Context, e *E2EEnv) (string, error) {
 			return "", fmt.Errorf("%s: 15m sample at %s is not 15-minute aligned", h, last.Time.Format(time.RFC3339))
 		}
 	}
+	if len(without) == len(e2eHosts) {
+		return "", e2eSkip("TS-825: " + strings.Join(without, "; "))
+	}
 	evidence := fmt.Sprintf("1m roll-ups minute-aligned and 15m roll-ups 15-minute aligned on %v; oldest raw sample %s old", e2eHosts, time.Since(raw.State.FirstTime).Round(time.Minute))
 	if len(warming) > 0 {
 		evidence += "; " + strings.Join(warming, ", ") + " warming up"
+	}
+	if len(without) > 0 {
+		evidence += "; " + strings.Join(without, "; ")
 	}
 	return evidence, nil
 }
