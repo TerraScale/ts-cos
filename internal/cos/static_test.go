@@ -70,5 +70,9 @@ func TestNoExternalStylesheets(t *testing.T) {
 				t.Errorf("%s contains %q; link cos.css with href={ templ.SafeURL(cssPath) }", file.Name(), banned)
 			}
 		}
+		// Datastar's data-show needs an initial display:none; any other inline style belongs in cos.css.
+		if strings.Count(src, "style=") != strings.Count(src, `style="display:none"`) {
+			t.Errorf("%s has an inline style=; use cos.css classes", file.Name())
+		}
 	}
 }

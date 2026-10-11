@@ -1,10 +1,11 @@
 package cos
 
 // releaseWatch goes in every page body: it reloads the tab once a rollout completes and
-// then shows what changed.
+// then shows what changed. The inline display:none keeps the toast hidden until
+// Datastar's data-show takes over, so it never flashes on load.
 templ releaseWatch() {
 	<div data-signals={ releaseSignals() } data-init={ sseGet("/release") } data-effect={ releaseEffect }></div>
-	<aside data-show="$_updated" data-init={ updatedInit } style="display:none;position:fixed;right:1rem;bottom:1rem;z-index:10;max-width:28rem">
-		<article role="status">Updated: { clusterRelease.get().Change }</article>
+	<aside class="toasts" data-show="$_updated" data-init={ updatedInit } style="display:none">
+		<div class="toast" data-tone="ok" role="status">Updated: { clusterRelease.get().Change }</div>
 	</aside>
 }

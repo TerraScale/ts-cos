@@ -59,13 +59,13 @@ templ tokenKPI(label, value, unit, tone string) {
 // tokenChart is one stacked column per UTC day, or per thread for today.
 templ tokenChart(d tokensPageData) {
 	<figure class="chart">
-		<div class="chart-head">
+		<figcaption class="chart-head">
 			<span class="chart-title">{ tokenChartTitle(d.Window) }</span>
 			<ul class="legend">
 				<li><span class="swatch" data-series="1"></span>Opus advisor</li>
 				<li><span class="swatch" data-series="2"></span>Haiku workers</li>
 			</ul>
-		</div>
+		</figcaption>
 		<div class="chart-body">
 			if d.Empty {
 				<p class="chart-empty">No usage yet in this window.</p>

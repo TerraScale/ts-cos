@@ -310,7 +310,7 @@ func tokenChart(d tokensPageData) templ.Component {
 			templ_7745c5c3_Var12 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<figure class=\"chart\"><div class=\"chart-head\"><span class=\"chart-title\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<figure class=\"chart\"><figcaption class=\"chart-head\"><span class=\"chart-title\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -323,7 +323,7 @@ func tokenChart(d tokensPageData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</span><ul class=\"legend\"><li><span class=\"swatch\" data-series=\"1\"></span>Opus advisor</li><li><span class=\"swatch\" data-series=\"2\"></span>Haiku workers</li></ul></div><div class=\"chart-body\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</span><ul class=\"legend\"><li><span class=\"swatch\" data-series=\"1\"></span>Opus advisor</li><li><span class=\"swatch\" data-series=\"2\"></span>Haiku workers</li></ul></figcaption><div class=\"chart-body\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
