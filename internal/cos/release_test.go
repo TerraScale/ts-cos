@@ -561,3 +561,32 @@ func TestActivateClearsLeftoverTrial(t *testing.T) {
 		t.Fatalf("current=%s trial=%q, want the second build on trial", got, r.trial())
 	}
 }
+
+// A build the watchdog reverted is never activated again on that host, while another build is.
+func TestActivateRefusesARevertedBuild(t *testing.T) {
+	home, r, good := homeReleases(t)
+	bad, next := testRevision(2), testRevision(3)
+	stageTest(t, r, bad)
+	stageTest(t, r, next)
+	if err := r.activate(bad); err != nil {
+		t.Fatal(err)
+	}
+	systemdStep(t, home, "ExecStopPost")
+	systemdStep(t, home, "ExecStartPre")
+	systemdStep(t, home, "ExecStopPost") // the trial build fails: the watchdog reverts it
+	if r.marker("reverted") != bad || linkOf(t, r, "current") != good {
+		t.Fatalf("setup: reverted=%q current=%s", r.marker("reverted"), linkOf(t, r, "current"))
+	}
+	if err := r.activate(bad); err == nil || !strings.Contains(err.Error(), "reverted on this host") {
+		t.Fatalf("re-activated a reverted build: %v", err)
+	}
+	if got := linkOf(t, r, "current"); got != good || r.marker("trial.next") != "" {
+		t.Fatalf("refused activate changed current=%s trial.next=%q", got, r.marker("trial.next"))
+	}
+	if err := r.activate(next); err != nil {
+		t.Fatalf("a different build was refused: %v", err)
+	}
+	if r.marker("reverted") != "" {
+		t.Fatal("activating another build kept the old reverted marker")
+	}
+}

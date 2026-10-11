@@ -136,7 +136,7 @@ reverts before starting. The watchdog
 therefore needs neither the new binary nor the cluster. The rollout confirms a
 healthy build with `release.commit` (it becomes `good`); an unconfirmed build
 stops itself after 10 minutes, which reverts it. `release.restore` puts a host
-back on a given build.
+back on a given build. A host never activates a build its watchdog reverted; only a different build clears that.
 
 ### Rolling deploys (TS-818)
 

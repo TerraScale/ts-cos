@@ -140,6 +140,11 @@ func preflight(ctx context.Context, bin, revision string) error {
 
 // activate makes a staged build the one systemd starts next, on trial.
 func (r releases) activate(revision string) error {
+	// The watchdog reverted this build here; installing it again would only repeat the
+	// failure, so a host takes it back only after a different build was activated.
+	if r.marker("reverted") == revision {
+		return fmt.Errorf("build %.12s was reverted on this host by the watchdog; deploy a newer build", revision)
+	}
 	if err := r.remove("reverted"); err != nil {
 		return err
 	}
