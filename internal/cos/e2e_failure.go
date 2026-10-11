@@ -155,9 +155,11 @@ func checkSQLiteDiskFull(ctx context.Context, _ *E2EEnv) (string, error) {
 var procCgroup = "/proc/self/cgroup"
 
 // inUnit reports whether this process runs in the systemd unit's cgroup, which restarting the unit would stop.
+// An unreadable cgroup file counts as inside, so the check skips rather than restart its own node.
 func inUnit(unit string) bool {
-	data, _ := os.ReadFile(procCgroup)
-	return strings.Contains(string(data), "/"+strings.TrimSuffix(unit, ".service")+".service")
+	data, err := os.ReadFile(procCgroup)
+	// Unreadable: assume we are inside, so the check skips instead of restarting its own run.
+	return err != nil || strings.Contains(string(data), "/"+strings.TrimSuffix(unit, ".service")+".service")
 }
 
 // checkNATSRestart restarts the runner's own node, which restarts its embedded NATS server. The runner's

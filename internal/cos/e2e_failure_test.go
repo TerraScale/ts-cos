@@ -26,6 +26,10 @@ func TestInUnit(t *testing.T) {
 			t.Errorf("inUnit(%q) = %t, want %t", c.cgroup, got, c.want)
 		}
 	}
+	procCgroup = filepath.Join(t.TempDir(), "missing")
+	if !inUnit(e2eUnit) {
+		t.Errorf("inUnit with an unreadable cgroup file = false, want true")
+	}
 }
 
 func TestSQLiteDiskFullCheck(t *testing.T) {
