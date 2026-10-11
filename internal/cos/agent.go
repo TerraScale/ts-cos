@@ -115,10 +115,27 @@ func NewAgent(cfg Config, chat *Chat, store *Store, bus *Bus) *Agent {
 		Remote: bus.Call}
 }
 
+// openAgentKV binds COS_AGENT with leader-only reads, so Step never acts on a stale state.
+func openAgentKV(ctx context.Context, bus *Bus) (jetstream.KeyValue, error) {
+	if _, err := openKV(ctx, bus, agentBucket); err != nil {
+		return nil, err
+	}
+	js, err := bus.JetStream()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := leaderReads(ctx, js, agentBucket); err != nil {
+		return nil, err
+	}
+	return openKV(ctx, bus, agentBucket) // re-bind: the first handle still uses direct gets
+}
+
 // Run drives COS while this node holds the cluster lease (Bus.Lead) and idles otherwise.
 func (a *Agent) Run(ctx context.Context, bus *Bus) {
 	for a.KV == nil {
-		kv, err := openKV(ctx, bus, agentBucket)
+		kv, err := openAgentKV(ctx, bus)
 		if err == nil {
 			a.Context, err = openKV(ctx, bus, contextBucket)
 		}
@@ -501,7 +518,7 @@ func agentCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 		return err
 	}
 	defer bus.Close()
-	kv, err := openKV(ctx, bus, agentBucket)
+	kv, err := openAgentKV(ctx, bus)
 	if err != nil {
 		return err
 	}

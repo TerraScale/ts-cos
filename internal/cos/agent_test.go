@@ -144,7 +144,17 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 	}
 	chatTestWait(t, "chat ready", e.chat.Ready)
 	e.chatKV = agentTestOpen(t, ctx, nodes, chatBucket)
-	e.agentKV = agentTestOpen(t, ctx, nodes, agentBucket)
+	// The agent bucket is opened with leader-only reads, as production does.
+	chatTestWait(t, "agent bucket", func() bool {
+		for _, n := range nodes {
+			k, err := openAgentKV(ctx, n)
+			if err == nil {
+				e.agentKV = k
+				return true
+			}
+		}
+		return false
+	})
 	e.contextKV = agentTestOpen(t, ctx, nodes, contextBucket)
 	e.memoryKV = agentTestOpen(t, ctx, nodes, memoryBucket)
 	e.savingsKV = agentTestOpen(t, ctx, nodes, savingsBucket)
@@ -153,6 +163,13 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 		t.Fatal(err)
 	}
 	e.js = js
+	info, err := js.Stream(ctx, "KV_COS_AGENT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.CachedInfo().Config.AllowDirect {
+		t.Fatal("COS_AGENT allows direct gets; a lagging replica could serve a stale state")
+	}
 	// The rules engine's escalation log, created the way the autopilot creates it.
 	if err := (&Autopilot{Host: "delta", js: js}).setup(ctx); err != nil {
 		t.Fatal(err)
