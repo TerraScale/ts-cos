@@ -93,6 +93,7 @@ func e2eSignIn(ctx context.Context, base string, u *e2eUser) (string, error) {
 	return cookie, nil
 }
 
+// KV reads may be served by a replica that has not applied a write from another node yet, so checks wait for the state.
 // waitInboxPage polls a node's /inbox until want accepts it, for up to 10 s.
 // The open marker is the answer form action /inbox/<id>/answer, which only open items render.
 func waitInboxPage(ctx context.Context, base, cookie string, want func(body string) bool) error {
@@ -109,6 +110,29 @@ func waitInboxPage(ctx context.Context, base, cookie string, want func(body stri
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// waitInboxItem polls an item's KV entry until want accepts it, for up to 10 s; it returns the last item read.
+func waitInboxItem(ctx context.Context, in *Inbox, id string, want func(InboxItem) bool) (InboxItem, error) {
+	var item InboxItem
+	var readErr error
+	err := pollE2E(ctx, 10*time.Second, 200*time.Millisecond, func(ctx context.Context) (bool, error) {
+		item, readErr = e2eInboxItem(ctx, in, id)
+		if errors.Is(readErr, jetstream.ErrKeyNotFound) {
+			return false, nil
+		}
+		if readErr != nil {
+			return false, readErr
+		}
+		return want(item), nil
+	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		if readErr != nil {
+			return item, fmt.Errorf("no item within 10 s: %w", readErr)
+		}
+		return item, errors.New("item not in the expected state within 10 s")
+	}
+	return item, err
 }
 
 // pollE2E calls check every interval until it reports done or timeout passes; a check error stops it at once.
@@ -175,12 +199,11 @@ func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []str
 	if status != http.StatusNoContent {
 		return "", fmt.Errorf("answer on %s: HTTP %d, want 204", e2eHosts[idx], status)
 	}
-	stored, err := e2eInboxItem(ctx, in, item.ID)
+	stored, err := waitInboxItem(ctx, in, item.ID, func(s InboxItem) bool {
+		return s.Status == "answered" && s.Answer != nil && s.Answer.Option == "A" && s.ClosedOn == e2eHosts[idx]
+	})
 	if err != nil {
-		return "", err
-	}
-	if stored.Status != "answered" || stored.Answer == nil || stored.Answer.Option != "A" || stored.ClosedOn != e2eHosts[idx] {
-		return "", fmt.Errorf("stored item %s = status %q, answer %+v, closed on %q; want answered with option A on %s", item.ID, stored.Status, stored.Answer, stored.ClosedOn, e2eHosts[idx])
+		return "", fmt.Errorf("stored item %s = status %q, answer %+v, closed on %q; want answered with option A on %s: %w", item.ID, stored.Status, stored.Answer, stored.ClosedOn, e2eHosts[idx], err)
 	}
 	open := "/inbox/" + item.ID + "/answer"
 	for _, base := range urls {
@@ -230,9 +253,9 @@ func checkInboxConcurrentAnswer(ctx context.Context, in *Inbox, _ *Bus, urls []s
 	if len(winners) != 1 {
 		return "", fmt.Errorf("%d concurrent answers won, want exactly 1 (statuses %v)", len(winners), statuses)
 	}
-	stored, err := e2eInboxItem(ctx, in, item.ID)
+	stored, err := waitInboxItem(ctx, in, item.ID, func(s InboxItem) bool { return s.Status == "answered" && s.Answer != nil })
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("stored item %s = status %q, answer %+v; want answered: %w", item.ID, stored.Status, stored.Answer, err)
 	}
 	win := winners[0]
 	if stored.Answer == nil || stored.Answer.Option != options[win] {
@@ -258,24 +281,19 @@ func checkInboxDedup(ctx context.Context, in *Inbox, _ *Bus, _ []string, _ *e2eU
 	if same.ID != old.ID || same.Status != "open" {
 		return "", fmt.Errorf("same key filed %s (%s), want the open item %s", same.ID, same.Status, old.ID)
 	}
-	stored, err := e2eInboxItem(ctx, in, old.ID)
+	stored, err := waitInboxItem(ctx, in, old.ID, func(s InboxItem) bool { return s.Context == "second" })
 	if err != nil {
-		return "", err
-	}
-	if stored.Context != "second" {
-		return "", fmt.Errorf("stored context %q after the same key, want \"second\"", stored.Context)
+		return "", fmt.Errorf("stored context %q after the same key, want \"second\": %w", stored.Context, err)
 	}
 	newer, err := in.Add(ctx, e2eInboxInput("dedup-newer", InboxInput{Supersedes: []string{old.ID}}))
 	if err != nil {
 		return "", err
 	}
 	ids = append(ids, newer.ID)
-	superseded, err := e2eInboxItem(ctx, in, old.ID)
+	note := "Superseded by: " + newer.Title
+	superseded, err := waitInboxItem(ctx, in, old.ID, func(s InboxItem) bool { return s.Status == "superseded" && s.Note == note })
 	if err != nil {
-		return "", err
-	}
-	if want := "Superseded by: " + newer.Title; superseded.Status != "superseded" || superseded.Note != want {
-		return "", fmt.Errorf("old item = status %q, note %q; want superseded with note %q", superseded.Status, superseded.Note, want)
+		return "", fmt.Errorf("old item = status %q, note %q; want superseded with note %q: %w", superseded.Status, superseded.Note, note, err)
 	}
 	return "same key updated one open item; supersedes closed the old one with its note", nil
 }
