@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -168,8 +169,13 @@ func (s source) build(ctx context.Context, js jetstream.JetStream, revision, cha
 	if err != nil {
 		return fmt.Errorf("build store unavailable: %w", err)
 	}
-	if _, err := store.GetInfo(ctx, revision); err == nil {
-		return nil
+	// A stored build counts only if it records a rollout level at least this controller's;
+	// older entries (stored before levels existed) are built again and checked.
+	if info, err := store.GetInfo(ctx, revision); err == nil {
+		if level, _ := strconv.Atoi(info.Metadata["rollout"]); level >= rolloutProtocol {
+			return nil
+		}
+		_ = store.Delete(ctx, revision)
 	}
 	for _, args := range [][]string{{"checkout", "-q", "--force", "--detach", revision}, {"clean", "-q", "-fdx"}} {
 		if _, err := s.run(ctx, "git", args...); err != nil {
@@ -185,7 +191,8 @@ func (s source) build(ctx context.Context, js jetstream.JetStream, revision, cha
 	if err := preflight(ctx, out, revision); err != nil {
 		return err
 	}
-	if err := canRollOut(ctx, out); err != nil {
+	level, err := canRollOut(ctx, out)
+	if err != nil {
 		return fmt.Errorf("build %.12s %w", revision, err)
 	}
 	f, err := os.Open(out)
@@ -193,7 +200,8 @@ func (s source) build(ctx context.Context, js jetstream.JetStream, revision, cha
 		return err
 	}
 	defer f.Close()
-	if _, err := store.Put(ctx, jetstream.ObjectMeta{Name: revision, Description: change}, f); err != nil {
+	meta := jetstream.ObjectMeta{Name: revision, Description: change, Metadata: map[string]string{"rollout": strconv.Itoa(level)}}
+	if _, err := store.Put(ctx, meta, f); err != nil {
 		return fmt.Errorf("storing build: %w", err)
 	}
 	pruneBuildStore(ctx, store)
@@ -208,18 +216,18 @@ const rolloutProtocol = 2
 // canRollOut refuses a build whose rollout controller is older than this one: once every
 // node ran it, later merges could stop reaching the nodes (2026-10-11: a build without a
 // controller stranded the cluster).
-func canRollOut(ctx context.Context, bin string) error {
+func canRollOut(ctx context.Context, bin string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, bin, "version").Output()
 	var v Build
 	if err != nil || json.Unmarshal(out, &v) != nil {
-		return errors.New("does not start")
+		return 0, errors.New("does not start")
 	}
 	if v.Rollout < rolloutProtocol {
-		return fmt.Errorf("has rollout controller level %d, this cluster needs %d; deploying it would stop automatic deploys", v.Rollout, rolloutProtocol)
+		return 0, fmt.Errorf("has rollout controller level %d, this cluster needs %d; deploying it would stop automatic deploys", v.Rollout, rolloutProtocol)
 	}
-	return nil
+	return v.Rollout, nil
 }
 
 // pruneBuildStore keeps the newest keepBuilds builds; hosts keep their own copies of what they run.
@@ -234,14 +242,21 @@ func pruneBuildStore(ctx context.Context, store jetstream.ObjectStore) {
 	}
 }
 
-// newestGreenMain returns the newest commit on main whose CI is green and that never
-// failed a rollout. During a merge train main's head is nearly always still in CI, so
-// waiting for the head alone would never deploy. The walk stops at current, the build
-// the cluster already runs, so it never picks anything older.
-func newestGreenMain(ctx context.Context, cfg Config, current string, failed func(string) bool) (string, error) {
+// newestDeployableMain returns the newest commit on main that main's CI has not found red
+// and that never failed a rollout. Every main commit already passed the merge gate (the
+// PR's CI plus build, vet and test of the exact merge into main) and the canary gates the
+// running build, so waiting for main's own push CI only delays deploys: during a merge
+// train that CI queued for over 20 minutes. The walk never goes past the build the
+// cluster runs.
+func newestDeployableMain(ctx context.Context, cfg Config, current string, notBefore time.Time, failed func(string) bool) (string, error) {
 	f := Forgejo{Config: cfg}
 	var commits []struct {
-		SHA string `json:"sha"`
+		SHA    string `json:"sha"`
+		Commit struct {
+			Committer struct {
+				Date time.Time `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
 	}
 	if _, err := f.request(ctx, http.MethodGet, "/repos/"+forgejoOrg+"/ts-cos/commits?sha=main&limit=30&stat=false&verification=false&files=false", nil, &commits); err != nil {
 		return "", err
@@ -249,6 +264,10 @@ func newestGreenMain(ctx context.Context, cfg Config, current string, failed fun
 	for _, c := range commits {
 		if c.SHA == current {
 			return current, nil
+		}
+		// Main never goes back past the build the cluster runs (it may be a branch build).
+		if !notBefore.IsZero() && c.Commit.Committer.Date.Before(notBefore) {
+			return "", errors.New("no green main commit newer than the running build")
 		}
 		if !validRevision(c.SHA) || failed(c.SHA) {
 			continue
@@ -260,11 +279,11 @@ func newestGreenMain(ctx context.Context, cfg Config, current string, failed fun
 		if _, err := f.request(ctx, http.MethodGet, "/repos/"+forgejoOrg+"/ts-cos/commits/"+c.SHA+"/status", nil, &status); err != nil {
 			return "", err
 		}
-		if status.State == "success" && status.Total > 0 {
+		if status.State != "failure" && status.State != "error" {
 			return c.SHA, nil
 		}
 	}
-	return "", errors.New("no green main commit to deploy yet")
+	return "", errors.New("no deployable main commit yet")
 }
 
 func newRollout(revision, change string, hosts []string, now time.Time) Rollout {
@@ -332,6 +351,49 @@ func rolledBackFYI(ctx context.Context, bus *Bus, host string, r Rollout) error 
 
 func failedKey(revision string) string { return "failed." + revision }
 
+// failedRevision is "failed.<revision>" in cos_deploy. A gate can time out because the
+// cluster was busy rather than because the build is bad, so such a rollback is retried
+// with backoff; a build the watchdog reverted, one that does not build, or one that
+// failed retryLimit times is never retried by itself (`cos deploy` still can).
+type failedRevision struct {
+	Reason    string    `json:"reason"`
+	Attempts  int       `json:"attempts"`
+	RetryAt   time.Time `json:"retryAt,omitzero"`
+	Permanent bool      `json:"permanent,omitempty"`
+}
+
+const retryLimit = 3
+
+var retryBackoff = []time.Duration{5 * time.Minute, 15 * time.Minute}
+
+// afterRollback records one more failed rollout of r.To on top of prev.
+func afterRollback(prev failedRevision, r Rollout, now time.Time) failedRevision {
+	f := failedRevision{Reason: r.Failure, Attempts: prev.Attempts + 1}
+	if r.Broken || prev.Permanent || f.Attempts >= retryLimit {
+		f.Permanent = true
+	} else {
+		f.RetryAt = now.Add(retryBackoff[min(f.Attempts, len(retryBackoff))-1])
+	}
+	return f
+}
+
+// blocks reports whether the poller must skip the revision now. Records from before
+// retries existed are plain text and stay blocking.
+func failedBlocks(value []byte, now time.Time) bool {
+	var f failedRevision
+	if json.Unmarshal(value, &f) != nil {
+		return true
+	}
+	return f.Permanent || now.Before(f.RetryAt)
+}
+
+func (f failedRevision) outlook() string {
+	if f.Permanent {
+		return fmt.Sprintf("not retried automatically (attempt %d)", f.Attempts)
+	}
+	return fmt.Sprintf("retrying after %s (attempt %d of %d)", f.RetryAt.Local().Format("15:04"), f.Attempts+1, retryLimit)
+}
+
 // buildError marks a revision that cannot be built or does not start, as opposed to a cluster not ready for a rollout.
 type buildError struct{ error }
 
@@ -387,9 +449,13 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 		if r.Phase == phaseCompleted {
 			current = r.To
 		}
-		head, err := newestGreenMain(ctx, cfg, current, func(revision string) bool {
-			_, err := kv.Get(ctx, failedKey(revision))
-			return err == nil
+		var notBefore time.Time
+		if t, err := time.Parse(time.RFC3339, CurrentBuild(cfg).Time); err == nil {
+			notBefore = t
+		}
+		head, err := newestDeployableMain(ctx, cfg, current, notBefore, func(revision string) bool {
+			e, err := kv.Get(ctx, failedKey(revision))
+			return err == nil && failedBlocks(e.Value(), time.Now())
 		})
 		if err != nil || head == current {
 			return nil
@@ -404,7 +470,8 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 		started, err := beginRollout(ctx, cfg, bus, kv, head, cfg.LocalHost)
 		if errors.As(err, new(buildError)) {
 			// A build that does not compile or start is never retried by itself either.
-			_, _ = kv.Put(ctx, failedKey(head), []byte(err.Error()))
+			value, _ := json.Marshal(failedRevision{Reason: err.Error(), Attempts: 1, Permanent: true})
+			_, _ = kv.Put(ctx, failedKey(head), value)
 		}
 		if err != nil {
 			return err
@@ -431,11 +498,19 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 		}
 		publishDeploy(ctx, js, r, rolloutEvent{Kind: KindDeployCompleted})
 	case phaseRolledBack:
-		// Only a newer main build, or `cos deploy`, tries again.
-		_, _ = kv.Put(ctx, failedKey(r.To), []byte(r.Failure))
-		publishDeploy(ctx, js, r, rolloutEvent{Kind: KindDeployRolledBack, Reason: r.Failure})
-		if err := rolledBackFYI(ctx, bus, cfg.LocalHost, r); err != nil {
-			slog.Warn("deploy rollback not added to the Inbox", "error", err)
+		var prev failedRevision
+		if e, err := kv.Get(ctx, failedKey(r.To)); err == nil {
+			_ = json.Unmarshal(e.Value(), &prev)
+		}
+		f := afterRollback(prev, r, time.Now())
+		value, _ := json.Marshal(f)
+		_, _ = kv.Put(ctx, failedKey(r.To), value)
+		publishDeploy(ctx, js, r, rolloutEvent{Kind: KindDeployRolledBack, Reason: r.Failure + "; " + f.outlook()})
+		slog.Warn("rollout rolled back", "revision", r.To, "reason", r.Failure, "next", f.outlook())
+		if f.Permanent {
+			if err := rolledBackFYI(ctx, bus, cfg.LocalHost, r); err != nil {
+				slog.Warn("deploy rollback not added to the Inbox", "error", err)
+			}
 		}
 	}
 	return nil

@@ -140,9 +140,10 @@ back on a given build. A host never activates a build its watchdog reverted; onl
 
 ### Rolling deploys (TS-818)
 
-The leader checks main every minute. When the newest main commit with a green
-combined CI status (it walks back from the head, which is usually still in CI
-during a merge train, and never past the build the cluster runs) and some host does not run it, and every host answers healthy with none
+The leader checks main every minute. When the newest main commit that main's CI
+has not found red (merged commits already passed the merge gate; it does not wait
+for main's push CI, which queues for minutes during a merge train; never past the
+build the cluster runs) and some host does not run it, and every host answers healthy with none
 on trial, it builds that commit once (git checkout in `~/.local/share/cos/src`,
 `go build -trimpath`, build time stamped) into the three-replica `cos_builds`
 object store (newest three kept) and rolls it out one host at a time:
@@ -155,9 +156,12 @@ is registered from the new build, and TS-816's smoke checks for that host
 last-known-good and the next one starts. A failed gate (or the watchdog
 reverting the host) restores every updated host to its previous build, last
 updated first, adds an Inbox FYI ("Deploy rolled back: <change>", source
-`deploy`) and records `failed.<revision>` so only a newer main build (or
-`cos deploy`) tries again. A main build that does not compile or start is marked
-failed the same way.
+`deploy`) and records `failed.<revision>`. A gate that timed out (often a busy
+cluster, not a bad build) is retried after 5 and then 15 minutes, and each
+`deploy.rolled_back` event says when; a build the watchdog reverted, one that
+does not build or start, or one that failed three times is only retried by
+`cos deploy` or replaced by a newer main build. The Inbox FYI is sent when no
+retry is left.
 
 The rollout record is `rollout` in the three-replica `cos_deploy` KV, written
 with compare-and-set: a resumed leader continues it, and a second rollout is

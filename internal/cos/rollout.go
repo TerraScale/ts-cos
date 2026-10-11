@@ -44,7 +44,9 @@ type Rollout struct {
 	From    map[string]string `json:"from"`              // each updated host's last-known-good before the rollout
 	Pending []string          `json:"pending,omitempty"` // hosts on To, or still to restore while rolling back
 	Failure string            `json:"failure,omitempty"`
-	Last    string            `json:"last,omitempty"` // latest gate observation, for the failure reason
+	Broken  bool              `json:"broken,omitempty"` // the build itself failed (the watchdog reverted it), not the cluster
+	Last    string            `json:"last,omitempty"`   // latest gate observation, for the failure reason
+	Healthy time.Time         `json:"healthy,omitzero"` // first of two healthy gate readings
 	Started time.Time         `json:"started"`
 	Since   time.Time         `json:"since"` // start of the current phase
 }
@@ -99,28 +101,36 @@ func step(ctx context.Context, ops rolloutOps, r *Rollout, self string, now time
 				return fail(host, "install: "+err.Error()), nil
 			}
 		}
-		r.Phase, r.Since, r.Last = phaseGate, now, ""
+		r.Phase, r.Since, r.Last, r.Healthy = phaseGate, now, "", time.Time{}
 		return nil, nil
 	case phaseGate:
 		host := r.Hosts[r.Step]
 		h, err := ops.health(ctx, host)
 		switch {
 		case err != nil:
-			r.Last = "not answering"
+			r.Last, r.Healthy = "not answering", time.Time{}
 		case h.Reverted == r.To:
+			r.Broken = true
 			return fail(host, "the watchdog reverted it to its last-known-good build"), nil
 		case h.Revision != r.To:
-			r.Last = fmt.Sprintf("runs %.12s", h.Revision)
+			r.Last, r.Healthy = fmt.Sprintf("runs %.12s", h.Revision), time.Time{}
 		case len(h.Problems) > 0:
-			r.Last = strings.Join(h.Problems, "; ")
+			r.Last, r.Healthy = strings.Join(h.Problems, "; "), time.Time{}
 		default:
+			if r.Healthy.IsZero() || now.Sub(r.Healthy) < 5*time.Second {
+				if r.Healthy.IsZero() {
+					r.Healthy = now
+				}
+				r.Last = "healthy once; confirming"
+				break
+			}
 			if err := ops.smoke(ctx, host, r.To); err != nil {
 				r.Last = "smoke: " + err.Error()
 			} else if err := ops.release(ctx, host, "commit", r.To); err != nil {
 				r.Last = "commit: " + err.Error()
 			} else {
 				r.Step++
-				r.Phase, r.Since, r.Last = phaseInstall, now, ""
+				r.Phase, r.Since, r.Last, r.Healthy = phaseInstall, now, "", time.Time{}
 				if r.Step == len(r.Hosts) {
 					r.Phase, r.Pending = phaseCompleted, nil
 				}

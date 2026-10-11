@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -375,6 +376,9 @@ func TestSourceBuildsStampedRevision(t *testing.T) {
 	if err != nil || info.Description != change || info.Size < 1<<20 {
 		t.Fatalf("stored build %+v, %v", info, err)
 	}
+	if info.Metadata["rollout"] != strconv.Itoa(rolloutProtocol) {
+		t.Fatalf("stored build level %q", info.Metadata["rollout"])
+	}
 }
 
 func TestBuildErrorsAreRecognised(t *testing.T) {
@@ -443,40 +447,107 @@ func TestCanRollOutNeedsTheRolloutLevel(t *testing.T) {
 		}
 		return path
 	}
-	if err := canRollOut(context.Background(), script("current", fmt.Sprintf(`{"protocol":1,"rollout":%d}`, rolloutProtocol))); err != nil {
+	if _, err := canRollOut(context.Background(), script("current", fmt.Sprintf(`{"protocol":1,"rollout":%d}`, rolloutProtocol))); err != nil {
 		t.Fatalf("build at this rollout level refused: %v", err)
 	}
-	if err := canRollOut(context.Background(), script("older", `{"protocol":1}`)); err == nil || !strings.Contains(err.Error(), "rollout controller level 0") {
+	if _, err := canRollOut(context.Background(), script("older", `{"protocol":1}`)); err == nil || !strings.Contains(err.Error(), "rollout controller level 0") {
 		t.Fatalf("build with an older controller accepted: %v", err)
 	}
-	if err := canRollOut(context.Background(), script("broken", `not json`)); err == nil {
+	if _, err := canRollOut(context.Background(), script("broken", `not json`)); err == nil {
 		t.Fatal("build with unreadable version accepted")
 	}
 }
 
-// During a merge train the head is still in CI: the newest green commit deploys, never anything older.
-func TestNewestGreenMainSkipsPendingAndFailed(t *testing.T) {
+// During a merge train the head may be red or still in CI: the newest commit not found red deploys, never anything older.
+func TestNewestDeployableMainSkipsRedAndFailed(t *testing.T) {
 	head, failing, marked, green, deployed, older := testRevision(6), testRevision(5), testRevision(4), testRevision(3), testRevision(2), testRevision(1)
-	state := map[string]string{head: "pending", failing: "failure", marked: "success", green: "success", deployed: "success", older: "success"}
+	state := map[string]string{head: "failure", failing: "error", marked: "pending", green: "pending", deployed: "success", older: "success"}
 	f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/commits") {
-			fmt.Fprintf(w, `[{"sha":%q},{"sha":%q},{"sha":%q},{"sha":%q},{"sha":%q},{"sha":%q}]`, head, failing, marked, green, deployed, older)
+			fmt.Fprintf(w, `[{"sha":%q,"commit":{"committer":{"date":"2026-10-11T06:00:00Z"}}},{"sha":%q,"commit":{"committer":{"date":"2026-10-11T05:00:00Z"}}},`+
+				`{"sha":%q,"commit":{"committer":{"date":"2026-10-11T04:00:00Z"}}},{"sha":%q,"commit":{"committer":{"date":"2026-10-11T03:00:00Z"}}},`+
+				`{"sha":%q,"commit":{"committer":{"date":"2026-10-11T02:00:00Z"}}},{"sha":%q,"commit":{"committer":{"date":"2026-10-11T01:00:00Z"}}}]`, head, failing, marked, green, deployed, older)
 			return
 		}
 		sha := path.Base(strings.TrimSuffix(r.URL.Path, "/status"))
 		fmt.Fprintf(w, `{"state":%q,"total_count":3}`, state[sha])
 	})
 	failed := func(revision string) bool { return revision == marked }
-	got, err := newestGreenMain(context.Background(), f.Config, deployed, failed)
+	got, err := newestDeployableMain(context.Background(), f.Config, deployed, time.Time{}, failed)
 	if err != nil || got != green {
-		t.Fatalf("newest green = %.12s, %v; want %.12s (head pending, next failing, next marked failed)", got, err, green)
+		t.Fatalf("newest deployable = %.12s, %v; want %.12s (head red, next error, next marked failed, green still pending)", got, err, green)
 	}
-	state[green] = "pending"
-	if got, err := newestGreenMain(context.Background(), f.Config, deployed, failed); err != nil || got != deployed {
-		t.Fatalf("got %.12s, %v; with nothing newer green it must stop at the deployed build, not pick an older one", got, err)
+	state[green] = "failure"
+	if got, err := newestDeployableMain(context.Background(), f.Config, deployed, time.Time{}, failed); err != nil || got != deployed {
+		t.Fatalf("got %.12s, %v; with nothing newer deployable it must stop at the deployed build, not pick an older one", got, err)
 	}
-	state[deployed], state[older] = "pending", "pending"
-	if _, err := newestGreenMain(context.Background(), f.Config, "", failed); err == nil {
-		t.Fatal("found a green commit where none is green")
+	state[deployed], state[older] = "failure", "failure"
+	if _, err := newestDeployableMain(context.Background(), f.Config, "", time.Time{}, failed); err == nil {
+		t.Fatal("found a deployable commit where every commit is red")
+	}
+	// The running build is 02:30: green (03:00) is newer and deploys while it is not red; once it is red the walk
+	// must stop there, not reach deployed (02:00, deployable) or older.
+	notBefore := time.Date(2026, 10, 11, 2, 30, 0, 0, time.UTC)
+	state[green], state[deployed] = "pending", "success"
+	if got, err := newestDeployableMain(context.Background(), f.Config, "", notBefore, failed); err != nil || got != green {
+		t.Fatalf("got %.12s, %v; want the deployable commit newer than the running build", got, err)
+	}
+	state[green] = "failure"
+	if _, err := newestDeployableMain(context.Background(), f.Config, "", notBefore, failed); err == nil {
+		t.Fatal("walked back to a commit older than the running build")
+	}
+}
+
+// A gate that timed out (a busy cluster) is retried with backoff; a broken build never is.
+func TestRolloutRetriesAfterAGateTimeout(t *testing.T) {
+	now := time.Now()
+	timedOut := Rollout{To: testRevision(2), Failure: "beta: not healthy within 2m0s: JetStream not in sync"}
+	f := afterRollback(failedRevision{}, timedOut, now)
+	if f.Permanent || f.Attempts != 1 || !f.RetryAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("first timeout: %+v", f)
+	}
+	value, _ := json.Marshal(f)
+	if !failedBlocks(value, now.Add(time.Minute)) || failedBlocks(value, now.Add(6*time.Minute)) {
+		t.Fatal("a retry must wait for its backoff and then be allowed")
+	}
+	f = afterRollback(f, timedOut, now)
+	if f.Permanent || f.Attempts != 2 || !f.RetryAt.Equal(now.Add(15*time.Minute)) || !strings.Contains(f.outlook(), "attempt 3 of 3") {
+		t.Fatalf("second timeout: %+v %s", f, f.outlook())
+	}
+	if f = afterRollback(f, timedOut, now); !f.Permanent {
+		t.Fatalf("third timeout must stop retrying: %+v", f)
+	}
+	value, _ = json.Marshal(f)
+	if !failedBlocks(value, now.Add(24*time.Hour)) || !strings.Contains(f.outlook(), "not retried") {
+		t.Fatal("an exhausted revision must stay blocked")
+	}
+	broken := Rollout{To: testRevision(3), Failure: "beta: the watchdog reverted it", Broken: true}
+	if f := afterRollback(failedRevision{}, broken, now); !f.Permanent {
+		t.Fatalf("a build the watchdog reverted must never be retried: %+v", f)
+	}
+	if !failedBlocks([]byte("delta: the watchdog reverted it"), now) {
+		t.Fatal("plain-text records from before retries must keep blocking")
+	}
+}
+
+// One healthy reading is not enough: a node catching up after a restart can flap.
+func TestGateNeedsTwoHealthyReadings(t *testing.T) {
+	old, next := testRevision(1), testRevision(2)
+	f := newFakeFleet(t, old)
+	now := time.Now()
+	r := newRollout(next, "Change", []string{"beta", "delta"}, now)
+	if _, err := step(context.Background(), f, &r, "delta", now); err != nil || r.Phase != phaseGate {
+		t.Fatal(err)
+	}
+	for i, problems := range [][]string{nil, {"JetStream not in sync"}, nil} {
+		f.hosts["beta"].problems = problems
+		now = now.Add(rolloutTick)
+		if event, err := step(context.Background(), f, &r, "delta", now); err != nil || event != nil || r.Step != 0 {
+			t.Fatalf("reading %d: event=%v step=%d err=%v; a flapping host must not pass", i, event, r.Step, err)
+		}
+	}
+	now = now.Add(rolloutTick)
+	if event, err := step(context.Background(), f, &r, "delta", now); err != nil || event == nil || event.Kind != KindNodeUpdated {
+		t.Fatalf("second consecutive healthy reading must pass: %v %v", event, err)
 	}
 }
