@@ -359,13 +359,19 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 		bus.Lead(ctx, func(ctx context.Context) { runBudgets(ctx, bus, store) })
 	})
 	root := filepath.Join(home, ".claude", "projects")
+	codexRoot := filepath.Join(home, ".codex", "sessions")
 	var scanner usageScanner
+	var codex codexScanner
 	published := map[string][]byte{}
 	failed := 0
 	tick := time.NewTicker(usageScanEvery)
 	defer tick.Stop()
 	for {
-		rows, err := scanner.Scan(root, host, time.Now())
+		now := time.Now()
+		rows, err := scanner.Scan(root, host, now)
+		codexRows, codexErr := codex.Scan(codexRoot, host, now)
+		rows = append(rows, codexRows...)
+		err = errors.Join(err, codexErr)
 		if err != nil && ctx.Err() == nil {
 			logErr(ctx, slog.LevelError, "scan usage", err)
 		}
