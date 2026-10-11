@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"git.terrascale.tech/TerraScale/ts-cos/checks"
+	"github.com/TerraScale/ts-cos/checks"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )

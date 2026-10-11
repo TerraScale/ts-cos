@@ -116,7 +116,7 @@ func newIsolationFixture(t *testing.T) isolationFixture {
 		t.Fatal(err)
 	}
 	// Owner data: a PR whose title names a ticket becomes a Work task, and a live ask.
-	live := Live{At: "2026-10-11T12:00:00Z", Errors: map[string]string{}, PRs: []PR{{Repo: "ts-cos", Number: 931, URL: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/931", Title: "TS-931 " + markerPR}}, Asks: []Ask{{Host: "delta", ThreadID: "thread-931", RequestID: "req-931", Question: markerAsk, Options: []string{"Yes", "No"}}}}
+	live := Live{At: "2026-10-11T12:00:00Z", Errors: map[string]string{}, PRs: []PR{{Repo: "ts-cos", Number: 931, URL: "https://github.com/TerraScale/ts-cos/pulls/931", Title: "TS-931 " + markerPR}}, Asks: []Ask{{Host: "delta", ThreadID: "thread-931", RequestID: "req-931", Question: markerAsk, Options: []string{"Yes", "No"}}}}
 	if err := store.SaveLive(ctx, live); err != nil {
 		t.Fatal(err)
 	}
