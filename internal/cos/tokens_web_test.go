@@ -121,6 +121,68 @@ func TestHumanTokens(t *testing.T) {
 	}
 }
 
+func TestTokensDataSavings(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	day := now.Format("2006-01-02")
+	// Haiku: $0.70 spent, $28 at Opus prices. Advisor: $4 spent.
+	worker := UsageRow{Day: day, Host: "delta", Project: "-home-mariogk-t3-worktrees-ts-cos-ts-828-x", Kind: "worker", Worktree: "ts-828-x",
+		Branch: "cos/ts-828-x", Session: "w-1", Model: "claude-haiku-5-5", Input: 2e6, Output: 1e6, Messages: 20, First: now.Add(-time.Hour), Last: now}
+	advisor := UsageRow{Day: day, Host: "delta", Project: "-home-mariogk-local-share-cos-agent", Kind: "cos", Session: "cos-1",
+		Model: "claude-opus-5-5", Input: 1e6, Messages: 2, First: now, Last: now}
+	for _, r := range []UsageRow{worker, advisor} {
+		if err := store.SaveUsage(ctx, usageKey(r), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := NewWeb(store, nil)
+	kv := memoryTestBuckets(t, ctx, savingsBucket)[0]
+	w.Chat.savings = kv
+	if err := RecordSaving(ctx, kv, SavingRetrieval, 1e6, 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordSaving(ctx, kv, SavingParallel, 0, 3700, now); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := w.tokensData(ctx, "7d", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1M tokens priced as Opus input is $4; workers save $27.30 and the ledger $4 against $4.70 spent.
+	if !near(d.Ledger[SavingRetrieval], 4) || d.Ledger[SavingDedup] != 0 {
+		t.Errorf("ledger = %v, want retrieval $4 and nothing else", d.Ledger)
+	}
+	if d.WallSaved != 3700 {
+		t.Errorf("wall saved = %d, want 3700", d.WallSaved)
+	}
+	want := 31.3 / 36 * 100
+	if !near(d.SavedPct, want) || !near(d.DaySaved[day], want) {
+		t.Errorf("saved = %v and day %v, want %v", d.SavedPct, d.DaySaved[day], want)
+	}
+	if d.SavedTarget != savingsTargetPercent {
+		t.Errorf("target = %d, want %d", d.SavedTarget, savingsTargetPercent)
+	}
+
+	w.Chat.savings = nil
+	d, err = w.tokensData(ctx, "7d", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Ledger[SavingRetrieval] != 0 || d.WallSaved != 0 {
+		t.Errorf("without the ledger got ledger %v and wall %d, want none", d.Ledger, d.WallSaved)
+	}
+	if want := 27.3 / 32 * 100; !near(d.SavedPct, want) {
+		t.Errorf("saved without ledger = %v, want workers only %v", d.SavedPct, want)
+	}
+}
+
 func TestTokensPageRenders(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
 	if err != nil {
@@ -172,6 +234,7 @@ func TestTokensPageRenders(t *testing.T) {
 			`href="/tokens"`, `>Tokens</a>`, `<span class="kpi-label">Cost</span>`, `<span class="kpi-label">Haiku share</span>`,
 			`data-tone="ok"`, `<span class="kpi-label">Peak Haiku parallel</span>`, `data-series="2"`, `href="/work/TS-826"`,
 			`COS agent`, `2 rule actions`, `aria-pressed="true"`, `data-init="@get(&#39;/tokens/events?w=` + w,
+			`Memory retrieval`, `target 30%`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s missing %q", w, want)

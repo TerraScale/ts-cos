@@ -73,6 +73,7 @@ func TestPlanFileOverlap(t *testing.T) {
 		{"internal/cos/*.go", "internal/other/y.go", 1},
 		{"./src/a.go", "src/a.go", 2},
 		{"src/**", "src/deep/x.go", 2},
+		{"internal/cos/", "internal/cos/x.go", 2},
 		{"src/a.go", "lib/b.go", 1},
 	}
 	for _, c := range cases {

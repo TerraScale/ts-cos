@@ -78,7 +78,9 @@ func openKVConfig(ctx context.Context, b *Bus, cfg jetstream.KeyValueConfig) (je
 
 // Chat mirrors the replicated chat bucket in memory so every node renders the same live view.
 type Chat struct {
-	kv      jetstream.KeyValue
+	kv jetstream.KeyValue
+	// savings is the savings ledger bucket, read by the Tokens page.
+	savings jetstream.KeyValue
 	mu      sync.Mutex
 	entries map[string]ChatEntry
 	ready   bool
@@ -104,8 +106,9 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 		if err == nil {
 			_, err = openKV(ctx, b, memoryBucket)
 		}
+		var savings jetstream.KeyValue
 		if err == nil {
-			_, err = openKV(ctx, b, savingsBucket)
+			savings, err = openKV(ctx, b, savingsBucket)
 		}
 		var kv jetstream.KeyValue
 		if err == nil {
@@ -114,13 +117,16 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 		if err == nil {
 			var w jetstream.KeyWatcher
 			if w, err = kv.WatchAll(ctx); err == nil {
+				c.mu.Lock()
+				c.savings = savings
+				c.mu.Unlock()
 				c.follow(ctx, kv, w)
 				if ctx.Err() != nil {
 					return
 				}
 				// The bucket was deleted (re-bootstrap) or the watcher ended: rebuild from a fresh replay.
 				c.mu.Lock()
-				c.kv, c.ready = nil, false
+				c.kv, c.savings, c.ready = nil, nil, false
 				clear(c.entries)
 				c.notify("")
 				c.mu.Unlock()
@@ -134,6 +140,13 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// SavingsKV is the savings ledger bucket; nil until Run has bound it.
+func (c *Chat) SavingsKV() jetstream.KeyValue {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.savings
 }
 
 func (c *Chat) follow(ctx context.Context, kv jetstream.KeyValue, w jetstream.KeyWatcher) {

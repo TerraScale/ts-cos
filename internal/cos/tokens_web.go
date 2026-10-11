@@ -33,6 +33,11 @@ type tokensPageData struct {
 	RuleActions int
 	Workers     float64
 	Rules       float64
+	Ledger      map[string]float64
+	WallSaved   int
+	SavedPct    float64
+	SavedTarget int
+	DaySaved    map[string]float64
 	AdvisorAvg  float64
 	Threads     []UsageTotal
 	Tickets     []UsageTotal
@@ -66,6 +71,14 @@ func (w *Web) tokensData(ctx context.Context, window string, now time.Time) (tok
 	if err != nil {
 		return tokensPageData{}, err
 	}
+	// The ledger is optional: without it the card shows rules and workers only.
+	var ledgerDays []SavingsDay
+	if kv := w.Chat.SavingsKV(); kv != nil {
+		ledgerDays, err = SavingsReport(ctx, kv, back+1, now)
+		if err != nil {
+			slog.Warn("savings ledger unavailable", "error", err)
+		}
+	}
 	d := tokensPageData{Window: window, Empty: len(rows) == 0, Total: usageTotal("total", rows), RuleActions: actions}
 	d.Threads = SummarizeUsage(rows, live, "thread")
 	for _, t := range d.Threads {
@@ -75,6 +88,7 @@ func (w *Web) tokensData(ctx context.Context, window string, now time.Time) (tok
 	d.Models = SummarizeUsage(rows, live, "model")
 	d.Workers, d.Rules = tokenSavings(rows, actions)
 	d.AdvisorAvg = usageAdvisorAverage(rows)
+	d.addSavings(ledgerDays, rows)
 	if window == "today" {
 		d.Chart = barChart(threadColumns(foldThreads(d.Threads, 8)))
 	} else {
@@ -176,6 +190,43 @@ func (s *Store) ruleActions(ctx context.Context, since time.Time) (int, error) {
 		}
 	}
 	return n, rows.Err()
+}
+
+// addSavings fills the ledger, wall-clock saved and saved shares. days may be nil.
+func (d *tokensPageData) addSavings(days []SavingsDay, rows []UsageRow) {
+	d.Ledger = map[string]float64{}
+	ledgerByDay := map[string]float64{}
+	var ledger float64
+	for _, sd := range days {
+		for kind, c := range sd.Kinds {
+			// Ledger tokens are context the Opus advisor did not read, so they price as Opus input.
+			cost := UsageRow{Model: usageOpus, Input: int64(c.Tokens)}.Cost()
+			d.Ledger[kind] += cost
+			ledgerByDay[sd.Day] += cost
+			ledger += cost
+		}
+		d.WallSaved += sd.Kinds[SavingParallel].WallSeconds
+	}
+	byDay := map[string][]UsageRow{}
+	for _, r := range rows {
+		byDay[r.Day] = append(byDay[r.Day], r)
+	}
+	// shortcut: per-day rule actions are only counted per window, so day shares leave out zero-token rule savings; upgrade with a per-day autopilot counter.
+	d.DaySaved = map[string]float64{}
+	for day, dayRows := range byDay {
+		workers, _ := tokenSavings(dayRows, 0)
+		d.DaySaved[day] = savedPct(workers+ledgerByDay[day], usageTotal(day, dayRows).Cost)
+	}
+	d.SavedPct = savedPct(d.Workers+d.Rules+ledger, d.Total.Cost)
+	d.SavedTarget = savingsTargetPercent
+}
+
+// savedPct is the share of spend avoided: savings over savings plus what was spent, 0 when neither exists.
+func savedPct(saved, spent float64) float64 {
+	if saved+spent == 0 {
+		return 0
+	}
+	return saved / (saved + spent) * 100
 }
 
 // tokenSavings estimates the window's savings. Workers are priced at Opus list price
@@ -360,6 +411,10 @@ func humanTokens(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
 
-func money(v float64) string  { return fmt.Sprintf("$%.2f", v) }
-func usd(v float64) string    { return fmt.Sprintf("%.2f", v) }
-func svgNum(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
+func money(v float64) string   { return fmt.Sprintf("$%.2f", v) }
+func percent(v float64) string { return fmt.Sprintf("%.0f%%", v) }
+
+// clockDuration formats seconds as h:mm.
+func clockDuration(sec int) string { return fmt.Sprintf("%d:%02d", sec/3600, sec%3600/60) }
+func usd(v float64) string         { return fmt.Sprintf("%.2f", v) }
+func svgNum(v float64) string      { return strconv.FormatFloat(v, 'f', 2, 64) }

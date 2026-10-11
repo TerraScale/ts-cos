@@ -39,10 +39,10 @@ templ tokens(d tokensPageData) {
 		@tokenSavingsCard(d)
 		if !d.Empty {
 			@tokenThreadTable(d.Threads)
-			@tokenTotalsTable("By ticket", "Ticket", d.Tickets)
-			@tokenTotalsTable("By model", "Model", d.Models)
+			@tokenTotalsTable("By ticket", "Ticket", d.Tickets, nil)
+			@tokenTotalsTable("By model", "Model", d.Models, nil)
 			if d.Window != "today" {
-				@tokenTotalsTable("By day", "Day", d.Days)
+				@tokenTotalsTable("By day", "Day", d.Days, d.DaySaved)
 			}
 		}
 	</section>
@@ -109,6 +109,12 @@ templ tokenSavingsCard(d tokensPageData) {
 				<span class="row"><span>Zero-token rule actions (estimated)</span><span>{ money(d.Rules) }</span></span>
 				<span class="sub">{ integer(d.RuleActions) } rule actions × { money(d.AdvisorAvg) } average Opus advisor message.</span>
 			</li>
+			<li><span class="row"><span>Memory retrieval</span><span>{ money(d.Ledger[SavingRetrieval]) }</span></span></li>
+			<li><span class="row"><span>Digest dedup</span><span>{ money(d.Ledger[SavingDedup]) }</span></span></li>
+			<li><span class="row"><span>Digest caps</span><span>{ money(d.Ledger[SavingDigestCap]) }</span></span></li>
+			<li><span class="row"><span>Fresh-brief restarts</span><span>{ money(d.Ledger[SavingFreshBrief]) }</span></span></li>
+			<li><span class="row"><span>Parallel workers, wall-clock saved</span><span>{ clockDuration(d.WallSaved) }</span></span></li>
+			<li><span class="row"><span>Saved { percent(d.SavedPct) } of spend · target { integer(d.SavedTarget) }%</span></span></li>
 		</ul>
 	</section>
 }
@@ -152,7 +158,8 @@ templ tokenThreadTable(threads []UsageTotal) {
 	</section>
 }
 
-templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal) {
+// saved is each row's share of spend avoided, nil when the table has no Saved column.
+templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal, saved map[string]float64) {
 	<section class="card" aria-labelledby={ "tokens-" + keyHeader }>
 		<header class="card-head"><h3 id={ "tokens-" + keyHeader }>{ title }</h3></header>
 		<div class="table-wrap">
@@ -166,6 +173,9 @@ templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal) {
 						<th scope="col" class="num">Cache write</th>
 						<th scope="col" class="num">Cache read</th>
 						<th scope="col" class="num">Cost</th>
+						if saved != nil {
+							<th scope="col" class="num">Saved</th>
+						}
 					</tr>
 				</thead>
 				<tbody>
@@ -177,6 +187,9 @@ templ tokenTotalsTable(title, keyHeader string, rows []UsageTotal) {
 							<td class="num">{ humanTokens(t.CacheWrite) }</td>
 							<td class="num">{ humanTokens(t.CacheRead) }</td>
 							<td class="num">{ money(t.Cost) }</td>
+							if saved != nil {
+								<td class="num">{ percent(saved[t.Key]) }</td>
+							}
 						</tr>
 					}
 				</tbody>
