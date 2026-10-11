@@ -25,14 +25,15 @@ var t3ContextMarks = []int{80, 90}
 var t3TicketRef = regexp.MustCompile(`\b[A-Z][A-Z0-9]{1,9}-[0-9]+\b`)
 
 type t3Tracker struct {
-	host    string
-	runs    map[string]string // thread -> last terminal run:status
-	pending map[string]string // thread -> pending runtime request ID
-	context map[string]int    // thread -> last context percent
+	host     string
+	runs     map[string]string // thread -> last terminal run:status
+	pending  map[string]string // thread -> pending runtime request ID
+	context  map[string]int    // thread -> last context percent
+	disarmed map[string]bool   // thread|run|reset -> auto-resume already turned off
 }
 
 func newT3Tracker(host string) *t3Tracker {
-	return &t3Tracker{host: host, runs: map[string]string{}, pending: map[string]string{}, context: map[string]int{}}
+	return &t3Tracker{host: host, runs: map[string]string{}, pending: map[string]string{}, context: map[string]int{}, disarmed: map[string]bool{}}
 }
 
 func t3TurnKind(status string) (EventKind, Severity, bool) {
@@ -86,6 +87,12 @@ func (t *t3Tracker) observe(row Thread, snapshot bool, now time.Time) (events []
 				if lastError := EventText(row.LastError, 500); lastError != "" {
 					data["error"] = lastError
 				}
+				if row.LastErrorClass != "" {
+					data["errorClass"] = EventText(row.LastErrorClass, 100)
+				}
+				if row.UsageLimitResetAt != "" {
+					data["resetAt"] = EventText(row.UsageLimitResetAt, 100)
+				}
 				events = append(events, t.event(row, NewEventID(SourceT3, key), kind, severity, at, "turn "+row.Status, data))
 				ended = true
 			}
@@ -104,6 +111,26 @@ func (t *t3Tracker) observe(row Thread, snapshot bool, now time.Time) (events []
 			"waiting for "+EventText(request.Kind, 60), data))
 	}
 	return events, ended
+}
+
+// disarm turns off T3's auto-resume once per (thread, run, reset). T3 resumes at Anthropic's
+// reset time and ignores CLIProxyAPI cooldowns, so the resumed run would hit the limit again.
+func (t *t3Tracker) disarm(ctx context.Context, row Thread, dispatch func(context.Context, map[string]any) (any, error)) {
+	lr := row.LimitRecovery
+	if lr == nil || !lr.AutoResume || row.ArchivedAt != nil || row.DeletedAt != nil {
+		return
+	}
+	key := row.ID + "|" + lr.RunID + "|" + lr.ResetAt
+	if t.disarmed[key] {
+		return
+	}
+	t.disarmed[key] = true
+	// T3 rejects the command if the limit changed meanwhile; it is logged, never retried.
+	command := map[string]any{"type": "thread.metadata.update", "commandId": uuid(), "threadId": row.ID,
+		"limitRecovery": map[string]any{"runId": lr.RunID, "resetAt": lr.ResetAt, "autoResume": false}}
+	if _, err := dispatch(ctx, command); err != nil && ctx.Err() == nil {
+		logErr(ctx, slog.LevelWarn, "COS T3 auto-resume disarm failed", err, "host", t.host, "thread", row.ID)
+	}
 }
 
 // ended derives context.high and worker.needs_user from the projection of a thread
@@ -200,6 +227,7 @@ func ingestT3(ctx context.Context, tracker *t3Tracker, open func(context.Context
 			rows = []Thread{*value.Thread}
 		}
 		for _, row := range rows {
+			tracker.disarm(ctx, row, c.Dispatch)
 			events, ended := tracker.observe(row, snapshot, time.Now())
 			if ended && !snapshot {
 				if p, err := c.Projection(ctx, row.ID); err == nil {
