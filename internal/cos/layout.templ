@@ -7,6 +7,7 @@ templ docHead(title string) {
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"/>
 		<meta name="color-scheme" content="light dark"/>
 		<title>{ title }</title>
+		@pwaHead()
 		<link rel="stylesheet" href={ templ.SafeURL(cssPath) }/>
 		<link rel="icon" href="/static/icon.svg" type="image/svg+xml"/>
 		<link rel="icon" href="/static/favicon-32.png" sizes="32x32" type="image/png"/>

@@ -1,0 +1,10 @@
+package cos
+
+// pwaHead is the installer hooks only: icons and theme-color come from docHead.
+templ pwaHead() {
+	<link rel="manifest" href="/manifest.webmanifest"/>
+	<meta name="apple-mobile-web-app-capable" content="yes"/>
+	<meta name="mobile-web-app-capable" content="yes"/>
+	<meta name="apple-mobile-web-app-title" content="COS"/>
+	<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', {scope: '/'})</script>
+}

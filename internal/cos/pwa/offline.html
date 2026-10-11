@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>COS · Offline</title>
+<style>
+:root{--bg:#f7f8fa;--surface:#fff;--text:#15171c;--text-2:#555c69;--accent:#4f46e5;--on-accent:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0e11;--surface:#15171b;--text:#e9ebef;--text-2:#a2a9b5;--accent:#8f90ff;--on-accent:#0d0e11}}
+body{margin:0;min-height:100dvh;display:grid;place-items:center;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif}
+main{max-width:24rem;padding:2rem;text-align:center}
+h1{font-size:1.5rem;margin:1rem 0 .5rem}
+p{color:var(--text-2);line-height:1.5}
+button{font:inherit;padding:.6rem 1.4rem;border:0;border-radius:.5rem;background:var(--accent);color:var(--on-accent);cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+<img src="/static/icon.svg" width="48" height="48" alt="">
+<h1>You're offline</h1>
+<p>COS shows only live data, so nothing is displayed until this device reconnects.</p>
+<button onclick="location.reload()">Retry</button>
+</main>
+<script>addEventListener('online', () => location.reload())</script>
+</body>
+</html>

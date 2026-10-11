@@ -143,6 +143,7 @@ func (a *Auth) Protect(next, hooks http.Handler) http.Handler {
 	mux.HandleFunc("GET /login", func(rw http.ResponseWriter, r *http.Request) {
 		renderAuth(rw, r, http.StatusOK, loginPage(""))
 	})
+	servePWA(mux)
 	mux.HandleFunc("POST /login", a.login)
 	mux.HandleFunc("GET /static/{file}", serveStatic)
 	mux.HandleFunc("POST /logout", a.logout)
