@@ -659,7 +659,7 @@ body.app {
   .app-body { --sidebar: 4rem; }
   .sidebar { padding: var(--s-3) var(--s-2); }
   .side-section + .side-section { border-top: 1px solid var(--border); padding-top: var(--s-4); }
-  .side-title, .side-link > span:not(.badge) {
+  .side-title, .side-link > span:not(.badge):not(.dot) {
     position: absolute; width: 1px; height: 1px; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap;
   }
