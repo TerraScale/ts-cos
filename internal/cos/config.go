@@ -16,7 +16,6 @@ type Config struct {
 	// Runtime is the per-user tmpfs (/run/user/<uid>) where the service leaves the local NATS credential.
 	Home, Runtime, LocalHost, ForgejoURL string
 	HTTP                                 *http.Client
-	SkipReviewer                         bool
 }
 
 func DefaultConfig() (Config, error) {

@@ -245,7 +245,7 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos fleet` / `cos shell <host>` | Open threads and active load |
 | `cos cluster` | Local host, current leader and build revision |
 | `cos nodes [<host> [1h\|24h\|7d]]` | Latest sample of every node, or one host's samples for the window (default 1h) |
-| `cos prs` | Every open PR authored by mariogk, with CI/review/merge gates |
+| `cos prs` | Every open PR authored by mariogk in any unarchived repo (TerraScale, ...), with CI/review/merge gates; `repo` is `name` in TerraScale, `owner/name` elsewhere |
 | `cos status [--brief]` | Live ticket threads on every host with their PRs (ci/bot/merge/READY), last reply, open NEEDS-USER, and `orphanPrs` (cos.mjs shape); `--brief` refreshes the dashboard state and prints at most 40 lines |
 | `cos context list\|get\|set\|rm` | Shared context files for the COS agent |
 | `cos agent [restart '<reason>']` | COS thread state, or a fresh brief at the next wake |
@@ -272,7 +272,7 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos purge-children <host>` | Delete finished subagent/fork threads, deepest first; children of active threads stay |
 | `cos stop <host> ['<keep csv>']` | Interrupt every running run and cancel queued ones, except kept threads |
 | `cos dispatch <host> '<command json>'` | Send another T3 orchestration command |
-| `cos merge <repo> <number>` | Squash a ready COS PR at the checked head SHA |
+| `cos merge <repo> <number> [--full-send\|--force] [--adopt] --reason '<user order>'` | Squash a ready COS PR at the checked head SHA; `<repo>` is `name` (TerraScale) or `owner/name`. Flags are recorded orders past the gate (see Merge) |
 | `cos version` | Git revision the running binary was built from |
 | `cos e2e [--smoke] [prefix...]` | Live checks against the deployed cluster (see below) |
 
@@ -296,10 +296,12 @@ through NATS: request/reply commands on `cos.<host>.<command>` and live streams 
 
 Merge requires a mariogk-authored open PR, a `cos/` or `cos-hold/` branch,
 mergeability, successful checks, reviewer approval, and no requested changes.
-Reviewer and deployment checks always apply. Bypass environment variables
-and marker-file instructions are retired; their existing product-code paths are
-inventoried for a separate removal change. Forgejo's server-side branch
-protections still apply.
+User orders go past the gate on one command line: `--full-send` waives only
+ts-reviewer, `--adopt` allows a non-COS branch, `--force` needs only mergeability
+and overrides branch protection. `--full-send` and `--force` cannot be combined;
+`--adopt` combines with either. Every non-normal merge needs `--reason '<user order>'`
+(one line, at most 200 characters). Each one is recorded as a `merge.order` event
+and as a system chat entry. A normal merge records nothing.
 
 ## Live e2e
 

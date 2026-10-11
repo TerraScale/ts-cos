@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const forgejoOrg = "TerraScale"
@@ -42,7 +43,6 @@ type PR struct {
 	BotApproved      bool     `json:"botApproved"`
 	ChangesRequested bool     `json:"changesRequested"`
 	MeApproved       bool     `json:"meApproved"`
-	SkipReviewer     bool     `json:"skipReviewer"`
 	Ready            bool     `json:"ready"`
 }
 
@@ -193,9 +193,42 @@ func forgejoList[T any](ctx context.Context, f Forgejo, path string) ([]T, error
 	}
 }
 
-func (f Forgejo) statuses(ctx context.Context, repo, sha string) ([]forgejoStatus, error) {
+// forgejoRepoPath maps "name" (TerraScale org) or "owner/name" to its API path.
+func forgejoRepoPath(repo string) (string, error) {
+	parts := strings.Split(repo, "/")
+	if len(parts) == 1 {
+		parts = []string{forgejoOrg, parts[0]}
+	}
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid repository")
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\?#") {
+			return "", fmt.Errorf("invalid repository")
+		}
+	}
+	return "/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]), nil
+}
+
+// forgejoRepoName keeps bare names for the TerraScale org and owner/name elsewhere (Tools/ku).
+func forgejoRepoName(fullName string) string {
+	if owner, name, ok := strings.Cut(fullName, "/"); ok && owner == forgejoOrg {
+		return name
+	}
+	return fullName
+}
+
+// forgejoFullName is the owner/name form of a PR's repo, as events and web URLs carry it.
+func forgejoFullName(repo string) string {
+	if strings.Contains(repo, "/") {
+		return repo
+	}
+	return forgejoOrg + "/" + repo
+}
+
+func (f Forgejo) statuses(ctx context.Context, repoPath, sha string) ([]forgejoStatus, error) {
 	out := []forgejoStatus{}
-	path := "/repos/" + forgejoOrg + "/" + url.PathEscape(repo) + "/commits/" + url.PathEscape(sha) + "/status"
+	path := repoPath + "/commits/" + url.PathEscape(sha) + "/status"
 	for page := 1; ; page++ {
 		var result struct {
 			Statuses []forgejoStatus `json:"statuses"`
@@ -216,11 +249,6 @@ func (f Forgejo) statuses(ctx context.Context, repo, sha string) ([]forgejoStatu
 	}
 }
 
-func (f Forgejo) skipReviewer() bool {
-	_, err := os.Stat(filepath.Join(f.Config.Home, "Projects/TerraScale/.cos/skip-reviewer"))
-	return f.Config.SkipReviewer || err == nil
-}
-
 func forgejoNewer(id int64, created, updated time.Time, previousID int64, previousCreated, previousUpdated time.Time) bool {
 	if !updated.IsZero() {
 		created = updated
@@ -235,7 +263,7 @@ var forgejoIssuePattern = regexp.MustCompile(`(?i)\b[a-z]{1,10}-\d+\b`)
 
 func forgejoState(repo string, raw forgejoPR, statuses []forgejoStatus, reviews []forgejoReview, skip bool) PR {
 	p := PR{Repo: repo, Number: raw.Number, URL: raw.URL, Title: raw.Title, Branch: raw.Head.Ref,
-		Base: raw.Base.Ref, SHA: raw.Head.SHA, Mergeable: raw.Mergeable, SkipReviewer: skip,
+		Base: raw.Base.Ref, SHA: raw.Head.SHA, Mergeable: raw.Mergeable,
 		Issues: []string{}, Failing: []string{}, Pending: []string{}, CI: "pending"}
 	p.Hold = strings.HasPrefix(p.Branch, "cos-hold/")
 	p.Cos = p.Hold || strings.HasPrefix(p.Branch, "cos/")
@@ -300,39 +328,54 @@ func forgejoState(repo string, raw forgejoPR, statuses []forgejoStatus, reviews 
 	return p
 }
 
+// PRs lists every open PR authored by mariogk in any unarchived repository (TerraScale, Tools, ...).
 func (f Forgejo) PRs(ctx context.Context) ([]PR, error) {
-	repos, err := forgejoList[struct {
-		Name     string `json:"name"`
-		Archived bool   `json:"archived"`
-	}](ctx, f, "/orgs/"+forgejoOrg+"/repos")
+	found, err := forgejoList[struct {
+		Number     int `json:"number"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}](ctx, f, "/repos/issues/search?type=pulls&state=open&created=true")
 	if err != nil {
 		return nil, err
 	}
 	out := []PR{}
-	skip := f.skipReviewer()
-	for _, repo := range repos {
-		if repo.Archived {
-			continue
-		}
-		path := "/repos/" + forgejoOrg + "/" + url.PathEscape(repo.Name) + "/pulls"
-		prs, err := forgejoList[forgejoPR](ctx, f, path+"?state=open")
+	archived := map[string]bool{}
+	for _, item := range found {
+		repoPath, err := forgejoRepoPath(item.Repository.FullName)
 		if err != nil {
 			return nil, err
 		}
-		for _, pr := range prs {
-			if pr.User.Login != forgejoLogin {
-				continue
+		gone, known := archived[repoPath]
+		if !known {
+			var repo struct {
+				Archived bool `json:"archived"`
 			}
-			statuses, err := f.statuses(ctx, repo.Name, pr.Head.SHA)
-			if err != nil {
+			if _, err := f.request(ctx, http.MethodGet, repoPath, nil, &repo); err != nil {
 				return nil, err
 			}
-			reviews, err := forgejoList[forgejoReview](ctx, f, path+"/"+strconv.Itoa(pr.Number)+"/reviews")
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, forgejoState(repo.Name, pr, statuses, reviews, skip))
+			gone, archived[repoPath] = repo.Archived, repo.Archived
 		}
+		if gone {
+			continue
+		}
+		path := repoPath + "/pulls/" + strconv.Itoa(item.Number)
+		var pr forgejoPR
+		if _, err := f.request(ctx, http.MethodGet, path, nil, &pr); err != nil {
+			return nil, err
+		}
+		if pr.User.Login != forgejoLogin || pr.State != "open" {
+			continue
+		}
+		statuses, err := f.statuses(ctx, repoPath, pr.Head.SHA)
+		if err != nil {
+			return nil, err
+		}
+		reviews, err := forgejoList[forgejoReview](ctx, f, path+"/reviews")
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, forgejoState(forgejoRepoName(item.Repository.FullName), pr, statuses, reviews, false))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Ready != out[j].Ready {
@@ -343,8 +386,40 @@ func (f Forgejo) PRs(ctx context.Context) ([]PR, error) {
 	return out, nil
 }
 
-func (f Forgejo) Merge(ctx context.Context, repo string, number int) (any, error) {
-	if repo == "" || repo == "." || repo == ".." || strings.ContainsAny(repo, "/\\?#") || number <= 0 {
+// MergeOrder is a user's explicit, recorded exception to the normal merge gate.
+type MergeOrder struct {
+	FullSend, Force, Adopt bool
+	Reason                 string
+}
+
+// Validate allows the normal merge (all zero) or an order with a one-line reason.
+func (o MergeOrder) Validate() error {
+	if !o.FullSend && !o.Force && !o.Adopt {
+		if o.Reason != "" {
+			return fmt.Errorf("--reason needs --full-send, --force or --adopt")
+		}
+		return nil
+	}
+	reason := strings.TrimSpace(o.Reason)
+	switch {
+	case o.FullSend && o.Force:
+		return fmt.Errorf("--full-send and --force are mutually exclusive")
+	case reason == "":
+		return fmt.Errorf("a merge order needs --reason '<user order>'")
+	case utf8.RuneCountInString(reason) > 200:
+		return fmt.Errorf("merge order reason must be at most 200 characters")
+	case strings.ContainsFunc(reason, notGraphic): // the same rule Event.Validate applies to the recorded summary
+		return fmt.Errorf("merge order reason must be one line of printable text")
+	}
+	return nil
+}
+
+func (f Forgejo) Merge(ctx context.Context, repo string, number int, order MergeOrder) (any, error) {
+	if err := order.Validate(); err != nil {
+		return nil, err
+	}
+	repoPath, err := forgejoRepoPath(repo)
+	if err != nil || number <= 0 {
 		return nil, fmt.Errorf("invalid repository or PR number")
 	}
 	var me forgejoUser
@@ -354,7 +429,7 @@ func (f Forgejo) Merge(ctx context.Context, repo string, number int) (any, error
 	if me.Login != forgejoLogin {
 		return nil, fmt.Errorf("refusing merge: authenticated Forgejo login must be mariogk")
 	}
-	path := "/repos/" + forgejoOrg + "/" + url.PathEscape(repo) + "/pulls/" + strconv.Itoa(number)
+	path := repoPath + "/pulls/" + strconv.Itoa(number)
 	var pr forgejoPR
 	if _, err := f.request(ctx, http.MethodGet, path, nil, &pr); err != nil {
 		return nil, err
@@ -365,10 +440,10 @@ func (f Forgejo) Merge(ctx context.Context, repo string, number int) (any, error
 	if pr.State != "open" || pr.Number != number || pr.Head.SHA == "" {
 		return nil, fmt.Errorf("refusing merge: PR must be open with a valid head commit")
 	}
-	if !strings.HasPrefix(pr.Head.Ref, "cos/") && !strings.HasPrefix(pr.Head.Ref, "cos-hold/") && os.Getenv("COS_ADOPTED") != "1" {
-		return nil, fmt.Errorf("refusing merge: non-COS branches require COS_ADOPTED=1")
+	if !strings.HasPrefix(pr.Head.Ref, "cos/") && !strings.HasPrefix(pr.Head.Ref, "cos-hold/") && !order.Adopt {
+		return nil, fmt.Errorf("refusing merge: non-COS branches need --adopt with a reason")
 	}
-	statuses, err := f.statuses(ctx, repo, pr.Head.SHA)
+	statuses, err := f.statuses(ctx, repoPath, pr.Head.SHA)
 	if err != nil {
 		return nil, err
 	}
@@ -376,22 +451,29 @@ func (f Forgejo) Merge(ctx context.Context, repo string, number int) (any, error
 	if err != nil {
 		return nil, err
 	}
-	normal := forgejoState(repo, pr, statuses, reviews, f.skipReviewer())
-	fullSend := os.Getenv("COS_FULL_SEND") == "1"
+	normal := forgejoState(repo, pr, statuses, reviews, false)
 	waived := forgejoState(repo, pr, statuses, reviews, true)
 	ready := normal.Ready
-	if fullSend {
+	if order.FullSend {
 		ready = waived.Ready
+	}
+	// Force (user order 2026-10-10 "merge without any reviewer and any CI check"): mergeable is enough.
+	if order.Force && pr.Mergeable {
+		ready = true
 	}
 	if !ready {
 		return nil, fmt.Errorf("not ready: CI=%s mergeable=%t botApproved=%t changesRequested=%t", normal.CI, normal.Mergeable, normal.BotApproved, normal.ChangesRequested)
 	}
 	// Forgejo forbids self-approval; strict ownership means no approval POST is needed.
 	_, err = f.request(ctx, http.MethodPost, path+"/merge", map[string]any{
-		"Do": "squash", "delete_branch_after_merge": true, "force_merge": false, "head_commit_id": pr.Head.SHA,
+		"Do": "squash", "delete_branch_after_merge": true, "force_merge": order.Force, "head_commit_id": pr.Head.SHA,
 	}, nil)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"merged": true, "url": pr.URL, "fullSend": fullSend && !normal.Ready}, nil
+	result := map[string]any{"merged": true, "url": pr.URL, "sha": pr.Head.SHA, "fullSend": order.FullSend && !normal.Ready, "forced": order.Force && !normal.Ready}
+	if reason := strings.TrimSpace(order.Reason); reason != "" {
+		result["reason"] = reason
+	}
+	return result, nil
 }

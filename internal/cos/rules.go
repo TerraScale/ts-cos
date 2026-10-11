@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -328,7 +327,7 @@ func NewRulesEngine(cfg Config, bus *Bus, store *Store) *RulesEngine {
 	var inbox *Inbox
 	r := &RulesEngine{Store: store, Bus: bus, PR: f.prFacts,
 		Merge: func(ctx context.Context, repo string, number int) error {
-			_, err := f.Merge(ctx, repo, number)
+			_, err := f.Merge(ctx, repo, number, MergeOrder{})
 			return err
 		},
 		Call: func(ctx context.Context, host, command string, args []string) error {
@@ -446,8 +445,7 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 	}
 	var pr *PRFacts
 	if e.PR > 0 && e.Repo != "" {
-		_, name, _ := strings.Cut(e.Repo, "/")
-		if pr, err = r.PR(ctx, name, e.PR); errors.Is(err, errNotMine) {
+		if pr, err = r.PR(ctx, forgejoRepoName(e.Repo), e.PR); errors.Is(err, errNotMine) {
 			r.Publish(ctx, AutopilotEntry{Kind: ClassRecord, Event: e.ID, Action: "invisible", Reason: err.Error()})
 			return nil
 		} else if err != nil {
@@ -549,7 +547,11 @@ var errNotMine = errors.New("not authored by mariogk")
 
 // prFacts reads one PR authored by mariogk with its gates and size.
 func (f Forgejo) prFacts(ctx context.Context, repo string, number int) (*PRFacts, error) {
-	path := "/repos/" + forgejoOrg + "/" + url.PathEscape(repo) + "/pulls/" + strconv.Itoa(number)
+	repoPath, err := forgejoRepoPath(repo)
+	if err != nil {
+		return nil, err
+	}
+	path := repoPath + "/pulls/" + strconv.Itoa(number)
 	var raw struct {
 		forgejoPR
 		Additions int  `json:"additions"`
@@ -562,7 +564,7 @@ func (f Forgejo) prFacts(ctx context.Context, repo string, number int) (*PRFacts
 	if raw.User.Login != forgejoLogin {
 		return nil, fmt.Errorf("%s#%d: %w", repo, number, errNotMine)
 	}
-	statuses, err := f.statuses(ctx, repo, raw.Head.SHA)
+	statuses, err := f.statuses(ctx, repoPath, raw.Head.SHA)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +572,7 @@ func (f Forgejo) prFacts(ctx context.Context, repo string, number int) (*PRFacts
 	if err != nil {
 		return nil, err
 	}
-	return &PRFacts{PR: forgejoState(repo, raw.forgejoPR, statuses, reviews, f.skipReviewer()),
+	return &PRFacts{PR: forgejoState(repo, raw.forgejoPR, statuses, reviews, false),
 		Lines: raw.Additions + raw.Deletions, Merged: raw.Merged, State: raw.State, Body: raw.Body}, nil
 }
 
@@ -581,9 +583,6 @@ func reviewLabel(p PR) string {
 	}
 	if p.BotApproved {
 		return "approved"
-	}
-	if p.SkipReviewer {
-		return "review bypassed"
 	}
 	return "waiting"
 }

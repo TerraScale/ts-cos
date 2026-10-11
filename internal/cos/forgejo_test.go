@@ -59,7 +59,7 @@ func TestForgejoMergeGates(t *testing.T) {
 		name, login, author, branch, state string
 		statuses                           []forgejoStatus
 		reviews                            []forgejoReview
-		fullSend, adopted, skip, file      bool
+		fullSend, adopted                  bool
 		conflict, emptySHA, wantMerge      bool
 	}{
 		{name: "green approved", statuses: green, reviews: approved, wantMerge: true},
@@ -74,13 +74,12 @@ func TestForgejoMergeGates(t *testing.T) {
 		{name: "full send other failure", fullSend: true, statuses: []forgejoStatus{{Context: "build", Status: "failure"}, {Context: "ts-reviewer", Status: "success"}}, reviews: approved},
 		{name: "full send human block", fullSend: true, statuses: green, reviews: append(append([]forgejoReview{}, approved...), forgejoReview{User: forgejoUser{Login: "human"}, State: "REQUEST_CHANGES"})},
 		{name: "full send conflict", fullSend: true, conflict: true, statuses: green, reviews: approved},
-		{name: "temporary skip file", file: true, statuses: []forgejoStatus{{Context: "build", Status: "success"}, {Context: "ts-reviewer", Status: "error"}}, reviews: []forgejoReview{{User: forgejoUser{Login: forgejoReviewer}, State: "REQUEST_CHANGES"}}, wantMerge: true},
-		{name: "skip no other checks", skip: true, statuses: []forgejoStatus{{Context: "ts-reviewer", Status: "success"}}},
-		{name: "skip human block", skip: true, statuses: green, reviews: []forgejoReview{{User: forgejoUser{Login: "human"}, State: "REQUEST_CHANGES"}}},
+		{name: "skip no other checks", fullSend: true, statuses: []forgejoStatus{{Context: "ts-reviewer", Status: "success"}}},
+		{name: "skip human block", fullSend: true, statuses: green, reviews: []forgejoReview{{User: forgejoUser{Login: "human"}, State: "REQUEST_CHANGES"}}},
 		{name: "non COS", branch: "feature/work", statuses: green, reviews: approved},
 		{name: "adopted", branch: "feature/work", adopted: true, statuses: green, reviews: approved, wantMerge: true},
 		{name: "hold parity", branch: "cos-hold/work", statuses: green, reviews: approved, wantMerge: true},
-		{name: "foreign author adopted", author: "other", adopted: true, fullSend: true, skip: true, statuses: green, reviews: approved},
+		{name: "foreign author adopted", author: "other", adopted: true, fullSend: true, statuses: green, reviews: approved},
 		{name: "wrong authenticated login", login: "other", statuses: green, reviews: approved},
 		{name: "closed", state: "closed", statuses: green, reviews: approved},
 		{name: "missing head", emptySHA: true, statuses: green, reviews: approved},
@@ -93,13 +92,9 @@ func TestForgejoMergeGates(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("COS_FULL_SEND", "0")
-			t.Setenv("COS_ADOPTED", "0")
-			if test.fullSend {
-				t.Setenv("COS_FULL_SEND", "1")
-			}
-			if test.adopted {
-				t.Setenv("COS_ADOPTED", "1")
+			order := MergeOrder{FullSend: test.fullSend, Adopt: test.adopted}
+			if order != (MergeOrder{}) {
+				order.Reason = "test order"
 			}
 			pr := forgejoTestPR(1, forgejoLogin, "cos/work")
 			if test.author != "" {
@@ -148,17 +143,7 @@ func TestForgejoMergeGates(t *testing.T) {
 					w.WriteHeader(http.StatusNotFound)
 				}
 			})
-			f.Config.SkipReviewer = test.skip
-			if test.file {
-				path := filepath.Join(f.Config.Home, "Projects/TerraScale/.cos/skip-reviewer")
-				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, nil, 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			result, err := f.Merge(context.Background(), "test", 1)
+			result, err := f.Merge(context.Background(), "test", 1, order)
 			if (err == nil) != test.wantMerge || (merges == 1) != test.wantMerge {
 				t.Fatalf("result=%v err=%v merges=%d wantMerge=%t", result, err, merges, test.wantMerge)
 			}
@@ -170,13 +155,12 @@ func TestForgejoMergeGates(t *testing.T) {
 }
 
 func TestForgejoServerProtectionBlocksMerge(t *testing.T) {
-	for _, mode := range []string{"normal", "full send", "reviewer override"} {
+	for _, mode := range []string{"normal", "full send"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("COS_FULL_SEND", "0")
-			t.Setenv("COS_ADOPTED", "0")
 			waive := mode != "normal"
-			if mode == "full send" {
-				t.Setenv("COS_FULL_SEND", "1")
+			order := MergeOrder{}
+			if waive {
+				order = MergeOrder{FullSend: true, Reason: "test order"}
 			}
 			pr := forgejoTestPR(1, forgejoLogin, "cos/work")
 			attempts := 0
@@ -212,8 +196,7 @@ func TestForgejoServerProtectionBlocksMerge(t *testing.T) {
 					forgejoTestJSON(w, pr)
 				}
 			})
-			f.Config.SkipReviewer = mode == "reviewer override"
-			result, err := f.Merge(context.Background(), "test", 1)
+			result, err := f.Merge(context.Background(), "test", 1, order)
 			if err == nil || !strings.Contains(err.Error(), "HTTP 405") || result != nil || attempts != 1 {
 				t.Fatalf("server protection bypassed or forced retry attempted: result=%v err=%v attempts=%d", result, err, attempts)
 			}
@@ -224,34 +207,39 @@ func TestForgejoServerProtectionBlocksMerge(t *testing.T) {
 func TestForgejoPRsPaginationAndOwnership(t *testing.T) {
 	requests := map[string]int{}
 	pr := forgejoTestPR(2, forgejoLogin, "cos/ts-769-work")
+	ku := forgejoTestPR(7, forgejoLogin, "cos/ts-812-ku")
 	f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		key := r.URL.Path + " page=" + r.URL.Query().Get("page")
 		requests[key]++
-		if r.URL.Query().Get("limit") != "50" {
-			t.Errorf("missing page size: %s", r.URL)
-		}
 		page := r.URL.Query().Get("page")
+		item := func(repo string, n int) any {
+			return map[string]any{"number": n, "repository": map[string]any{"full_name": repo}}
+		}
 		switch r.URL.Path {
-		case "/orgs/TerraScale/repos":
-			w.Header().Set("X-Total-Count", "3")
+		case "/repos/issues/search":
+			q := r.URL.Query()
+			if q.Get("type") != "pulls" || q.Get("state") != "open" || q.Get("created") != "true" || q.Get("limit") != "50" {
+				t.Errorf("search must ask for my open PRs, paged: %s", r.URL)
+			}
+			w.Header().Set("X-Total-Count", "5")
 			if page == "1" {
-				forgejoTestJSON(w, []any{map[string]any{"name": "test"}, map[string]any{"name": "archive", "archived": true}})
+				forgejoTestJSON(w, []any{item("TerraScale/test", 1), item("TerraScale/test", 3), item("TerraScale/archive", 9)})
 			} else {
-				forgejoTestJSON(w, []any{map[string]any{"name": "empty"}})
+				forgejoTestJSON(w, []any{item("TerraScale/test", 2), item("Tools/ku", 7)})
 			}
-		case "/repos/TerraScale/empty/pulls":
-			forgejoTestJSON(w, []any{})
-		case "/repos/TerraScale/test/pulls":
-			if r.URL.Query().Get("state") != "open" {
-				t.Error("must request open PRs")
-			}
-			if page == "1" {
-				w.Header().Set("Link", `<http://fixture/pulls?page=2>; rel="next"`)
-				forgejoTestJSON(w, []forgejoPR{forgejoTestPR(1, "foreign", "cos/work"), forgejoTestPR(3, forgejoLogin, "feature/work")})
-			} else {
-				forgejoTestJSON(w, []forgejoPR{pr})
-			}
-		case "/repos/TerraScale/test/commits/" + pr.Head.SHA + "/status":
+		case "/repos/TerraScale/test", "/repos/Tools/ku":
+			forgejoTestJSON(w, map[string]any{"archived": false})
+		case "/repos/TerraScale/archive":
+			forgejoTestJSON(w, map[string]any{"archived": true})
+		case "/repos/TerraScale/test/pulls/1":
+			forgejoTestJSON(w, forgejoTestPR(1, "foreign", "cos/work"))
+		case "/repos/TerraScale/test/pulls/3":
+			forgejoTestJSON(w, forgejoTestPR(3, forgejoLogin, "feature/work"))
+		case "/repos/TerraScale/test/pulls/2":
+			forgejoTestJSON(w, pr)
+		case "/repos/Tools/ku/pulls/7":
+			forgejoTestJSON(w, ku)
+		case "/repos/TerraScale/test/commits/" + pr.Head.SHA + "/status", "/repos/Tools/ku/commits/" + pr.Head.SHA + "/status":
 			statuses := []forgejoStatus{{ID: 1, Context: "build", Status: "failure"}}
 			if page == "2" {
 				statuses = []forgejoStatus{{ID: 3, Context: "build", Status: "success"}, {ID: 2, Context: "ts-reviewer", Status: "success"}}
@@ -264,7 +252,7 @@ func TestForgejoPRsPaginationAndOwnership(t *testing.T) {
 				state, id = "APPROVED", 2
 			}
 			forgejoTestJSON(w, []forgejoReview{{ID: id, User: forgejoUser{Login: forgejoReviewer}, State: state}})
-		case "/repos/TerraScale/test/pulls/3/reviews":
+		case "/repos/TerraScale/test/pulls/3/reviews", "/repos/Tools/ku/pulls/7/reviews":
 			forgejoTestJSON(w, []any{})
 		default:
 			t.Errorf("foreign or archived data was fetched: %s", r.URL)
@@ -275,15 +263,75 @@ func TestForgejoPRsPaginationAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(prs) != 2 || prs[0].Number != 2 || !prs[0].Ready || !prs[0].Cos || prs[1].Number != 3 || prs[1].Ready {
+	if len(prs) != 3 || prs[0].Number != 2 || !prs[0].Ready || !prs[0].Cos || prs[0].Repo != "test" || prs[1].Repo != "Tools/ku" || prs[1].Ready || prs[2].Number != 3 || prs[2].Ready {
 		t.Fatalf("incorrect owned PRs or ordering: %+v", prs)
 	}
 	if !reflect.DeepEqual(prs[0].Issues, []string{"TS-769", "TS-101"}) {
 		t.Errorf("issue extraction: %v", prs[0].Issues)
 	}
-	for _, key := range []string{"/orgs/TerraScale/repos page=2", "/repos/TerraScale/test/pulls page=2", "/repos/TerraScale/test/pulls/2/reviews page=2", "/repos/TerraScale/test/commits/" + pr.Head.SHA + "/status page=2"} {
+	for _, key := range []string{"/repos/issues/search page=2", "/repos/TerraScale/test/pulls/2/reviews page=2", "/repos/TerraScale/test/commits/" + pr.Head.SHA + "/status page=2"} {
 		if requests[key] == 0 {
 			t.Errorf("page not requested: %s", key)
+		}
+	}
+	if requests["/repos/TerraScale/test page="] != 1 {
+		t.Errorf("repository archive state fetched %d times, want once", requests["/repos/TerraScale/test page="])
+	}
+}
+
+func TestForgejoForceAndOtherOwners(t *testing.T) {
+	failing := []forgejoStatus{{Context: "build", Status: "failure"}, {Context: "ts-reviewer", Status: "failure"}}
+	tests := []struct {
+		name, repo, path    string
+		force, conflict     bool
+		wantMerge, wantForc bool
+	}{
+		{name: "force ignores CI and review", repo: "test", path: "/repos/TerraScale/test", force: true, wantMerge: true, wantForc: true},
+		{name: "force still needs mergeable", repo: "test", path: "/repos/TerraScale/test", force: true, conflict: true},
+		{name: "no force keeps gates", repo: "test", path: "/repos/TerraScale/test"},
+		{name: "other owner", repo: "Tools/ku", path: "/repos/Tools/ku", force: true, wantMerge: true, wantForc: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			order := MergeOrder{Force: test.force}
+			if test.force {
+				order.Reason = "test order"
+			}
+			pr := forgejoTestPR(1, forgejoLogin, "cos/work")
+			pr.Mergeable = !test.conflict
+			var forced any
+			f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/user":
+					forgejoTestJSON(w, forgejoUser{Login: forgejoLogin})
+				case r.Method == http.MethodPost && r.URL.Path == test.path+"/pulls/1/merge":
+					var body map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					forced = body["force_merge"]
+					w.WriteHeader(http.StatusNoContent)
+				case r.URL.Path == test.path+"/pulls/1":
+					forgejoTestJSON(w, pr)
+				case strings.HasSuffix(r.URL.Path, "/status"):
+					forgejoTestJSON(w, map[string]any{"statuses": failing})
+				case strings.HasSuffix(r.URL.Path, "/reviews"):
+					forgejoTestJSON(w, []forgejoReview{{User: forgejoUser{Login: forgejoReviewer}, State: "REQUEST_CHANGES"}})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			result, err := f.Merge(context.Background(), test.repo, 1, order)
+			if (err == nil) != test.wantMerge {
+				t.Fatalf("result=%v err=%v", result, err)
+			}
+			if test.wantMerge && (forced != true || result.(map[string]any)["forced"] != test.wantForc) {
+				t.Errorf("force_merge=%v result=%v", forced, result)
+			}
+		})
+	}
+	for _, bad := range []string{"a/b/c", "/ku", "Tools/", "..", "Tools/..", "a?b"} {
+		if _, err := (Forgejo{}).Merge(context.Background(), bad, 1, MergeOrder{}); err == nil || err.Error() != "invalid repository or PR number" {
+			t.Errorf("Merge(%q) error = %v", bad, err)
 		}
 	}
 }
@@ -307,7 +355,6 @@ func TestForgejoLatestApplicableReviewsAndStatuses(t *testing.T) {
 }
 
 func TestForgejoFailureOnLaterStatusPage(t *testing.T) {
-	t.Setenv("COS_FULL_SEND", "1")
 	pr := forgejoTestPR(1, forgejoLogin, "cos/work")
 	mutations := 0
 	f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +376,7 @@ func TestForgejoFailureOnLaterStatusPage(t *testing.T) {
 			forgejoTestJSON(w, pr)
 		}
 	})
-	if _, err := f.Merge(context.Background(), "test", 1); err == nil || mutations != 0 {
+	if _, err := f.Merge(context.Background(), "test", 1, MergeOrder{FullSend: true, Reason: "test order"}); err == nil || mutations != 0 {
 		t.Fatalf("later failing check did not block merge: err=%v mutations=%d", err, mutations)
 	}
 }
@@ -349,31 +396,7 @@ func TestForgejoErrorsDoNotExposeTokens(t *testing.T) {
 	}
 }
 
-func TestForgejoSkipReviewerFileRemovalRestoresGate(t *testing.T) {
-	f := Forgejo{Config: Config{Home: t.TempDir()}}
-	path := filepath.Join(f.Config.Home, "Projects/TerraScale/.cos/skip-reviewer")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	state := func() PR {
-		return forgejoState("test", forgejoTestPR(1, forgejoLogin, "cos/work"), []forgejoStatus{{Context: "build", Status: "success"}, {Context: "ts-reviewer", Status: "failure"}}, nil, f.skipReviewer())
-	}
-	if !state().Ready {
-		t.Fatal("skip-reviewer file did not bypass the bot gate")
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if state().Ready {
-		t.Fatal("removing skip-reviewer did not restore the bot gate")
-	}
-}
-
 func TestForgejoMissingReportedStatusesBlocksMerge(t *testing.T) {
-	t.Setenv("COS_FULL_SEND", "1")
 	pr := forgejoTestPR(1, forgejoLogin, "cos/work")
 	mutations := 0
 	f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -393,7 +416,44 @@ func TestForgejoMissingReportedStatusesBlocksMerge(t *testing.T) {
 			forgejoTestJSON(w, pr)
 		}
 	})
-	if _, err := f.Merge(context.Background(), "test", 1); err == nil || mutations != 0 {
+	if _, err := f.Merge(context.Background(), "test", 1, MergeOrder{FullSend: true, Reason: "test order"}); err == nil || mutations != 0 {
 		t.Fatalf("missing reported checks did not block merge: err=%v mutations=%d", err, mutations)
+	}
+}
+
+func TestMergeOrderValidate(t *testing.T) {
+	tests := []struct {
+		name  string
+		order MergeOrder
+		ok    bool
+	}{
+		{name: "normal merge", ok: true},
+		{name: "no reason", order: MergeOrder{Force: true}},
+		{name: "reason over 200 runes", order: MergeOrder{Force: true, Reason: strings.Repeat("é", 201)}},
+		{name: "reason with newline", order: MergeOrder{Force: true, Reason: "first\nsecond"}},
+		{name: "reason with tab", order: MergeOrder{Force: true, Reason: "first\tsecond"}},
+		{name: "reason with escape", order: MergeOrder{Force: true, Reason: "first\x1b[31msecond"}},
+		{name: "reason with a bidi override", order: MergeOrder{Force: true, Reason: "first\u202esecond"}},
+		{name: "full send with force", order: MergeOrder{FullSend: true, Force: true, Reason: "user order"}},
+		{name: "adopt with force", order: MergeOrder{Adopt: true, Force: true, Reason: "user order"}, ok: true},
+		{name: "reason without an order", order: MergeOrder{Reason: "user order"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.order.Validate(); (err == nil) != test.ok {
+				t.Fatalf("Validate() = %v, want ok=%t", err, test.ok)
+			}
+		})
+	}
+}
+
+func TestMergeOrderInvalidMakesNoRequests(t *testing.T) {
+	requests := 0
+	f := forgejoTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	if _, err := f.Merge(context.Background(), "test", 1, MergeOrder{Force: true}); err == nil || requests != 0 {
+		t.Fatalf("invalid order was not rejected before HTTP: err=%v requests=%d", err, requests)
 	}
 }

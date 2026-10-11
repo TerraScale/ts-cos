@@ -169,7 +169,7 @@ func (m *eventMirror) ticket(ctx context.Context, e Event) (string, error) {
 		m.live, m.at = live, time.Now()
 		for _, p := range live.PRs {
 			if ts := prTickets(p); len(ts) > 0 {
-				m.prs[prKey(p.Repo, p.Number)] = ts[0]
+				m.prs[prKey(forgejoFullName(p.Repo), p.Number)] = ts[0]
 			}
 		}
 	}

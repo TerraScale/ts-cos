@@ -67,7 +67,7 @@ func reconcileEvents(live Live, seen map[string]string, now time.Time) (events [
 			data, _ = json.Marshal(map[string]string{"state": p.CI})
 		}
 		emit(Event{ID: NewEventID(SourceForgejo, "reconcile", key, reconcileShort(fp)), Source: SourceForgejo, Kind: kind,
-			Time: now, Severity: sev, Repo: "TerraScale/" + p.Repo, PR: p.Number, Synthetic: true, Data: data,
+			Time: now, Severity: sev, Repo: forgejoFullName(p.Repo), PR: p.Number, Synthetic: true, Data: data,
 			Summary: EventText(fmt.Sprintf("%s#%d reconciled: CI %s, mergeable %t, review %s", p.Repo, p.Number, p.CI, p.Mergeable, reviewLabel(p)), eventSummaryMax)})
 	}
 	return events, next

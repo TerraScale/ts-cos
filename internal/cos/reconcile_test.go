@@ -47,6 +47,16 @@ func TestReconcileFirstBeatRecordsWithoutEmitting(t *testing.T) {
 	}
 }
 
+func TestReconcileKeepsOwnerOutsideTerraScale(t *testing.T) {
+	seen := seedReconcile(t, reconcileLive([]PR{{Repo: "Tools/ku", Number: 4, SHA: "abc", CI: "pending", Mergeable: true, Cos: true}}))
+	live := reconcileLive([]PR{{Repo: "Tools/ku", Number: 4, SHA: "abc", CI: "failure", Mergeable: true, Cos: true}})
+	events, _ := reconcileEvents(live, seen, reconcileNow)
+	if len(events) != 1 || events[0].Repo != "Tools/ku" || events[0].PR != 4 {
+		t.Fatalf("events = %+v, want one event for Tools/ku#4", events)
+	}
+	assertValid(t, events)
+}
+
 func TestReconcileCIPendingToFailure(t *testing.T) {
 	seen := seedReconcile(t, reconcileLive([]PR{reconcilePR("pending", true, "abc")}))
 	live := reconcileLive([]PR{reconcilePR("failure", true, "abc")})

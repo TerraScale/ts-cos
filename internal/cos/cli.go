@@ -32,7 +32,7 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	}
 	command, args := args[0], args[1:]
 	if command == "help" || command == "--help" || command == "-h" {
-		commands := []string{"fleet", "prs", "merge <repo> <number> (COS_FULL_SEND=1, COS_ADOPTED=1)", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
+		commands := []string{"fleet", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
 		for _, k := range sortedCommandNames() {
 			commands = append(commands, localCommands[k].Usage)
 		}
@@ -43,30 +43,6 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	}
 	if c, ok := cliCommands[command]; ok {
 		return c.Run(ctx, cfg, args, w)
-	}
-	if command == "prs" {
-		if len(args) != 0 {
-			return errors.New("usage: cos prs")
-		}
-		v, err := (Forgejo{Config: cfg}).PRs(ctx)
-		if err != nil {
-			return err
-		}
-		return output(w, v)
-	}
-	if command == "merge" {
-		if len(args) != 2 {
-			return errors.New("usage: cos merge <repo> <number>")
-		}
-		n, err := strconv.Atoi(args[1])
-		if err != nil || n < 1 {
-			return errors.New("PR number must be positive")
-		}
-		v, err := (Forgejo{Config: cfg}).Merge(ctx, args[0], n)
-		if err != nil {
-			return err
-		}
-		return output(w, v)
 	}
 	if command == "serve" {
 		return Serve(ctx, cfg, args)
