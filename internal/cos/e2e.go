@@ -367,6 +367,8 @@ func e2eChecks() []E2ECheck {
 		// Restarting cos.service restarts its embedded NATS server too (covers failure.nats-restart).
 		E2ECheck{ID: "cluster.restart", Stream: "TS-810", Chaos: true, Run: checkRestartCatchUp},
 		E2ECheck{ID: "cluster.partition", Stream: "TS-810", Chaos: true, Run: checkPartition},
+		// After cluster.partition, so 60 s have passed since nodes.collector-stop and the alert is already there; never last, where the suite deadline may already be spent.
+		E2ECheck{ID: "nodes.collector-missing", Stream: "TS-825", Run: checkNodeCollectorMissing},
 		E2ECheck{ID: "cluster.leader-freeze", Stream: "TS-810", Chaos: true, Run: checkLeaderFreeze},
 		// SIGKILL proves a real crash, systemd restart and rejoin from the store, but each run counts
 		// as an automatic restart, so it runs only on demand: cos e2e cluster.leader-kill.
@@ -403,8 +405,6 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "tokens.budget-fyi", Stream: "TS-826", Run: checkBudgetFYI},
 		// The pause spends a few Opus tokens on a throwaway thread, so it runs only when named.
 		E2ECheck{ID: "tokens.budget-pause", Stream: "TS-826", OnDemand: true, Run: checkBudgetPause},
-		// Last, so the 100 s wait only starts after the rest of the suite has run.
-		E2ECheck{ID: "nodes.collector-missing", Stream: "TS-825", Run: checkNodeCollectorMissing},
 		// Runs only when named, because it spends an Opus probe run.
 		E2ECheck{ID: "inbox.needs-user-forward", Stream: "TS-815", OnDemand: true, Run: inboxCheck(checkInboxNeedsUserForward)},
 	)
