@@ -77,30 +77,33 @@ type agentT3 interface {
 	RPC(context.Context, string, any, any) error
 }
 
-// Agent drives the COS thread on the cluster leader. Every other node only reads its chat output.
-// One Agent runs per chat tab; Tab says which conversation it drives.
+// Agent drives one user's COS thread for one chat tab on the cluster leader. Every other node only reads its chat output.
+// Each user's brain runs one Agent per chat tab; User and Tab say whose conversation it drives.
 type Agent struct {
 	Host, Home, Exe string
+	User            User
 	Tab             ChatTab
 	Chat            *Chat
 	Store           *Store
-	KV, Context     jetstream.KeyValue
-	Memory          jetstream.KeyValue
-	Savings         jetstream.KeyValue
-	Limits          jetstream.KeyValue
-	T3              func(context.Context) (agentT3, error)
-	Remote          func(ctx context.Context, host, command string, args []string, out any) error
-	js              jetstream.JetStream
-	project         string
-	shown           map[string]string
-	orphanCheck     time.Time
-	digestCheck     time.Time
-	eventCheck      time.Time
-	hot, nextPoll   time.Time
-	saved           string
+	// KV, Context and Memory are UserKV views of this user's keys.
+	KV, Context jetstream.KeyValue
+	Memory      jetstream.KeyValue
+	// shortcut: the savings ledger is shared, TS-826 scopes it.
+	Savings       jetstream.KeyValue
+	Limits        jetstream.KeyValue
+	T3            func(context.Context) (agentT3, error)
+	Remote        func(ctx context.Context, host, command string, args []string, out any) error
+	js            jetstream.JetStream
+	project       string
+	shown         map[string]string
+	orphanCheck   time.Time
+	digestCheck   time.Time
+	eventCheck    time.Time
+	hot, nextPoll time.Time
+	saved         string
 }
 
-// The agent runs on every node as a serve worker; only the cluster leader drives COS (Run uses Bus.Lead).
+// The brains run on every node as a serve worker; only the cluster leader drives them (runBrains uses Bus.Lead).
 func init() {
 	serveWorkers = append(serveWorkers, func(ctx context.Context, cfg Config, bus *Bus) {
 		store, err := stateStore(cfg)
@@ -111,7 +114,7 @@ func init() {
 		defer store.Close()
 		chat := NewChat()
 		go chat.Run(ctx, bus)
-		NewAgent(cfg, chat, store, bus).Run(ctx, bus)
+		runBrains(ctx, cfg, bus, chat, store)
 	})
 }
 
@@ -141,7 +144,7 @@ func openAgentKV(ctx context.Context, bus *Bus) (jetstream.KeyValue, error) {
 
 // forTab makes the agent for another chat tab, sharing this agent's dependencies.
 func (a *Agent) forTab(t ChatTab) *Agent {
-	return &Agent{Host: a.Host, Home: a.Home, Exe: a.Exe, Tab: t, Chat: a.Chat, Store: a.Store, KV: a.KV, Context: a.Context,
+	return &Agent{Host: a.Host, Home: a.Home, Exe: a.Exe, User: a.User, Tab: t, Chat: a.Chat, Store: a.Store, KV: a.KV, Context: a.Context,
 		Memory: a.Memory, Savings: a.Savings, Limits: a.Limits, T3: a.T3, Remote: a.Remote, js: a.js}
 }
 
@@ -153,8 +156,8 @@ func (a *Agent) key(name string) string {
 	return name + "." + a.Tab.ID
 }
 
-// entries returns this agent's tab of the chat, oldest first.
-func (a *Agent) entries() []ChatEntry { return a.Chat.Entries(a.Tab.ID) }
+// entries returns this agent's tab of the user's chat, oldest first.
+func (a *Agent) entries(ctx context.Context) []ChatEntry { return a.Chat.Entries(ctx, a.Tab.ID) }
 
 // put writes e to the chat under this agent's tab.
 func (a *Agent) put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
@@ -162,57 +165,10 @@ func (a *Agent) put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
 	return a.Chat.Put(ctx, e)
 }
 
-// Run drives COS while this node holds the cluster lease (Bus.Lead) and idles otherwise.
-func (a *Agent) Run(ctx context.Context, bus *Bus) {
-	for a.KV == nil {
-		kv, err := openAgentKV(ctx, bus)
-		if err == nil {
-			a.Context, err = openKV(ctx, bus, contextBucket)
-		}
-		if err == nil {
-			a.Memory, err = openKV(ctx, bus, memoryBucket)
-		}
-		if err == nil {
-			a.Savings, err = openKV(ctx, bus, savingsBucket)
-		}
-		if err == nil {
-			a.Limits, err = openLimits(ctx, bus)
-		}
-		if err == nil {
-			a.js, err = bus.JetStream()
-		}
-		if err == nil {
-			a.KV = kv
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(2 * time.Second):
-		}
-	}
-	bus.Lead(ctx, func(ctx context.Context) {
-		tabs := map[string]*Agent{}
-		for {
-			if a.Chat.Ready() {
-				if err := a.Step(ctx); err != nil && ctx.Err() == nil {
-					logErr(ctx, slog.LevelWarn, "COS agent step", err)
-				}
-				a.stepTabs(ctx, tabs)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Second):
-			}
-		}
-	})
-}
-
 // stepTabs drives one COS thread per open chat tab and settles the thread of each closed tab.
 func (a *Agent) stepTabs(ctx context.Context, agents map[string]*Agent) {
 	live := map[string]bool{}
-	for _, t := range a.Chat.Tabs() {
+	for _, t := range a.Chat.Tabs(ctx) {
 		live[t.ID] = true
 		ta, ok := agents[t.ID]
 		if !ok {
@@ -312,6 +268,7 @@ func (a *Agent) save(ctx context.Context, st AgentState, rev uint64) error {
 
 // Step reconciles the COS thread with the chat and live state; it is idempotent.
 func (a *Agent) Step(ctx context.Context) error {
+	ctx = WithUser(ctx, a.User)
 	st, rev, err := a.load(ctx)
 	if err != nil {
 		return fmt.Errorf("load COS state: %w", err)
@@ -320,7 +277,7 @@ func (a *Agent) Step(ctx context.Context) error {
 	if st.Host != a.Host {
 		if st.ThreadID != "" {
 			st.Orphans = append(st.Orphans, AgentThread{st.Host, st.ThreadID})
-			if e, ok := a.Chat.Entry(st.Reply); ok && e.Streaming {
+			if e, ok := a.Chat.Entry(ctx, st.Reply); ok && e.Streaming {
 				e.Streaming = false
 				e.Text += "\n\n_Interrupted: the COS host failed over._"
 				if _, err := a.put(ctx, e); err != nil {
@@ -367,7 +324,7 @@ func (a *Agent) Step(ctx context.Context) error {
 	}
 	wake := []string{}
 	reasons := []string{}
-	if failover && unanswered(a.entries()) {
+	if failover && unanswered(a.entries(ctx)) {
 		wake = append(wake, "The previous COS host failed over. The last user message in Recent chat has no reply yet: answer it.")
 		reasons = append(reasons, "failover")
 	}
@@ -400,7 +357,7 @@ func (a *Agent) Step(ctx context.Context) error {
 		st.addReason("idle for 4 hours")
 	}
 	messages := []ChatEntry{}
-	for _, e := range a.entries() {
+	for _, e := range a.entries(ctx) {
 		if e.Role == "user" && e.ID > st.Delivered {
 			messages = append(messages, e)
 		}
@@ -600,18 +557,17 @@ func tabPreamble(t ChatTab) string {
 
 // ensureProject keeps the COS workspace: rules as CLAUDE.md and a ./cos wrapper bound to this node.
 func (a *Agent) ensureProject(ctx context.Context, c agentT3) (string, error) {
-	workspace, title := agentWorkspace, "cos-agent"
+	dir, title := brainWorkspace(a.Home, a.User), "cos-agent "+a.User.Name
 	if a.Tab.ID != chatMainTab {
-		workspace, title = filepath.Join(agentTabWorkspace, a.Tab.ID), "cos-tab-"+a.Tab.ID
+		dir, title = filepath.Join(a.Home, agentTabWorkspace, a.User.ID, a.Tab.ID), "cos-tab-"+a.Tab.ID+" "+a.User.Name
 	}
-	dir := filepath.Join(a.Home, workspace)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(CurrentBehavior().AgentBrief()), 0600); err != nil {
 		return "", err
 	}
-	wrapper := fmt.Sprintf("#!/bin/sh\n# COS_TAB names the chat tab whose COS runs this wrapper. It is identity, not a switch.\nCOS_TAB=%s HOME=%s exec %s \"$@\"\n", shellQuote(a.Tab.ID), shellQuote(a.Home), shellQuote(a.Exe))
+	wrapper := fmt.Sprintf("#!/bin/sh\n# COS_TAB names the chat tab whose COS runs this wrapper. It is identity, not a switch.\nCOS_TAB=%s HOME=%s exec %s --user %s \"$@\"\n", shellQuote(a.Tab.ID), shellQuote(a.Home), shellQuote(a.Exe), a.User.ID)
 	if err := os.WriteFile(filepath.Join(dir, "cos"), []byte(wrapper), 0700); err != nil {
 		return "", err
 	}
@@ -660,7 +616,7 @@ func (a *Agent) brief(ctx context.Context, v Dashboard, reason, wake string) (st
 	data := AgentBriefData{At: time.Now().UTC(), Reason: reason, Now: wake, Live: Brief(v), Memory: r.Text(),
 		MemoryTokens: r.Tokens, MemoryFull: r.FullTokens, MemoryOmitted: r.Omitted, Recent: []string{}}
 	size := 0
-	for _, e := range slices.Backward(a.entries()) {
+	for _, e := range slices.Backward(a.entries(ctx)) {
 		if e.Role != "user" && e.Role != "cos" {
 			continue
 		}
@@ -686,12 +642,19 @@ func agentCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 	if !valid {
 		return errors.New("usage: cos agent [restart '<reason>' | wakes]")
 	}
+	if err := needUser(ctx, "agent"); err != nil {
+		return err
+	}
 	bus, err := ConnectBus(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer bus.Close()
-	kv, err := openAgentKV(ctx, bus)
+	shared, err := openAgentKV(ctx, bus)
+	if err != nil {
+		return err
+	}
+	kv, err := UserKV(ctx, shared)
 	if err != nil {
 		return err
 	}

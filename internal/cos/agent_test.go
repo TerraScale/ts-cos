@@ -102,7 +102,8 @@ const agentTestCompact = `{"runs":[{"id":"r1","status":"completed"},{"id":"r2","
 // agentTestEnv is one 3-node cluster with the chat and agent buckets; every subtest gets a fresh agent through reset.
 type agentTestEnv struct {
 	t         *testing.T
-	ctx       context.Context
+	ctx       context.Context // carries user
+	user      User
 	chat      *Chat
 	chatKV    jetstream.KeyValue
 	agentKV   jetstream.KeyValue
@@ -137,7 +138,8 @@ func agentTestOpen(t *testing.T, ctx context.Context, nodes []*Bus, bucket strin
 func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 	t.Helper()
 	nodes, _ := chatTestCluster(t, ctx)
-	e := &agentTestEnv{ctx: ctx, chat: NewChat()}
+	user := User{ID: newULID(), Name: "admin", Role: roleAdmin}
+	e := &agentTestEnv{ctx: WithUser(ctx, user), user: user, chat: NewChat()}
 	go e.chat.Run(ctx, nodes[0])
 	// Every node follows the chat: the buckets are created by whichever node leads JetStream.
 	for _, n := range nodes[1:] {
@@ -156,8 +158,9 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 		}
 		return false
 	})
-	e.contextKV = agentTestOpen(t, ctx, nodes, contextBucket)
-	e.memoryKV = agentTestOpen(t, ctx, nodes, memoryBucket)
+	e.agentKV = asUser(t, user, e.agentKV)
+	e.contextKV = asUser(t, user, agentTestOpen(t, ctx, nodes, contextBucket))
+	e.memoryKV = asUser(t, user, agentTestOpen(t, ctx, nodes, memoryBucket))
 	e.savingsKV = agentTestOpen(t, ctx, nodes, savingsBucket)
 	e.limitsKV = agentTestOpen(t, ctx, nodes, limitsBucket)
 	js, err := nodes[0].JetStream()
@@ -179,18 +182,28 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 	return e
 }
 
+// asUser is kv as the user's brain sees it: every key is the user's own.
+func asUser(t *testing.T, u User, kv jetstream.KeyValue) jetstream.KeyValue {
+	t.Helper()
+	view, err := UserKV(WithUser(context.Background(), u), kv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return view
+}
+
 // reset empties the chat, agent state and store, and makes a fresh agent with a fake T3.
 func (e *agentTestEnv) reset(t *testing.T) {
 	t.Helper()
 	e.t = t
 	// A delete can be lost to a JetStream leader change, so re-issue it until the cache empties.
 	deadline := time.Now().Add(2 * time.Minute)
-	for len(e.chat.Entries(chatMainTab)) > 0 {
+	for len(e.chat.Entries(e.ctx, chatMainTab)) > 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("timeout waiting for chat cleared")
 		}
-		for _, old := range e.chat.Entries(chatMainTab) {
-			if err := e.chatKV.Delete(e.ctx, old.ID); err != nil {
+		for _, old := range e.chat.Entries(e.ctx, chatMainTab) {
+			if err := e.chatKV.Delete(e.ctx, e.user.Key(old.ID)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -211,7 +224,7 @@ func (e *agentTestEnv) reset(t *testing.T) {
 	e.remote = nil
 	e.skipTree = false
 	e.setLimits(LimitsState{At: time.Now(), Reachable: true, Credentials: []LimitCredential{{Provider: "claude", Account: "a", State: "active"}}})
-	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Tab: mainTab, Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV, Limits: e.limitsKV, js: e.js,
+	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", User: e.user, Tab: mainTab, Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV, Limits: e.limitsKV, js: e.js,
 		T3: func(context.Context) (agentT3, error) { return e.fake, nil },
 		Remote: func(_ context.Context, host, command string, args []string, out any) error {
 			e.remote = append(e.remote, agentTestRemote{host, command, args})
@@ -243,7 +256,7 @@ func (e *agentTestEnv) say(text string) string {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	chatTestWait(e.t, "user message in chat", func() bool { _, ok := e.chat.Entry(entry.ID); return ok })
+	chatTestWait(e.t, "user message in chat", func() bool { _, ok := e.chat.Entry(e.ctx, entry.ID); return ok })
 	return entry.ID
 }
 
@@ -331,7 +344,7 @@ func (e *agentTestEnv) setState(st AgentState) {
 // cosEntries returns the COS bubbles, oldest first.
 func (e *agentTestEnv) cosEntries() []ChatEntry {
 	out := []ChatEntry{}
-	for _, entry := range e.chat.Entries(chatMainTab) {
+	for _, entry := range e.chat.Entries(e.ctx, chatMainTab) {
 		if entry.Role == "cos" {
 			out = append(out, entry)
 		}
@@ -344,9 +357,9 @@ func (e *agentTestEnv) waitAsk() ChatEntry {
 	e.t.Helper()
 	var ask ChatEntry
 	chatTestWait(e.t, "ask in chat", func() bool {
-		for _, entry := range e.chat.Entries(chatMainTab) {
+		for _, entry := range e.chat.Entries(e.ctx, chatMainTab) {
 			if entry.Ask != nil {
-				ask, _ = e.chat.Entry(entry.ID)
+				ask, _ = e.chat.Entry(e.ctx, entry.ID)
 				return true
 			}
 		}
@@ -415,7 +428,7 @@ func TestAgent(t *testing.T) {
 			t.Fatal(e.fake.http)
 		}
 		payload, _ := e.fake.http[0].Input.(map[string]any)
-		root := filepath.Join(e.a.Home, ".local/share/cos/agent")
+		root := filepath.Join(e.a.Home, ".local/share/cos/agent", e.user.ID)
 		if payload["type"] != "project.create" || payload["workspaceRoot"] != root || launch["projectId"] != payload["projectId"] {
 			t.Fatal(payload, launch)
 		}
@@ -439,7 +452,7 @@ func TestAgent(t *testing.T) {
 			t.Fatalf("state = %+v", st)
 		}
 		chatTestWait(t, "COS thread tag", func() bool {
-			for _, tag := range e.chat.Tags(chatMainTab) {
+			for _, tag := range e.chat.Tags(e.ctx, chatMainTab) {
 				if tag.ThreadID == "thread-1" && tag.Host == "delta" && tag.COS {
 					return true
 				}
@@ -447,7 +460,7 @@ func TestAgent(t *testing.T) {
 			return false
 		})
 		chatTestWait(t, "fresh thread notice", func() bool {
-			for _, entry := range e.chat.Entries(chatMainTab) {
+			for _, entry := range e.chat.Entries(e.ctx, chatMainTab) {
 				if entry.Role == "system" && strings.Contains(entry.Text, "fresh thread") {
 					return true
 				}
@@ -512,7 +525,7 @@ func TestAgent(t *testing.T) {
 		var askID string
 		var ask *ChatAsk
 		chatTestWait(t, "pending question", func() bool {
-			for _, entry := range e.chat.Entries(chatMainTab) {
+			for _, entry := range e.chat.Entries(e.ctx, chatMainTab) {
 				if entry.Ask != nil {
 					askID, ask = entry.ID, entry.Ask
 					return true
@@ -531,7 +544,7 @@ func TestAgent(t *testing.T) {
 		e.say("thanks")
 		e.step()
 		chatTestWait(t, "ask marked done", func() bool {
-			entry, ok := e.chat.Entry(askID)
+			entry, ok := e.chat.Entry(e.ctx, askID)
 			return ok && entry.Ask != nil && entry.Ask.Done
 		})
 	})
@@ -544,7 +557,7 @@ func TestAgent(t *testing.T) {
 		e.step()
 		asks := func() int {
 			n := 0
-			for _, entry := range e.chat.Entries(chatMainTab) {
+			for _, entry := range e.chat.Entries(e.ctx, chatMainTab) {
 				if entry.Ask != nil {
 					n++
 				}
@@ -570,17 +583,17 @@ func TestAgent(t *testing.T) {
 		e.step()
 		ask := e.waitAsk()
 		ask.Ask.Answers = map[string]string{"pick": "Now"}
-		if err := e.chat.Replace(ctx, ask); err != nil {
+		if err := e.chat.Replace(e.ctx, ask); err != nil {
 			t.Fatal(err)
 		}
 		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
 		e.say("thanks")
 		e.step()
 		chatTestWait(t, "ask marked done", func() bool {
-			entry, ok := e.chat.Entry(ask.ID)
+			entry, ok := e.chat.Entry(e.ctx, ask.ID)
 			return ok && entry.Ask.Done
 		})
-		if entry, _ := e.chat.Entry(ask.ID); entry.Ask.Answers["pick"] != "Now" {
+		if entry, _ := e.chat.Entry(e.ctx, ask.ID); entry.Ask.Answers["pick"] != "Now" {
 			t.Fatalf("answers = %v", entry.Ask.Answers)
 		}
 	})
@@ -592,22 +605,22 @@ func TestAgent(t *testing.T) {
 		e.say("deploy?")
 		e.step()
 		stale := e.waitAsk()
-		answered, _ := e.chat.Entry(stale.ID)
+		answered, _ := e.chat.Entry(e.ctx, stale.ID)
 		answered.Ask.Answers = map[string]string{"pick": "Now"}
-		if err := e.chat.Replace(ctx, answered); err != nil {
+		if err := e.chat.Replace(e.ctx, answered); err != nil {
 			t.Fatal(err)
 		}
 		// Once this message shows, the watcher has applied the answer, so rolling the cache back is the only stale copy left.
 		e.say("settle")
 		e.chat.mu.Lock()
-		e.chat.entries[stale.ID] = stale
+		e.chat.entries[e.user.Key(stale.ID)] = stale
 		e.chat.mu.Unlock()
 		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
 		var apiErr *jetstream.APIError
 		if err := e.a.Step(ctx); !errors.As(err, &apiErr) || apiErr.ErrorCode != jetstream.JSErrCodeStreamWrongLastSequence {
 			t.Fatal("stale mark done:", err)
 		}
-		kv, err := e.chatKV.Get(ctx, stale.ID)
+		kv, err := e.chatKV.Get(ctx, e.user.Key(stale.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -622,10 +635,10 @@ func TestAgent(t *testing.T) {
 		e.chat.apply(kv)
 		e.step()
 		chatTestWait(t, "ask marked done", func() bool {
-			entry, ok := e.chat.Entry(stale.ID)
+			entry, ok := e.chat.Entry(e.ctx, stale.ID)
 			return ok && entry.Ask.Done
 		})
-		if entry, _ := e.chat.Entry(stale.ID); entry.Ask.Answers["pick"] != "Now" {
+		if entry, _ := e.chat.Entry(e.ctx, stale.ID); entry.Ask.Answers["pick"] != "Now" {
 			t.Fatalf("answers = %v", entry.Ask.Answers)
 		}
 	})
@@ -663,7 +676,7 @@ func TestAgent(t *testing.T) {
 		e.say("status?")
 		e.step()
 		chatTestWait(t, "ask marked done", func() bool {
-			entry, ok := e.chat.Entry(ask.ID)
+			entry, ok := e.chat.Entry(e.ctx, ask.ID)
 			return ok && entry.Ask.Done
 		})
 		if _, ok := e.state().Asked["q1"]; ok {
@@ -687,14 +700,14 @@ func TestAgent(t *testing.T) {
 		if got := e.state().Asked["q1"]; got != ask.ID {
 			t.Fatalf("asked = %v, want q1 -> %s", e.state().Asked, ask.ID)
 		}
-		if entry, _ := e.chat.Entry(ask.ID); entry.Ask.Done {
+		if entry, _ := e.chat.Entry(e.ctx, ask.ID); entry.Ask.Done {
 			t.Fatal("ask closed before the fresh thread saw the request resolve")
 		}
 		e.fake.projection = agentTestThread("completed", 1000, agentTestQuestion("resolved"))
 		e.say("status?")
 		e.step()
 		chatTestWait(t, "ask marked done", func() bool {
-			entry, ok := e.chat.Entry(ask.ID)
+			entry, ok := e.chat.Entry(e.ctx, ask.ID)
 			return ok && entry.Ask.Done
 		})
 		if _, ok := e.state().Asked["q1"]; ok {
@@ -964,6 +977,55 @@ func TestAgent(t *testing.T) {
 		orphans := e.state().Orphans
 		if len(orphans) != 1 || orphans[0] != (AgentThread{"beta", "old-thread"}) {
 			t.Fatalf("orphans = %+v", orphans)
+		}
+	})
+	// Two users' brains share the chat and the fake T3, but each keeps its own state and sees only its own messages.
+	t.Run("brains are separate", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		bob := User{ID: newULID(), Name: "bob", Role: roleMember}
+		bctx := WithUser(ctx, bob)
+		raw := func(bucket string) jetstream.KeyValue {
+			kv, err := e.js.KeyValue(ctx, bucket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return kv
+		}
+		brain := &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", User: bob, Tab: mainTab, Chat: e.chat, Store: e.store,
+			KV: asUser(t, bob, raw(agentBucket)), Context: asUser(t, bob, raw(contextBucket)), Memory: asUser(t, bob, raw(memoryBucket)),
+			Savings: e.savingsKV, Limits: e.limitsKV, js: e.js,
+			T3:     func(context.Context) (agentT3, error) { return e.fake, nil },
+			Remote: func(context.Context, string, string, []string, any) error { return nil }}
+		entry, err := e.chat.Put(bctx, ChatEntry{Role: "user", Text: "bob's question"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chatTestWait(t, "bob's message in chat", func() bool { _, ok := e.chat.Entry(bctx, entry.ID); return ok })
+		for range 2 { // the first step claims COS for this node; the second launches bob's thread
+			if err := brain.Step(bctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		e.expectLaunches(2)
+		if brief, _ := e.fake.launches[1]["message"].(string); !strings.Contains(brief, "bob's question") || strings.Contains(brief, "user: start") {
+			t.Fatalf("bob's brief shows the wrong chat:\n%s", brief)
+		}
+		stateOf := func(u User) AgentState {
+			t.Helper()
+			stored, err := raw(agentBucket).Get(ctx, u.Key("state"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var st AgentState
+			if err := json.Unmarshal(stored.Value(), &st); err != nil {
+				t.Fatal(err)
+			}
+			return st
+		}
+		mine, bobs := stateOf(e.user), stateOf(bob)
+		if mine.ThreadID == "" || bobs.ThreadID == "" || mine.ThreadID == bobs.ThreadID || bobs.Delivered != entry.ID {
+			t.Fatalf("states share a thread or delivery: mine %+v, bob's %+v", mine, bobs)
 		}
 	})
 }

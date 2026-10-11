@@ -200,6 +200,7 @@ func (w *Web) homeNodes(ctx context.Context) ([]NodeCard, bool) {
 }
 
 func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	tab, open := w.openTab(r)
 	if !open {
 		tabRedirect(rw, r, "", "")
@@ -208,8 +209,8 @@ func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
 	v := w.state(r.Context())
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	h := headerOf(v)
-	threads := tabThreads(v.Live, w.Chat.Tags(tab.ID))
-	if err := chatPage(h, v, openTabs(w.Chat.Tabs()), tab, w.Chat.Entries(tab.ID), threads, r.URL.Query().Get("notice")).Render(r.Context(), rw); err != nil {
+	threads := tabThreads(v.Live, w.Chat.Tags(ctx, tab.ID))
+	if err := chatPage(h, v, openTabs(w.Chat.Tabs(ctx)), tab, w.Chat.Entries(ctx, tab.ID), threads, r.URL.Query().Get("notice")).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render chat", err)
 	}
 }
@@ -242,7 +243,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	controller := http.NewResponseController(rw)
 	tab, _ := w.openTab(r)
-	sub, stop := w.Chat.Subscribe()
+	sub, stop := w.Chat.Subscribe(ctx)
 	defer stop()
 	notify := make(chan struct{}, 1)
 	w.mu.Lock()
@@ -261,15 +262,15 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		if err := patchElements(ctx, rw, inbox(v)); err != nil {
 			return err
 		}
-		return patchElements(ctx, rw, threadPanel(tabThreads(v.Live, w.Chat.Tags(tab.ID)), recentActions(w.Chat.Entries(tab.ID))))
+		return patchElements(ctx, rw, threadPanel(tabThreads(v.Live, w.Chat.Tags(ctx, tab.ID)), recentActions(w.Chat.Entries(ctx, tab.ID))))
 	}
 	// tabStrip repaints the tab strip; the current tab's name may have changed meanwhile.
 	tabStrip := func() error {
 		cur := tab
-		if t, ok := w.Chat.Tab(tab.ID); ok {
+		if t, ok := w.Chat.Tab(ctx, tab.ID); ok {
 			cur = t
 		}
-		return patchElements(ctx, rw, chatTabs(openTabs(w.Chat.Tabs()), cur))
+		return patchElements(ctx, rw, chatTabs(openTabs(w.Chat.Tabs(ctx)), cur))
 	}
 	// closedNotice tells the reader when the tab on screen was closed or deleted.
 	closedNotice := func() error {
@@ -279,7 +280,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		return patchElements(ctx, rw, tabClosedNotice())
 	}
 	repaint := func() error {
-		entries := w.Chat.Entries(tab.ID)
+		entries := w.Chat.Entries(ctx, tab.ID)
 		clear(sent)
 		for _, e := range entries {
 			sent[e.ID] = true
@@ -292,14 +293,14 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	// window is the IDs the log shows now; the cache keeps trimmed entries, so an edit must not re-append them.
 	window := func() map[string]bool {
 		ids := map[string]bool{}
-		for _, e := range w.Chat.Entries(tab.ID) {
+		for _, e := range w.Chat.Entries(ctx, tab.ID) {
 			ids[e.ID] = true
 		}
 		return ids
 	}
 	// panel repaints the Threads panel: the tab's live rows and its recent action outcomes.
 	panel := func() error {
-		return patchElements(ctx, rw, threadPanel(tabThreads(w.state(ctx).Live, w.Chat.Tags(tab.ID)), recentActions(w.Chat.Entries(tab.ID))))
+		return patchElements(ctx, rw, threadPanel(tabThreads(w.state(ctx).Live, w.Chat.Tags(ctx, tab.ID)), recentActions(w.Chat.Entries(ctx, tab.ID))))
 	}
 	update := func(keys []string) error {
 		shown := window()
@@ -319,7 +320,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			e, ok := w.Chat.Entry(key)
+			e, ok := w.Chat.Entry(ctx, key)
 			if ok && e.Tab != tab.ID {
 				continue
 			}
@@ -526,9 +527,14 @@ func (w *Web) chatAnswer(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	e, ok := w.Chat.Entry(query.Get("e"))
+	// Another user's entry is not found: it does not exist for this caller.
+	e, ok := w.Chat.Entry(r.Context(), query.Get("e"))
+	if !ok {
+		http.Error(rw, "Unknown question", http.StatusNotFound)
+		return
+	}
 	option, err := strconv.Atoi(query.Get("o"))
-	if !ok || e.Ask == nil || e.Ask.Done || err != nil {
+	if e.Ask == nil || e.Ask.Done || err != nil {
 		http.Error(rw, "This question is no longer open", http.StatusConflict)
 		return
 	}
@@ -557,7 +563,7 @@ func (w *Web) chatAnswer(rw http.ResponseWriter, r *http.Request) {
 		if err := w.Chat.Respond(r.Context(), e.Ask.Host, e.Ask.ThreadID, e.Ask.RequestID, string(answers)); err != nil {
 			logErr(r.Context(), slog.LevelError, "answer COS question", err, "host", e.Ask.Host)
 			// Undo the recorded answer so the question shows its buttons again.
-			if cur, ok := w.Chat.Entry(e.ID); ok && cur.Ask != nil {
+			if cur, ok := w.Chat.Entry(r.Context(), e.ID); ok && cur.Ask != nil {
 				delete(cur.Ask.Answers, question)
 				if err := w.Chat.Replace(context.WithoutCancel(r.Context()), cur); err != nil {
 					logErr(context.WithoutCancel(r.Context()), slog.LevelError, "roll back COS answer", err, "entry", e.ID)

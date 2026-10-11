@@ -89,6 +89,8 @@ func TestThreadPanelEscapesTitle(t *testing.T) {
 }
 
 func TestChatTagsApply(t *testing.T) {
+	u := chatTestUser()
+	ctx := WithUser(context.Background(), u)
 	c := NewChat()
 	tag := ChatTag{ThreadID: "thread:1%2", Host: "delta", Tab: "t1", At: time.Now().UTC()}
 	raw, err := json.Marshal(tag)
@@ -98,20 +100,20 @@ func TestChatTagsApply(t *testing.T) {
 	if k := tagKey(tag.ThreadID); len(k) != len(chatTagPrefix)+16 || strings.ContainsAny(k, ":%") {
 		t.Fatal(k)
 	}
-	c.apply(fakeChatEntry{key: tagKey(tag.ThreadID), value: raw, op: jetstream.KeyValuePut})
-	c.apply(fakeChatEntry{key: tagKey("bad"), value: []byte("{not json"), op: jetstream.KeyValuePut})
+	c.apply(fakeChatEntry{key: u.Key(tagKey(tag.ThreadID)), value: raw, op: jetstream.KeyValuePut})
+	c.apply(fakeChatEntry{key: u.Key(tagKey("bad")), value: []byte("{not json"), op: jetstream.KeyValuePut})
 	c.apply(nil)
 	if len(c.entries) != 0 {
 		t.Fatal("tag became a chat entry", c.entries)
 	}
-	if got := c.Tags("t1"); len(got) != 1 || got[0].ThreadID != tag.ThreadID {
+	if got := c.Tags(ctx, "t1"); len(got) != 1 || got[0].ThreadID != tag.ThreadID {
 		t.Fatal(got)
 	}
-	if got := c.Tags("t2"); len(got) != 0 {
+	if got := c.Tags(ctx, "t2"); len(got) != 0 {
 		t.Fatal(got)
 	}
-	c.apply(fakeChatEntry{key: tagKey(tag.ThreadID), op: jetstream.KeyValueDelete})
-	if got := c.Tags("t1"); len(got) != 0 {
+	c.apply(fakeChatEntry{key: u.Key(tagKey(tag.ThreadID)), op: jetstream.KeyValueDelete})
+	if got := c.Tags(ctx, "t1"); len(got) != 0 {
 		t.Fatal("deleted tag still present", got)
 	}
 }
@@ -120,6 +122,7 @@ func TestChatDeleteTabRemovesTags(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	nodes, _ := chatTestCluster(t, ctx)
+	ctx = WithUser(ctx, chatTestUser())
 	// Every node follows the chat, so whichever node leads JetStream can create the bucket.
 	c := NewChat()
 	go c.Run(ctx, nodes[0])
@@ -133,12 +136,12 @@ func TestChatDeleteTabRemovesTags(t *testing.T) {
 	if err := c.PutTag(ctx, ChatTag{ThreadID: "cos", Host: "delta", Tab: chatMainTab, COS: true, At: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	chatTestAwait(t, c, "tags replicated", func() bool { return len(c.Tags("t1")) == 1 && len(c.Tags(chatMainTab)) == 1 })
+	chatTestAwait(t, c, "tags replicated", func() bool { return len(c.Tags(ctx, "t1")) == 1 && len(c.Tags(ctx, chatMainTab)) == 1 })
 	if err := c.DeleteTab(ctx, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	chatTestAwait(t, c, "tab tags removed", func() bool { return len(c.Tags("t1")) == 0 })
-	if got := c.Tags(chatMainTab); len(got) != 1 || !got[0].COS {
+	chatTestAwait(t, c, "tab tags removed", func() bool { return len(c.Tags(ctx, "t1")) == 0 })
+	if got := c.Tags(ctx, chatMainTab); len(got) != 1 || !got[0].COS {
 		t.Fatal("other tab's tags changed", got)
 	}
 }
@@ -147,12 +150,14 @@ func TestTagLaunch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	nodes, _ := chatTestCluster(t, ctx)
+	u := chatTestUser()
+	ctx = WithUser(ctx, u)
 	kv := agentTestOpen(t, ctx, nodes, chatBucket)
 	launched := map[string]any{"host": "delta", "threadId": "w9", "resumed": false}
 	if err := tagLaunch(ctx, nodes[0], "delta", "t1", launched); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := kv.Get(ctx, tagKey("w9"))
+	entry, err := kv.Get(ctx, u.Key(tagKey("w9")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,8 @@ import (
 )
 
 func TestChatTabsApply(t *testing.T) {
+	u := chatTestUser()
+	ctx := WithUser(context.Background(), u)
 	c := NewChat()
 	tab, err := json.Marshal(ChatTab{Name: "Deploys", Created: time.Now()})
 	if err != nil {
@@ -29,30 +31,30 @@ func TestChatTabsApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.apply(fakeChatEntry{key: chatTabPrefix + "0000000000000005-t", value: tab, op: jetstream.KeyValuePut})
-	c.apply(fakeChatEntry{key: chatTabPrefix + "0000000000000004-o", value: closed, op: jetstream.KeyValuePut})
-	c.apply(fakeChatEntry{key: "0000000000000006-a", value: tabbed, op: jetstream.KeyValuePut})
-	c.apply(chatTestPut(t, "0000000000000007-b", "main"))
+	c.apply(fakeChatEntry{key: u.Key(chatTabPrefix + "0000000000000005-t"), value: tab, op: jetstream.KeyValuePut})
+	c.apply(fakeChatEntry{key: u.Key(chatTabPrefix + "0000000000000004-o"), value: closed, op: jetstream.KeyValuePut})
+	c.apply(fakeChatEntry{key: u.Key("0000000000000006-a"), value: tabbed, op: jetstream.KeyValuePut})
+	c.apply(chatTestPut(t, u.Key("0000000000000007-b"), "main"))
 	c.apply(nil)
 
-	tabs := c.Tabs()
+	tabs := c.Tabs(ctx)
 	if len(tabs) != 2 || tabs[0].ID != "0000000000000004-o" || !tabs[0].Closed || tabs[1].ID != "0000000000000005-t" || tabs[1].Name != "Deploys" {
 		t.Fatal(tabs)
 	}
-	if got, ok := c.Tab("0000000000000005-t"); !ok || got.Name != "Deploys" {
+	if got, ok := c.Tab(ctx, "0000000000000005-t"); !ok || got.Name != "Deploys" {
 		t.Fatal(got, ok)
 	}
-	if _, ok := c.Entry(chatTabPrefix + "0000000000000005-t"); ok {
+	if _, ok := c.Entry(ctx, chatTabPrefix+"0000000000000005-t"); ok {
 		t.Fatal("tab key stored as an entry")
 	}
-	if got := c.Entries("0000000000000005-t"); len(got) != 1 || got[0].Text != "ship it" {
+	if got := c.Entries(ctx, "0000000000000005-t"); len(got) != 1 || got[0].Text != "ship it" {
 		t.Fatal(got)
 	}
-	if got := c.Entries(chatMainTab); len(got) != 1 || got[0].ID != "0000000000000007-b" || got[0].Tab != chatMainTab {
+	if got := c.Entries(ctx, chatMainTab); len(got) != 1 || got[0].ID != "0000000000000007-b" || got[0].Tab != chatMainTab {
 		t.Fatal(got)
 	}
-	c.apply(fakeChatEntry{key: chatTabPrefix + "0000000000000005-t", op: jetstream.KeyValueDelete})
-	if _, ok := c.Tab("0000000000000005-t"); ok {
+	c.apply(fakeChatEntry{key: u.Key(chatTabPrefix + "0000000000000005-t"), op: jetstream.KeyValueDelete})
+	if _, ok := c.Tab(ctx, "0000000000000005-t"); ok {
 		t.Fatal("deleted tab still present")
 	}
 }
@@ -80,9 +82,10 @@ func TestValidTab(t *testing.T) {
 
 // TestChatTabGuards checks the refusals that need no bucket: the main tab, an empty id, a never-read tab and a store still starting.
 func TestChatTabGuards(t *testing.T) {
-	ctx := context.Background()
+	u := chatTestUser()
+	ctx := WithUser(context.Background(), u)
 	c := NewChat()
-	c.apply(chatTestPut(t, "0000000000000007-b", "main"))
+	c.apply(chatTestPut(t, u.Key("0000000000000007-b"), "main"))
 
 	if err := c.DeleteTab(ctx, chatMainTab); err == nil {
 		t.Fatal("main tab was deleted")
@@ -90,7 +93,7 @@ func TestChatTabGuards(t *testing.T) {
 	if err := c.DeleteTab(ctx, ""); err == nil {
 		t.Fatal("empty tab id was deleted")
 	}
-	if got := c.Entries(chatMainTab); len(got) != 1 {
+	if got := c.Entries(ctx, chatMainTab); len(got) != 1 {
 		t.Fatal("main entries swept by a refused delete", got)
 	}
 
@@ -137,6 +140,7 @@ func TestChatTabStore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	nodes, _ := chatTestCluster(t, ctx)
+	ctx = WithUser(ctx, chatTestUser())
 	c := NewChat()
 	go c.Run(ctx, nodes[0])
 	// Every node follows the chat: the buckets are created by whichever node leads JetStream.
@@ -154,7 +158,7 @@ func TestChatTabStore(t *testing.T) {
 		if i == 0 {
 			first = tab
 		}
-		chatTestWait(t, "tab cached", func() bool { _, ok := c.Tab(tab.ID); return ok })
+		chatTestWait(t, "tab cached", func() bool { _, ok := c.Tab(ctx, tab.ID); return ok })
 	}
 	if _, err := c.CreateTab(ctx, "one too many", ""); err == nil {
 		t.Fatal("tab number 13 was accepted")
@@ -169,7 +173,7 @@ func TestChatTabStore(t *testing.T) {
 		t.Fatal("rename with a stale revision was accepted")
 	}
 
-	cur, _ := c.Tab(first.ID)
+	cur, _ := c.Tab(ctx, first.ID)
 	cur.Closed = true
 	if err := c.UpdateTab(ctx, cur); err != nil {
 		t.Fatal(err)
@@ -178,13 +182,13 @@ func TestChatTabStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "tab entry cached", func() bool { _, ok := c.Entry(entry.ID); return ok })
+	chatTestWait(t, "tab entry cached", func() bool { _, ok := c.Entry(ctx, entry.ID); return ok })
 	if err := c.DeleteTab(ctx, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	chatTestWait(t, "tab and its entries gone", func() bool {
-		_, tabOK := c.Tab(first.ID)
-		_, entryOK := c.Entry(entry.ID)
+		_, tabOK := c.Tab(ctx, first.ID)
+		_, entryOK := c.Entry(ctx, entry.ID)
 		return !tabOK && !entryOK
 	})
 }
@@ -193,13 +197,14 @@ func TestChatTabAgent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	e := newAgentTestEnv(t, ctx)
+	ctx = e.ctx
 	e.reset(t)
 	created, err := e.chat.CreateTab(ctx, "Deploys", "watch the release")
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "tab cached", func() bool { _, ok := e.chat.Tab(created.ID); return ok })
-	tab, _ := e.chat.Tab(created.ID)
+	chatTestWait(t, "tab cached", func() bool { _, ok := e.chat.Tab(ctx, created.ID); return ok })
+	tab, _ := e.chat.Tab(ctx, created.ID)
 	ta := e.a.forTab(tab)
 
 	// The tab's message reaches only the tab's COS: the main COS launches nothing for it.
@@ -207,7 +212,7 @@ func TestChatTabAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "tab message in chat", func() bool { _, ok := e.chat.Entry(entry.ID); return ok })
+	chatTestWait(t, "tab message in chat", func() bool { _, ok := e.chat.Entry(ctx, entry.ID); return ok })
 	e.stepAgent(e.a)
 	e.expectLaunches(0)
 	// The first step claims the tab for this host; the next one launches its thread.
@@ -229,7 +234,7 @@ func TestChatTabAgent(t *testing.T) {
 	e.fake.projection = agentTestThread("completed", 0, "[]")
 	e.stepAgent(ta)
 	chatTestWait(t, "tab reply in chat", func() bool {
-		for _, reply := range e.chat.Entries(tab.ID) {
+		for _, reply := range e.chat.Entries(ctx, tab.ID) {
 			if reply.Role == "cos" && strings.Contains(reply.Text, "Hello") {
 				return true
 			}
@@ -254,12 +259,12 @@ func TestChatTabAgent(t *testing.T) {
 
 	// Closing settles the tab's thread; the agent stays until the thread is settled.
 	e.fake.skipClose = true
-	cur, _ := e.chat.Tab(tab.ID)
+	cur, _ := e.chat.Tab(ctx, tab.ID)
 	cur.Closed = true
 	if err := e.chat.UpdateTab(ctx, cur); err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "closed tab cached", func() bool { got, ok := e.chat.Tab(tab.ID); return ok && got.Closed })
+	chatTestWait(t, "closed tab cached", func() bool { got, ok := e.chat.Tab(ctx, tab.ID); return ok && got.Closed })
 	agents := map[string]*Agent{tab.ID: ta}
 	e.a.stepTabs(ctx, agents)
 	if _, ok := agents[tab.ID]; !ok {
@@ -277,8 +282,8 @@ func TestChatTabAgent(t *testing.T) {
 		t.Fatal("tab state survived close:", err)
 	}
 	chatTestWait(t, "closed tab gone with its entries", func() bool {
-		_, ok := e.chat.Tab(tab.ID)
-		return !ok && len(e.chat.Entries(tab.ID)) == 0
+		_, ok := e.chat.Tab(ctx, tab.ID)
+		return !ok && len(e.chat.Entries(ctx, tab.ID)) == 0
 	})
 }
 
@@ -294,10 +299,11 @@ func TestChatTabWeb(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	e := newAgentTestEnv(t, ctx)
+	ctx = e.ctx
 	e.reset(t)
 	web := NewWeb(e.store, nil)
 	web.Chat = e.chat
-	mux := web.routes()
+	mux := asUserHandler(e.user, web.routes())
 
 	expectRedirect := func(rec *httptest.ResponseRecorder, location string) {
 		t.Helper()
@@ -311,7 +317,7 @@ func TestChatTabWeb(t *testing.T) {
 		t.Fatalf("create: status %d location %q", rec.Code, rec.Header().Get("Location"))
 	}
 	id := strings.TrimPrefix(rec.Header().Get("Location"), "/?tab=")
-	chatTestWait(t, "created tab cached", func() bool { got, ok := e.chat.Tab(id); return ok && got.Name == "Deploys" })
+	chatTestWait(t, "created tab cached", func() bool { got, ok := e.chat.Tab(ctx, id); return ok && got.Name == "Deploys" })
 
 	rec = postForm(mux, "/tabs", url.Values{"name": {""}, "tab": {chatMainTab}})
 	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/?tab=cos&notice=") {
@@ -325,19 +331,19 @@ func TestChatTabWeb(t *testing.T) {
 	if !strings.HasPrefix(rec.Header().Get("Location"), "/?tab=cos&notice=") {
 		t.Fatalf("close COS: location %q", rec.Header().Get("Location"))
 	}
-	if got, _ := e.chat.Tab(chatMainTab); got.ID != "" {
+	if got, _ := e.chat.Tab(ctx, chatMainTab); got.ID != "" {
 		t.Fatal("the main COS tab is stored as a tab")
 	}
 
 	expectRedirect(postForm(mux, "/tabs/"+id+"/rename", url.Values{"name": {"Ops"}}), "/?tab="+id)
-	chatTestWait(t, "renamed tab cached", func() bool { got, ok := e.chat.Tab(id); return ok && got.Name == "Ops" })
+	chatTestWait(t, "renamed tab cached", func() bool { got, ok := e.chat.Tab(ctx, id); return ok && got.Name == "Ops" })
 
 	// A message posted to a tab is stored under that tab.
 	second, err := e.chat.CreateTab(ctx, "Infra", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "second tab cached", func() bool { _, ok := e.chat.Tab(second.ID); return ok })
+	chatTestWait(t, "second tab cached", func() bool { _, ok := e.chat.Tab(ctx, second.ID); return ok })
 	req := httptest.NewRequest(http.MethodPost, "/chat?tab="+second.ID, strings.NewReader(`{"msg":"hi"}`))
 	req.Header.Set("Datastar-Request", "true")
 	posted := httptest.NewRecorder()
@@ -346,7 +352,7 @@ func TestChatTabWeb(t *testing.T) {
 		t.Fatalf("chat post status %d", posted.Code)
 	}
 	chatTestWait(t, "message in its tab", func() bool {
-		for _, m := range e.chat.Entries(second.ID) {
+		for _, m := range e.chat.Entries(ctx, second.ID) {
 			if m.Role == "user" && m.Text == "hi" {
 				return true
 			}
@@ -355,7 +361,7 @@ func TestChatTabWeb(t *testing.T) {
 	})
 
 	expectRedirect(postForm(mux, "/tabs/"+id+"/close", url.Values{}), "/")
-	chatTestWait(t, "tab closed", func() bool { got, ok := e.chat.Tab(id); return ok && got.Closed })
+	chatTestWait(t, "tab closed", func() bool { got, ok := e.chat.Tab(ctx, id); return ok && got.Closed })
 	expectRedirect(postForm(mux, "/tabs/"+id+"/close", url.Values{}), "/?notice=This+tab+is+already+closed")
 
 	// Unknown and closed tabs fall back to the COS tab, and cannot take messages.

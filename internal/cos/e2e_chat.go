@@ -173,6 +173,8 @@ func (f *chatFeed) close() {
 // chatProbeAcross opens every stream first, so the probe reaches each one as a live patch and not as history.
 // It then writes the probe through bus, requires each stream to repaint it within chatProbeWait, and deletes it.
 func chatProbeAcross(ctx context.Context, bus *Bus, bases, cookies []string) (evidence string, err error) {
+	// The probe writes as the deploy health user, whose dashboard session is the one the feeds open.
+	ctx = WithUser(ctx, probeUser)
 	feeds := make([]*chatFeed, len(bases))
 	defer func() {
 		for _, f := range feeds {
@@ -219,7 +221,11 @@ func deleteChatEntry(ctx context.Context, b *Bus, id string) error {
 	if err != nil {
 		return err
 	}
-	return kv.Delete(ctx, id)
+	scoped, err := UserKV(ctx, kv)
+	if err != nil {
+		return err
+	}
+	return scoped.Delete(ctx, id)
 }
 
 var errNoCOSReply = errors.New("no COS reply on the chat")

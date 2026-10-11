@@ -13,7 +13,7 @@ func (w *Web) openTab(r *http.Request) (ChatTab, bool) {
 	if id == "" || id == chatMainTab {
 		return mainTab, true
 	}
-	t, ok := w.Chat.Tab(id)
+	t, ok := w.Chat.Tab(r.Context(), id)
 	if !ok {
 		return ChatTab{ID: id}, false
 	}
@@ -89,7 +89,7 @@ func (w *Web) renameTab(rw http.ResponseWriter, r *http.Request) {
 		tabRedirect(rw, r, id, "The COS tab cannot be renamed")
 		return
 	}
-	t, ok := w.Chat.Tab(id)
+	t, ok := w.Chat.Tab(r.Context(), id)
 	if !ok || t.Closed {
 		tabRedirect(rw, r, "", "This tab is closed")
 		return
@@ -114,7 +114,7 @@ func (w *Web) closeTab(rw http.ResponseWriter, r *http.Request) {
 		tabRedirect(rw, r, id, "The COS tab cannot be closed")
 		return
 	}
-	t, ok := w.Chat.Tab(id)
+	t, ok := w.Chat.Tab(r.Context(), id)
 	if !ok || t.Closed {
 		tabRedirect(rw, r, "", "This tab is already closed")
 		return

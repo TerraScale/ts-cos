@@ -194,6 +194,8 @@ func TestThreadActionRoute(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	nodes, _ := chatTestCluster(t, ctx)
+	u := chatTestUser()
+	ctx = WithUser(ctx, u)
 	chat := NewChat()
 	go chat.Run(ctx, nodes[0])
 	// Every node follows the chat: the buckets are created by whichever node leads JetStream.
@@ -222,13 +224,13 @@ func TestThreadActionRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "tab cached", func() bool { _, ok := chat.Tab(tab.ID); return ok })
+	chatTestWait(t, "tab cached", func() bool { _, ok := chat.Tab(ctx, tab.ID); return ok })
 	for _, tag := range []ChatTag{{ThreadID: "brain", Host: "delta", Tab: tab.ID, COS: true}, {ThreadID: "worker", Host: "delta", Tab: tab.ID}} {
 		if err := chat.PutTag(ctx, tag); err != nil {
 			t.Fatal(err)
 		}
 	}
-	chatTestWait(t, "tags cached", func() bool { return len(chat.Tags(tab.ID)) == 2 })
+	chatTestWait(t, "tags cached", func() bool { return len(chat.Tags(ctx, tab.ID)) == 2 })
 
 	post := func(op, thread string) string {
 		t.Helper()
@@ -236,7 +238,7 @@ func TestThreadActionRoute(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/tabs/"+tab.ID+"/threads/"+op, strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rec := httptest.NewRecorder()
-		w.routes().ServeHTTP(rec, req)
+		asUserHandler(u, w.routes()).ServeHTTP(rec, req)
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("%s %s: status %d", op, thread, rec.Code)
 		}
@@ -264,7 +266,7 @@ func TestThreadActionRoute(t *testing.T) {
 	}
 
 	// Every outcome, refusals included, is an Action entry in the tab's chat.
-	chatTestWait(t, "four action entries", func() bool { return len(recentActions(chat.Entries(tab.ID))) == 4 })
+	chatTestWait(t, "four action entries", func() bool { return len(recentActions(chat.Entries(ctx, tab.ID))) == 4 })
 
 	// Each outcome is also one valid thread.action event.
 	stream, err := js.Stream(ctx, EventsStream)

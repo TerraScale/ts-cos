@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -68,11 +69,21 @@ func chatTestClusterHandled(t *testing.T, ctx context.Context, handle OperationH
 	return nodes, configs
 }
 
+// chatTestUser is a COS user whose chat a test writes and reads.
+func chatTestUser() User { return User{ID: newULID(), Name: "owner", Role: roleMember} }
+
+// asUserHandler serves h with u in every request's context, as the dashboard's sign-in does.
+func asUserHandler(u User, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(rw, r.WithContext(WithUser(r.Context(), u)))
+	})
+}
+
 // chatTestAwait waits for check to hold, re-evaluating it on every change the chat notifies
 // (puts, deletes, ready, resets), so the outcome does not depend on wall-clock polling.
 func chatTestAwait(t *testing.T, c *Chat, description string, check func() bool) {
 	t.Helper()
-	sub, stop := c.Subscribe()
+	sub, stop := c.SubscribeAll()
 	defer stop()
 	timeout := time.After(2 * time.Minute) // generous: 3-node elections are slow on a loaded runner
 	for !check() {
@@ -89,6 +100,8 @@ func TestChatReplicatesAcrossNodes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	nodes, _ := chatTestCluster(t, ctx)
+	u := chatTestUser()
+	uctx := WithUser(ctx, u)
 	chats := make([]*Chat, len(nodes))
 	for i, bus := range nodes {
 		chats[i] = NewChat()
@@ -98,12 +111,20 @@ func TestChatReplicatesAcrossNodes(t *testing.T) {
 	for _, c := range chats {
 		chatTestAwait(t, c, "chat ready", c.Ready)
 	}
-	e, err := chats[0].Put(ctx, ChatEntry{Role: "user", Text: "what's running?"})
+	e, err := chats[0].Put(uctx, ChatEntry{Role: "user", Text: "what's running?"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The raw bucket holds the entry under its owner's prefix.
+	raw, err := openKV(ctx, nodes[0], chatBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Get(ctx, u.Key(e.ID)); err != nil {
+		t.Fatal("entry is not under the owner's key:", err)
+	}
 	chatTestAwait(t, chats[2], "entry on another node", func() bool {
-		got, ok := chats[2].Entry(e.ID)
+		got, ok := chats[2].Entry(uctx, e.ID)
 		return ok && got.Text == "what's running?"
 	})
 
@@ -118,20 +139,20 @@ func TestChatReplicatesAcrossNodes(t *testing.T) {
 	// Every node notices the lost bucket and drops its mirror; the leader then recreates the bucket.
 	for _, c := range chats {
 		chatTestAwait(t, c, "mirror reset after the bucket was deleted", func() bool {
-			_, ok := c.Entry(e.ID)
+			_, ok := c.Entry(uctx, e.ID)
 			return !ok
 		})
 	}
 	for _, c := range chats {
 		chatTestAwait(t, c, "chat ready on the recreated bucket", c.Ready)
 	}
-	again, err := chats[1].Put(ctx, ChatEntry{Role: "user", Text: "still there?"})
+	again, err := chats[1].Put(uctx, ChatEntry{Role: "user", Text: "still there?"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range chats {
 		chatTestAwait(t, c, "new entry on every node", func() bool {
-			_, ok := c.Entry(again.ID)
+			_, ok := c.Entry(uctx, again.ID)
 			return ok
 		})
 	}
@@ -162,9 +183,11 @@ func chatTestPut(t *testing.T, key, text string) fakeChatEntry {
 }
 
 func TestChatApplyAndOrder(t *testing.T) {
+	u := chatTestUser()
+	ctx := WithUser(context.Background(), u)
 	c := NewChat()
-	c.apply(chatTestPut(t, "0000000000000002-b", "second"))
-	c.apply(chatTestPut(t, "0000000000000001-a", "first"))
+	c.apply(chatTestPut(t, u.Key("0000000000000002-b"), "second"))
+	c.apply(chatTestPut(t, u.Key("0000000000000001-a"), "first"))
 	if c.Ready() {
 		t.Fatal("ready before initial values marker")
 	}
@@ -172,31 +195,31 @@ func TestChatApplyAndOrder(t *testing.T) {
 	if !c.Ready() {
 		t.Fatal("not ready after initial values marker")
 	}
-	entries := c.Entries(chatMainTab)
+	entries := c.Entries(ctx, chatMainTab)
 	if len(entries) != 2 || entries[0].ID != "0000000000000001-a" || entries[1].ID != "0000000000000002-b" {
 		t.Fatal(entries)
 	}
-	if e, ok := c.Entry("0000000000000002-b"); !ok || e.Text != "second" {
+	if e, ok := c.Entry(ctx, "0000000000000002-b"); !ok || e.Text != "second" {
 		t.Fatal(e, ok)
 	}
-	c.apply(fakeChatEntry{key: "0000000000000001-a", op: jetstream.KeyValueDelete})
-	if _, ok := c.Entry("0000000000000001-a"); ok {
+	c.apply(fakeChatEntry{key: u.Key("0000000000000001-a"), op: jetstream.KeyValueDelete})
+	if _, ok := c.Entry(ctx, "0000000000000001-a"); ok {
 		t.Fatal("deleted entry still present")
 	}
-	c.apply(fakeChatEntry{key: "0000000000000003-c", value: []byte("{not json"), op: jetstream.KeyValuePut})
-	if _, ok := c.Entry("0000000000000003-c"); ok {
+	c.apply(fakeChatEntry{key: u.Key("0000000000000003-c"), value: []byte("{not json"), op: jetstream.KeyValuePut})
+	if _, ok := c.Entry(ctx, "0000000000000003-c"); ok {
 		t.Fatal("invalid entry was stored")
 	}
 	for i := range 205 {
-		c.apply(chatTestPut(t, fmt.Sprintf("%016x-n", i+10), fmt.Sprint(i)))
+		c.apply(chatTestPut(t, u.Key(fmt.Sprintf("%016x-n", i+10)), fmt.Sprint(i)))
 	}
-	entries = c.Entries(chatMainTab)
+	entries = c.Entries(ctx, chatMainTab)
 	if len(entries) != chatShown || entries[0].ID != fmt.Sprintf("%016x-n", 15) || entries[len(entries)-1].ID != fmt.Sprintf("%016x-n", 214) {
 		t.Fatal(len(entries), entries[0].ID, entries[len(entries)-1].ID)
 	}
-	sub, stop := c.Subscribe()
+	sub, stop := c.Subscribe(ctx)
 	defer stop()
-	c.apply(chatTestPut(t, "0000000000000009-z", "changed"))
+	c.apply(chatTestPut(t, u.Key("0000000000000009-z"), "changed"))
 	select {
 	case <-sub.wake:
 	default:
@@ -210,6 +233,117 @@ func TestChatApplyAndOrder(t *testing.T) {
 	}
 }
 
+// TestChatUsersAreIsolated: one user's entries, wake-ups and reads never reach another user.
+func TestChatUsersAreIsolated(t *testing.T) {
+	a, b := chatTestUser(), chatTestUser()
+	actx, bctx := WithUser(context.Background(), a), WithUser(context.Background(), b)
+	c := NewChat()
+	c.apply(nil)
+	c.apply(chatTestPut(t, a.Key("0000000000000001-a"), "for a"))
+	c.apply(chatTestPut(t, "0000000000000009-legacy", "unscoped"))
+	if got := c.Entries(bctx, chatMainTab); len(got) != 0 {
+		t.Fatal("B sees A's entries:", got)
+	}
+	if _, ok := c.Entry(bctx, "0000000000000001-a"); ok {
+		t.Fatal("B reads A's entry")
+	}
+	if got := c.Entries(actx, chatMainTab); len(got) != 1 || got[0].ID != "0000000000000001-a" || got[0].Text != "for a" {
+		t.Fatal(got)
+	}
+	if _, ok := c.entriesAll()["0000000000000009-legacy"]; ok {
+		t.Fatal("a legacy key was applied before migration")
+	}
+	bsub, stopB := c.Subscribe(bctx)
+	defer stopB()
+	asub, stopA := c.Subscribe(actx)
+	defer stopA()
+	c.apply(chatTestPut(t, a.Key("0000000000000002-a"), "more"))
+	select {
+	case <-bsub.wake:
+		t.Fatal("A's change woke B")
+	default:
+	}
+	if got := c.Changed(asub); !slices.Equal(got, []string{"0000000000000002-a"}) {
+		t.Fatal("A's change keys:", got)
+	}
+	if _, err := c.Put(context.Background(), ChatEntry{Role: "user", Text: "no user"}); !errors.Is(err, ErrNoUser) {
+		t.Fatal("Put without a user:", err)
+	}
+}
+
+// TestChatWebIsolation: a signed-in user's pages, answers and posts never reach another user's chat.
+func TestChatWebIsolation(t *testing.T) {
+	bus, _ := releaseTestBus(t)
+	ctx := t.Context()
+	chat := NewChat()
+	go chat.Run(ctx, bus)
+	chatTestWait(t, "chat ready", chat.Ready)
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	web := NewWeb(store, nil)
+	web.Chat = chat
+	routes := web.routes()
+	a, b := chatTestUser(), chatTestUser()
+	actx, bctx := WithUser(ctx, a), WithUser(ctx, b)
+	ask := ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q1", Questions: []ChatQuestion{{ID: "pick", Header: "Deploy", Text: "Which window?", Options: []string{"Now", "Tonight"}}}}
+	e, err := chat.Put(actx, ChatEntry{Role: "cos", Text: "marker-from-a", Ask: &ask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatTestWait(t, "A's entry", func() bool { _, ok := chat.Entry(actx, e.ID); return ok })
+
+	page := httptest.NewRequest("GET", "/", nil).WithContext(bctx)
+	rec := httptest.NewRecorder()
+	routes.ServeHTTP(rec, page)
+	if strings.Contains(rec.Body.String(), "marker-from-a") {
+		t.Fatal("B's page shows A's entry")
+	}
+
+	answer := httptest.NewRequest("POST", "/chat/answer?e="+e.ID+"&q=pick&o=1", nil).WithContext(bctx)
+	answer.RemoteAddr = "127.0.0.1:4000"
+	answer.Header.Set("Datastar-Request", "true")
+	rec = httptest.NewRecorder()
+	routes.ServeHTTP(rec, answer)
+	if rec.Code != http.StatusNotFound {
+		t.Fatal("B answered A's question:", rec.Code)
+	}
+	if cur, _ := chat.Entry(actx, e.ID); len(cur.Ask.Answers) != 0 {
+		t.Fatal("A's question changed:", cur.Ask.Answers)
+	}
+
+	post := httptest.NewRequest("POST", "/chat", strings.NewReader(`{"msg":"hi from b"}`)).WithContext(bctx)
+	post.Header.Set("Datastar-Request", "true")
+	rec = httptest.NewRecorder()
+	routes.ServeHTTP(rec, post)
+	chatTestWait(t, "B's message in B's chat", func() bool {
+		for _, entry := range chat.Entries(bctx, chatMainTab) {
+			if entry.Text == "hi from b" {
+				return true
+			}
+		}
+		return false
+	})
+	for _, entry := range chat.Entries(actx, chatMainTab) {
+		if entry.Text == "hi from b" {
+			t.Fatal("B's message reached A's chat")
+		}
+	}
+	raw, err := openKV(ctx, bus, chatBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := raw.Keys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(keys, func(k string) bool { return strings.HasPrefix(k, b.Key("")) }) {
+		t.Fatal("B's message is not under B's prefix:", keys)
+	}
+}
+
 func TestChatSSEPatches(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -219,10 +353,11 @@ func TestChatSSEPatches(t *testing.T) {
 	}
 	defer store.Close()
 	web := NewWeb(store, nil)
+	u := chatTestUser()
 	// Seed one entry first: an append needs a non-empty client view, otherwise the stream repaints.
-	web.Chat.apply(chatTestPut(t, "0000000000000001-seed", "seed"))
+	web.Chat.apply(chatTestPut(t, u.Key("0000000000000001-seed"), "seed"))
 	web.Chat.apply(nil)
-	server := httptest.NewServer(web.routes())
+	server := httptest.NewServer(asUserHandler(u, web.routes()))
 	defer server.Close()
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/chat/events", nil)
 	response, err := server.Client().Do(req)
@@ -259,7 +394,7 @@ func TestChatSSEPatches(t *testing.T) {
 	}
 
 	key := "0000000000000002-new"
-	web.Chat.apply(chatTestPut(t, key, "hello"))
+	web.Chat.apply(chatTestPut(t, u.Key(key), "hello"))
 	appended := readEvent()
 	if !strings.Contains(appended, "data: selector #messages\n") || !strings.Contains(appended, "data: mode append\n") || !strings.Contains(appended, `id="m-`+key+`"`) {
 		t.Fatal(appended)
@@ -269,14 +404,14 @@ func TestChatSSEPatches(t *testing.T) {
 		t.Fatal(tick)
 	}
 
-	web.Chat.apply(chatTestPut(t, key, "hello again"))
+	web.Chat.apply(chatTestPut(t, u.Key(key), "hello again"))
 	morphed := readEvent()
 	if !strings.Contains(morphed, `id="m-`+key+`"`) || !strings.Contains(morphed, "hello again") || strings.Contains(morphed, "mode append") {
 		t.Fatal(morphed)
 	}
 	readEvent()
 
-	web.Chat.apply(fakeChatEntry{key: key, op: jetstream.KeyValueDelete})
+	web.Chat.apply(fakeChatEntry{key: u.Key(key), op: jetstream.KeyValueDelete})
 	removed := readEvent()
 	if !strings.Contains(removed, "data: selector #m-"+key+"\n") || !strings.Contains(removed, "data: mode remove\n") {
 		t.Fatal(removed)
@@ -386,6 +521,8 @@ func TestRenderMarkdownLinkSchemes(t *testing.T) {
 func TestChatAnswerPartial(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	u := chatTestUser()
+	uctx := WithUser(ctx, u)
 	nodes, _ := chatTestCluster(t, ctx)
 	chat := NewChat()
 	go chat.Run(ctx, nodes[0])
@@ -406,11 +543,11 @@ func TestChatAnswerPartial(t *testing.T) {
 	}
 	put := func(ask ChatAsk) string {
 		t.Helper()
-		e, err := chat.Put(ctx, ChatEntry{Role: "cos", Ask: &ask})
+		e, err := chat.Put(uctx, ChatEntry{Role: "cos", Ask: &ask})
 		if err != nil {
 			t.Fatal(err)
 		}
-		chatTestWait(t, "ask entry", func() bool { _, ok := chat.Entry(e.ID); return ok })
+		chatTestWait(t, "ask entry", func() bool { _, ok := chat.Entry(uctx, e.ID); return ok })
 		return e.ID
 	}
 	post := func(query string, datastar bool) *httptest.ResponseRecorder {
@@ -421,7 +558,7 @@ func TestChatAnswerPartial(t *testing.T) {
 			req.Header.Set("Datastar-Request", "true")
 		}
 		rec := httptest.NewRecorder()
-		web.routes().ServeHTTP(rec, req)
+		web.routes().ServeHTTP(rec, req.WithContext(uctx))
 		return rec
 	}
 	id := put(ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q1", Questions: questions})
@@ -431,7 +568,7 @@ func TestChatAnswerPartial(t *testing.T) {
 			t.Fatal(rec.Code, rec.Body.String())
 		}
 		chatTestWait(t, "partial answer", func() bool {
-			e, ok := chat.Entry(id)
+			e, ok := chat.Entry(uctx, id)
 			return ok && e.Ask.Answers["pick"] == "Tonight" && !e.Ask.Done
 		})
 	})
@@ -440,7 +577,7 @@ func TestChatAnswerPartial(t *testing.T) {
 		if rec := post("e="+id+"&q=scope&o=0", false); rec.Code != http.StatusForbidden {
 			t.Fatal(rec.Code)
 		}
-		e, _ := chat.Entry(id)
+		e, _ := chat.Entry(uctx, id)
 		if _, ok := e.Ask.Answers["scope"]; ok {
 			t.Fatal("rejected request stored an answer")
 		}
@@ -473,24 +610,24 @@ func TestChatAnswerPartial(t *testing.T) {
 		if rec := post("e="+multi+"&q=pick&o=1", true); rec.Code != http.StatusConflict {
 			t.Fatal("re-answer", rec.Code, rec.Body.String())
 		}
-		e, _ := chat.Entry(multi)
+		e, _ := chat.Entry(uctx, multi)
 		if len(e.Ask.Answers) != 2 || e.Ask.Done {
 			t.Fatalf("ask = %+v", e.Ask)
 		}
 	})
 
 	t.Run("last answer needs the COS bus", func(t *testing.T) {
-		seen, _ := chat.Entry(id)
+		seen, _ := chat.Entry(uctx, id)
 		bare := NewChat()
 		bare.kv = chat.kv
-		bare.entries[id] = seen
+		bare.entries[u.Key(id)] = seen
 		web.Chat = bare
 		defer func() { web.Chat = chat }()
 		if rec := post("e="+id+"&q=scope&o=0", true); rec.Code != http.StatusServiceUnavailable {
 			t.Fatal(rec.Code)
 		}
 		// The answer was fenced in, then rolled back because T3 was never reached.
-		e, _ := bare.Entry(id)
+		e, _ := bare.Entry(uctx, id)
 		if e.Ask.Done || len(e.Ask.Answers) != 1 {
 			t.Fatalf("ask = %+v", e.Ask)
 		}
@@ -501,6 +638,8 @@ func TestChatAnswerPartial(t *testing.T) {
 func TestChatAnswerFence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	u := chatTestUser()
+	uctx := WithUser(ctx, u)
 	var mu sync.Mutex
 	responds := 0
 	nodes, _ := chatTestClusterHandled(t, ctx, func(_ context.Context, command string, _ []string) (any, error) {
@@ -528,18 +667,18 @@ func TestChatAnswerFence(t *testing.T) {
 		{ID: "pick", Header: "Deploy", Text: "Which window?", Options: []string{"Now", "Tonight"}},
 		{ID: "scope", Header: "Scope", Text: "How much?", Options: []string{"Small", "Large"}},
 	}
-	e, err := chat.Put(ctx, ChatEntry{Role: "cos", Ask: &ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q1", Questions: questions}})
+	e, err := chat.Put(uctx, ChatEntry{Role: "cos", Ask: &ChatAsk{Host: "delta", ThreadID: "thread-1", RequestID: "q1", Questions: questions}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "ask entry", func() bool { _, ok := chat.Entry(e.ID); return ok })
+	chatTestWait(t, "ask entry", func() bool { _, ok := chat.Entry(uctx, e.ID); return ok })
 	post := func(query string) int {
 		t.Helper()
 		req := httptest.NewRequest("POST", "/chat/answer?"+query, nil)
 		req.RemoteAddr = "127.0.0.1:4000"
 		req.Header.Set("Datastar-Request", "true")
 		rec := httptest.NewRecorder()
-		web.routes().ServeHTTP(rec, req)
+		web.routes().ServeHTTP(rec, req.WithContext(uctx))
 		return rec.Code
 	}
 	if code := post("e=" + e.ID + "&q=pick&o=1"); code != http.StatusNoContent {

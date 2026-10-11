@@ -55,6 +55,7 @@ type ChatEntry struct {
 	// Action marks the outcome of a Threads panel button, shown under the panel as well as in the chat.
 	Action bool `json:"action,omitempty"`
 	rev    uint64
+	owner  string // ULID of the user whose key this entry is stored under; not serialized
 }
 
 // ChatTab is one chat tab; the leader runs a COS thread per open tab.
@@ -95,6 +96,16 @@ type ChatQuestion struct {
 // chatID sorts by creation time; KV keys allow only [-/_=.a-zA-Z0-9].
 func chatID(at time.Time) string {
 	return fmt.Sprintf("%016x-%s", at.UnixNano(), uuid()[:8])
+}
+
+// splitChatKey reads a stored "u.<ULID>.<chatID>" key; ok is false for legacy keys, which wait for migrateToUser.
+func splitChatKey(key string) (owner, id string, ok bool) {
+	rest, ok := strings.CutPrefix(key, "u.")
+	if !ok {
+		return "", "", false
+	}
+	owner, id, ok = strings.Cut(rest, ".")
+	return owner, id, ok && ulidPattern.MatchString(owner) && id != ""
 }
 
 // openKV binds a replicated bucket. Only the JetStream meta leader creates it:
@@ -148,9 +159,12 @@ type Chat struct {
 }
 
 // chatSub collects changed keys between wake-ups so a slow SSE client never misses one.
+// A per-user sub sees its owner's entries by bare chatID; an all-users sub (system consumers) sees full keys.
 type chatSub struct {
-	wake chan struct{}
-	keys map[string]bool
+	wake  chan struct{}
+	keys  map[string]bool
+	owner string // user ULID; "" when the subscriber had no user, so it only wakes on repaints
+	all   bool
 }
 
 func NewChat() *Chat {
@@ -260,11 +274,16 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 		c.notify("")
 		return
 	}
+	owner, rest, ok := splitChatKey(u.Key())
+	if !ok { // a legacy key; migrateToUser moves it under its owner
+		return
+	}
+	// Tabs, tags and entries are all per user: "u.<ULID>.tab.<id>", "u.<ULID>.tag.<hash>", "u.<ULID>.<chatID>".
 	switch {
-	case strings.HasPrefix(u.Key(), chatTabPrefix):
-		id := strings.TrimPrefix(u.Key(), chatTabPrefix)
+	case strings.HasPrefix(rest, chatTabPrefix):
+		id := strings.TrimPrefix(rest, chatTabPrefix)
 		if u.Operation() != jetstream.KeyValuePut {
-			delete(c.tabs, id)
+			delete(c.tabs, u.Key())
 			break
 		}
 		var t ChatTab
@@ -273,8 +292,8 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 			return
 		}
 		t.ID, t.rev = id, u.Revision()
-		c.tabs[id] = t
-	case strings.HasPrefix(u.Key(), chatTagPrefix):
+		c.tabs[u.Key()] = t
+	case strings.HasPrefix(rest, chatTagPrefix):
 		if u.Operation() != jetstream.KeyValuePut {
 			delete(c.tags, u.Key())
 			break
@@ -293,11 +312,11 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 			slog.Error("invalid chat entry", "key", u.Key())
 			return
 		}
-		e.ID, e.rev = u.Key(), u.Revision()
+		e.ID, e.owner, e.rev = rest, owner, u.Revision()
 		if e.Tab == "" {
 			e.Tab = chatMainTab
 		}
-		c.entries[e.ID] = e
+		c.entries[u.Key()] = e
 	}
 	if c.ready {
 		c.notify(u.Key())
@@ -306,7 +325,11 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 
 // notify records a changed key ("" repaints everything) and wakes every subscriber.
 func (c *Chat) notify(key string) {
+	owner, _, _ := splitChatKey(key)
 	for s := range c.subs {
+		if key != "" && !s.all && s.owner != owner {
+			continue
+		}
 		s.keys[key] = true
 		select {
 		case s.wake <- struct{}{}:
@@ -315,20 +338,42 @@ func (c *Chat) notify(key string) {
 	}
 }
 
-func (c *Chat) Subscribe() (*chatSub, func()) {
-	s := &chatSub{wake: make(chan struct{}, 1), keys: map[string]bool{}}
+// Subscribe wakes on changes to the user in ctx; with no user it only wakes on repaints.
+func (c *Chat) Subscribe(ctx context.Context) (*chatSub, func()) {
+	s := &chatSub{}
+	if u, err := UserFrom(ctx); err == nil {
+		s.owner = u.ID
+	}
+	return c.subscribe(s)
+}
+
+// SubscribeAll wakes on every user's changes; system consumers only, since it spans users.
+func (c *Chat) SubscribeAll() (*chatSub, func()) {
+	return c.subscribe(&chatSub{all: true})
+}
+
+func (c *Chat) subscribe(s *chatSub) (*chatSub, func()) {
+	s.wake, s.keys = make(chan struct{}, 1), map[string]bool{}
 	c.mu.Lock()
 	c.subs[s] = struct{}{}
 	c.mu.Unlock()
 	return s, func() { c.mu.Lock(); delete(c.subs, s); c.mu.Unlock() }
 }
 
-// Changed returns and clears the keys changed since the last call.
+// Changed returns and clears the keys changed since the last call; a per-user sub gets bare chatIDs.
 func (c *Chat) Changed(s *chatSub) []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	keys := sortedKeysBool(s.keys)
 	clear(s.keys)
+	if s.all {
+		return keys
+	}
+	for i, key := range keys {
+		if _, id, ok := splitChatKey(key); ok {
+			keys[i] = id
+		}
+	}
 	return keys
 }
 
@@ -341,13 +386,17 @@ func sortedKeysBool(m map[string]bool) []string {
 	return keys
 }
 
-// Entries returns the newest chatShown entries of tab, oldest first.
-func (c *Chat) Entries(tab string) []ChatEntry {
+// Entries returns the newest chatShown entries of tab for the user in ctx, oldest first; no user means none.
+func (c *Chat) Entries(ctx context.Context, tab string) []ChatEntry {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]ChatEntry, 0, len(c.entries))
-	for _, e := range c.entries {
-		if e.Tab == tab {
+	for key, e := range c.entries {
+		if e.Tab == tab && strings.HasPrefix(key, u.Key("")) {
 			out = append(out, e)
 		}
 	}
@@ -358,13 +407,17 @@ func (c *Chat) Entries(tab string) []ChatEntry {
 	return out
 }
 
-// Tags returns the thread tags of tab, sorted by thread ID.
-func (c *Chat) Tags(tab string) []ChatTag {
+// Tags returns the user's thread tags of tab, sorted by thread ID; no user means none.
+func (c *Chat) Tags(ctx context.Context, tab string) []ChatTag {
+	out := []ChatTag{}
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return out
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := []ChatTag{}
-	for _, t := range c.tags {
-		if t.Tab == tab {
+	for key, t := range c.tags {
+		if t.Tab == tab && strings.HasPrefix(key, u.Key("")) {
 			out = append(out, t)
 		}
 	}
@@ -372,36 +425,51 @@ func (c *Chat) Tags(tab string) []ChatTag {
 	return out
 }
 
-// Tabs returns every stored tab, closed ones included, sorted by ID.
-func (c *Chat) Tabs() []ChatTab {
+// Tabs returns every stored tab of the user in ctx, closed ones included, sorted by ID; no user means none.
+func (c *Chat) Tabs(ctx context.Context) []ChatTab {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]ChatTab, 0, len(c.tabs))
-	for _, t := range c.tabs {
-		out = append(out, t)
+	for key, t := range c.tabs {
+		if strings.HasPrefix(key, u.Key(chatTabPrefix)) {
+			out = append(out, t)
+		}
 	}
 	slices.SortFunc(out, func(a, b ChatTab) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
 
-func (c *Chat) Tab(id string) (ChatTab, bool) {
+// Tab returns the user's tab id; another user's tab is not found.
+func (c *Chat) Tab(ctx context.Context, id string) (ChatTab, bool) {
+	key, err := UserKey(ctx, chatTabPrefix+id)
+	if err != nil {
+		return ChatTab{}, false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	t, ok := c.tabs[id]
+	t, ok := c.tabs[key]
 	return t, ok
 }
 
-// CreateTab adds a tab; at most chatMaxTabs open tabs exist at once.
+// CreateTab adds a tab for the user in ctx; at most chatMaxTabs open tabs exist per user at once.
 func (c *Chat) CreateTab(ctx context.Context, name, focus string) (ChatTab, error) {
 	t := ChatTab{Name: strings.TrimSpace(name), Focus: strings.TrimSpace(focus)}
 	if err := validTab(t); err != nil {
 		return t, err
 	}
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return t, err
+	}
 	c.mu.Lock()
 	kv, ready := c.kv, c.ready
 	open := 0
-	for _, o := range c.tabs {
-		if !o.Closed {
+	for key, o := range c.tabs {
+		if !o.Closed && strings.HasPrefix(key, u.Key(chatTabPrefix)) {
 			open++
 		}
 	}
@@ -419,13 +487,13 @@ func (c *Chat) CreateTab(ctx context.Context, name, focus string) (ChatTab, erro
 	if err != nil {
 		return t, err
 	}
-	if t.rev, err = kv.Create(ctx, chatTabPrefix+t.ID, data); err != nil {
+	if t.rev, err = kv.Create(ctx, u.Key(chatTabPrefix+t.ID), data); err != nil {
 		return t, err
 	}
 	return t, nil
 }
 
-// UpdateTab writes t only if it has not changed since it was read, so a rename never resurrects a closed tab.
+// UpdateTab writes the user's t only if it has not changed since it was read, so a rename never resurrects a closed tab.
 func (c *Chat) UpdateTab(ctx context.Context, t ChatTab) error {
 	if t.ID == "" || t.ID == chatMainTab {
 		return fmt.Errorf("tab %q cannot be updated", t.ID)
@@ -435,6 +503,10 @@ func (c *Chat) UpdateTab(ctx context.Context, t ChatTab) error {
 		return errors.New("tab was never read or was deleted; reload it before updating")
 	}
 	if err := validTab(t); err != nil {
+		return err
+	}
+	key, err := UserKey(ctx, chatTabPrefix+t.ID)
+	if err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -447,32 +519,36 @@ func (c *Chat) UpdateTab(ctx context.Context, t ChatTab) error {
 	if err != nil {
 		return err
 	}
-	rev, err := kv.Update(ctx, chatTabPrefix+t.ID, data, t.rev)
+	rev, err := kv.Update(ctx, key, data, t.rev)
 	if err != nil {
 		return err
 	}
 	t.rev = rev
 	c.mu.Lock()
-	c.tabs[t.ID] = t
+	c.tabs[key] = t
 	c.mu.Unlock()
 	return nil
 }
 
-// DeleteTab removes the tab's cached entries and thread tags, then its key.
+// DeleteTab removes the user's tab: its cached entries and thread tags, then its key.
 func (c *Chat) DeleteTab(ctx context.Context, id string) error {
 	if id == "" || id == chatMainTab {
 		return fmt.Errorf("tab %q cannot be deleted", id)
 	}
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
 	kv := c.kv
 	keys := []string{}
-	for _, e := range c.entries {
-		if e.Tab == id {
-			keys = append(keys, e.ID)
+	for key, e := range c.entries {
+		if e.Tab == id && strings.HasPrefix(key, u.Key("")) {
+			keys = append(keys, key)
 		}
 	}
 	for key, t := range c.tags {
-		if t.Tab == id {
+		if t.Tab == id && strings.HasPrefix(key, u.Key("")) {
 			keys = append(keys, key)
 		}
 	}
@@ -485,7 +561,7 @@ func (c *Chat) DeleteTab(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	return kv.Delete(ctx, chatTabPrefix+id)
+	return kv.Delete(ctx, u.Key(chatTabPrefix+id))
 }
 
 // validTab checks a tab's name and focus; the name is one line, the focus may span lines.
@@ -499,11 +575,31 @@ func validTab(t ChatTab) error {
 	return nil
 }
 
-func (c *Chat) Entry(id string) (ChatEntry, bool) {
+// Entry returns the user's entry with chatID id; another user's entry is not found.
+func (c *Chat) Entry(ctx context.Context, id string) (ChatEntry, bool) {
+	key, err := UserKey(ctx, id)
+	if err != nil {
+		return ChatEntry{}, false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[id]
+	e, ok := c.entries[key]
 	return copyEntry(e), ok
+}
+
+// entryByKey reads an entry by its full stored key, for system consumers that span users.
+func (c *Chat) entryByKey(key string) (ChatEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	return copyEntry(e), ok
+}
+
+// entriesAll is every user's entries keyed by full key, for system consumers that span users.
+func (c *Chat) entriesAll() map[string]ChatEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return maps.Clone(c.entries)
 }
 
 // copyEntry clones what callers edit, so they never mutate the shared cache.
@@ -527,8 +623,11 @@ func (c *Chat) Ready() bool {
 	return c.ready
 }
 
-// Put writes an entry to the replicated bucket; ID and At are filled for new entries.
+// Put writes the user's entry to the replicated bucket; ID and At are filled for new entries.
 func (c *Chat) Put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
+	if _, err := UserFrom(ctx); err != nil {
+		return e, err
+	}
 	c.mu.Lock()
 	kv := c.kv
 	c.mu.Unlock()
@@ -538,8 +637,12 @@ func (c *Chat) Put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
 	return putChatEntry(ctx, kv, e)
 }
 
-// putChatEntry fills ID and time and writes e to the chat bucket.
+// putChatEntry fills ID and time and writes e under the user in ctx; no user writes nothing.
 func putChatEntry(ctx context.Context, kv jetstream.KeyValue, e ChatEntry) (ChatEntry, error) {
+	scoped, err := UserKV(ctx, kv)
+	if err != nil {
+		return e, err
+	}
 	if e.At.IsZero() {
 		e.At = time.Now().UTC()
 	}
@@ -550,11 +653,11 @@ func putChatEntry(ctx context.Context, kv jetstream.KeyValue, e ChatEntry) (Chat
 	if err != nil {
 		return e, err
 	}
-	_, err = kv.Put(ctx, e.ID, data)
+	_, err = scoped.Put(ctx, e.ID, data)
 	return e, err
 }
 
-// PutChat posts an entry from any component (e.g. a leader worker) without the dashboard's Chat;
+// PutChat posts an entry for the user in ctx from any component (e.g. a leader worker) without the dashboard's Chat;
 // every node's Chat.Run watcher shows it.
 func PutChat(ctx context.Context, b *Bus, e ChatEntry) (ChatEntry, error) {
 	kv, err := openKV(ctx, b, chatBucket)
@@ -584,15 +687,20 @@ func TagThread(ctx context.Context, b *Bus, t ChatTag) error {
 	return putTag(ctx, kv, t)
 }
 
+// putTag writes the tag under the user in ctx; no user writes nothing.
 func putTag(ctx context.Context, kv jetstream.KeyValue, t ChatTag) error {
 	if t.ThreadID == "" {
 		return errors.New("tag needs a thread ID")
+	}
+	scoped, err := UserKV(ctx, kv)
+	if err != nil {
+		return err
 	}
 	data, err := json.Marshal(t)
 	if err != nil {
 		return err
 	}
-	_, err = kv.Put(ctx, tagKey(t.ThreadID), data)
+	_, err = scoped.Put(ctx, tagKey(t.ThreadID), data)
 	return err
 }
 
@@ -615,26 +723,34 @@ func (c *Chat) Respond(ctx context.Context, host, thread, request, answers strin
 	return b.Call(ctx, host, "respond", []string{thread, request, answers}, nil)
 }
 
-// Replace writes e only if nobody changed it since it was read, so concurrent answers are not lost.
+// Replace writes the user's e only if nobody changed it since it was read, so concurrent answers are not lost.
 func (c *Chat) Replace(ctx context.Context, e ChatEntry) error {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
 	kv := c.kv
 	c.mu.Unlock()
 	if kv == nil {
 		return errors.New("chat store is starting; try again in a few seconds")
 	}
+	scoped, err := UserKV(ctx, kv)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
-	rev, err := kv.Update(ctx, e.ID, data, e.rev)
+	rev, err := scoped.Update(ctx, e.ID, data, e.rev)
 	if err != nil {
 		return err
 	}
 	// Cache the write now, so an answer to the next question does not fence on a stale revision.
 	c.mu.Lock()
-	e.rev = rev
-	c.entries[e.ID] = copyEntry(e)
+	e.rev, e.owner = rev, u.ID
+	c.entries[u.Key(e.ID)] = copyEntry(e)
 	c.mu.Unlock()
 	return nil
 }

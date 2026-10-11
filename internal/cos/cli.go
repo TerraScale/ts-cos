@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 func output(w io.Writer, v any) error {
@@ -32,9 +34,24 @@ func Run(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: cos <command> ...; use cos help")
 	}
+	if args[0] == "--user" {
+		if len(args) < 3 {
+			return errors.New("usage: cos --user <name|ULID> <command> ...")
+		}
+		bus, err := ConnectBus(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		u, err := cliUser(ctx, bus.conn, args[1])
+		bus.Close()
+		if err != nil {
+			return err
+		}
+		ctx, args = WithUser(ctx, u), args[2:]
+	}
 	command, args := args[0], args[1:]
 	if command == "help" || command == "--help" || command == "-h" {
-		commands := []string{"fleet", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
+		commands := []string{"--user <name|ULID> <command> ...: act as one COS user (agent, context, memory and merge need it)", "fleet", "task set '<json: ticket, why, modelWhy, next>' | rm <ticket> | list", "note <direction|missing|suggest|need|decide> '<text>' | --rm <id> | --clear", "serve [--port 8790]", "cluster"}
 		for _, k := range sortedCommandNames() {
 			commands = append(commands, localCommands[k].Usage)
 		}
@@ -136,6 +153,48 @@ func tagLaunch(ctx context.Context, bus *Bus, host, tab string, out any) error {
 	}
 	return TagThread(ctx, bus, ChatTag{ThreadID: id, Host: host, Tab: tab, At: time.Now().UTC()})
 }
+
+// errUnknownUser is the same for a missing and a disabled user, so the CLI does not reveal which accounts exist.
+var errUnknownUser = errors.New("unknown COS user")
+
+// cliUser resolves a login name or ULID through the stream leader; a disabled account is not a user.
+func cliUser(ctx context.Context, nc *nats.Conn, ref string) (User, error) {
+	id := ref
+	if !ulidPattern.MatchString(ref) {
+		if !authUserPattern.MatchString(ref) {
+			return User{}, errUnknownUser
+		}
+		value, _, found, err := leaderGet(ctx, nc, authBucket, "name."+ref)
+		if err != nil {
+			return User{}, err
+		}
+		if !found {
+			return User{}, errUnknownUser
+		}
+		id = string(value)
+	}
+	if !ulidPattern.MatchString(id) {
+		return User{}, errUnknownUser
+	}
+	value, _, found, err := leaderGet(ctx, nc, authBucket, "uid."+id)
+	if err != nil {
+		return User{}, err
+	}
+	var rec authUser
+	if !found || json.Unmarshal(value, &rec) != nil || !rec.DisabledAt.IsZero() {
+		return User{}, errUnknownUser
+	}
+	return User{ID: id, Name: rec.Name, Role: rec.Role}, nil
+}
+
+// needUser fails a command that acts for one user when no --user was given.
+func needUser(ctx context.Context, command string) error {
+	if _, err := UserFrom(ctx); err != nil {
+		return fmt.Errorf("cos %s needs --user <name>", command)
+	}
+	return nil
+}
+
 func sortedCommandNames() []string {
 	m := map[string]any{}
 	for k := range localCommands {

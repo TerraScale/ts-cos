@@ -24,12 +24,19 @@ const contextMaxText = 16 << 10
 
 func init() {
 	cliCommands["context"] = cliCommand{Usage: "context list | get <name> | set <name> '<markdown>' | rm <name>", Run: func(ctx context.Context, cfg Config, args []string, w io.Writer) error {
+		if err := needUser(ctx, "context"); err != nil {
+			return err
+		}
 		bus, err := ConnectBus(ctx, cfg)
 		if err != nil {
 			return err
 		}
 		defer bus.Close()
-		kv, err := openKV(ctx, bus, contextBucket)
+		shared, err := openKV(ctx, bus, contextBucket)
+		if err != nil {
+			return err
+		}
+		kv, err := UserKV(ctx, shared)
 		if err != nil {
 			return err
 		}

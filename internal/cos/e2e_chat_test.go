@@ -17,6 +17,7 @@ import (
 func chatTestWebs(t *testing.T, ctx context.Context) ([]*Bus, []*Web, []string) {
 	t.Helper()
 	buses, _ := chatTestCluster(t, ctx)
+	user := probeUser
 	webs := make([]*Web, len(buses))
 	for i, bus := range buses {
 		store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
@@ -32,7 +33,7 @@ func chatTestWebs(t *testing.T, ctx context.Context) ([]*Bus, []*Web, []string) 
 	bases := make([]string, len(buses))
 	for i, web := range webs {
 		chatTestAwait(t, web.Chat, "chat ready", web.Chat.Ready)
-		server := httptest.NewServer(web.routes())
+		server := httptest.NewServer(asUserHandler(user, web.routes()))
 		t.Cleanup(server.Close)
 		bases[i] = server.URL
 	}
@@ -56,6 +57,7 @@ func TestE2EChatReplyAll(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	buses, webs, bases := chatTestWebs(t, ctx)
+	ctx = WithUser(ctx, probeUser)
 	cookies := make([]string, len(bases))
 
 	if _, err := newestCOSReply(ctx, buses[0]); !errors.Is(err, errNoCOSReply) {
@@ -67,7 +69,7 @@ func TestE2EChatReplyAll(t *testing.T) {
 	}
 	for _, web := range webs {
 		chatTestAwait(t, web.Chat, "reply on every node", func() bool {
-			return slices.ContainsFunc(web.Chat.Entries(chatMainTab), func(e ChatEntry) bool { return e.ID == entry.ID })
+			return slices.ContainsFunc(web.Chat.Entries(ctx, chatMainTab), func(e ChatEntry) bool { return e.ID == entry.ID })
 		})
 	}
 	id, err := newestCOSReply(ctx, buses[1])

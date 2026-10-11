@@ -37,7 +37,7 @@ func (w *Web) threadAction(rw http.ResponseWriter, r *http.Request) {
 	}
 	tab := mainTab
 	if id := r.PathValue("tab"); id != chatMainTab {
-		t, ok := w.Chat.Tab(id)
+		t, ok := w.Chat.Tab(r.Context(), id)
 		if !ok || t.Closed {
 			tabRedirect(rw, r, "", "This tab is closed")
 			return
@@ -55,7 +55,7 @@ func (w *Web) threadAction(rw http.ResponseWriter, r *http.Request) {
 
 // tabRow finds the panel row for host and thread; the tab's COS thread and other tabs' threads are not rows.
 func (w *Web) tabRow(ctx context.Context, tab ChatTab, host, thread string) (panelThread, bool) {
-	for _, row := range tabThreads(w.state(ctx).Live, w.Chat.Tags(tab.ID)) {
+	for _, row := range tabThreads(w.state(ctx).Live, w.Chat.Tags(ctx, tab.ID)) {
 		if row.Host == host && row.ThreadID == thread {
 			return row, true
 		}
