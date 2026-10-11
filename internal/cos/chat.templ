@@ -5,6 +5,7 @@ templ chatPage(h chatHeader, entries []ChatEntry) {
 	<html lang="en">
 		@docHead("COS · TerraScale")
 		<body class="shell chat" data-init="@get('/chat/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
+			@releaseWatch()
 			@chatHead(h)
 			<main id="scroll" class="chat-log">
 				@chatMessages(entries)

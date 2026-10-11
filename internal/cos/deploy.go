@@ -151,8 +151,12 @@ func (s source) resolve(ctx context.Context, ref string) (revision, change strin
 			return "", "", fmt.Errorf("unknown branch or commit %q", ref)
 		}
 	}
-	change, err = s.run(ctx, "git", "log", "-1", "--format=%s", revision)
-	return revision, change, err
+	subject, err := s.run(ctx, "git", "log", "-1", "--format=%s", revision)
+	if err != nil {
+		return "", "", err
+	}
+	note, err := s.run(ctx, "git", "log", "-1", "--format=%(trailers:key=Update-Note,valueonly,separator=%x20)", revision)
+	return revision, changeText(note, subject), err
 }
 
 // build compiles a resolved revision from a clean checkout into the cos_builds object
@@ -395,6 +399,11 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 	}
 	switch r.Phase {
 	case phaseCompleted:
+		// Open tabs reload into the new build once every node runs it.
+		release, _ := json.Marshal(Release{Revision: r.To, Change: r.Change})
+		if _, err := kv.Put(ctx, releaseKey, release); err != nil {
+			slog.Warn("release not recorded", "error", err)
+		}
 		publishDeploy(ctx, js, r, rolloutEvent{Kind: KindDeployCompleted})
 	case phaseRolledBack:
 		// Only a newer main build, or `cos deploy`, tries again.

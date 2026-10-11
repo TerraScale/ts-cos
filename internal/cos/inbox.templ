@@ -5,6 +5,7 @@ templ inboxPage(h chatHeader, v Dashboard) {
 	<html lang="en">
 		@docHead("COS · TerraScale")
 		<body class="shell" data-init="@get('/inbox/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
+			@releaseWatch()
 			@chatHead(h)
 			<main class="page">
 				@inbox(v)

@@ -99,13 +99,13 @@ func TestChatRoutes(t *testing.T) {
 	}
 	r := serve("GET", "/", false, "")
 	body := r.Body.String()
-	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", cssPath} {
+	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `data-init="@get(&#39;/release&#39;`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", cssPath} {
 		if r.Code != http.StatusOK || !strings.Contains(body, want) {
 			t.Fatal(r.Code, "missing", want)
 		}
 	}
 	inboxPage := serve("GET", "/inbox", false, "")
-	for _, want := range []string{`data-init="@get('/inbox/events'`, `id="inbox"`, `href="/inbox">Inbox <span class="badge badge-accent">0</span>`, "Nothing needs you"} {
+	for _, want := range []string{`data-init="@get('/inbox/events'`, `data-init="@get(&#39;/release&#39;`, `id="inbox"`, `href="/inbox">Inbox <span class="badge badge-accent">0</span>`, "Nothing needs you"} {
 		if inboxPage.Code != http.StatusOK || !strings.Contains(inboxPage.Body.String(), want) {
 			t.Fatal(inboxPage.Code, "inbox page missing", want)
 		}

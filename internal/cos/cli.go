@@ -300,6 +300,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	go bus.Lead(ctx, func(ctx context.Context) { RunRollouts(ctx, cfg, bus) })
+	go clusterRelease.watch(ctx, cfg, js)
 	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s), NewRulesEngine(cfg, bus, s))
 	if err != nil {
 		return err
@@ -325,7 +326,18 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	behaviorDone := make(chan struct{})
 	go func() { defer close(behaviorDone); RunBehavior(ctx, cfg, bus, behaviors) }()
 	defer func() { cancel(); <-behaviorDone }()
-	go runTunnel(ctx)
+	go func() {
+		// Public traffic reaches this node only once it serves signed-in users; until its
+		// sessions bucket opens it would answer 401 to everyone Cloudflare sends here.
+		for len(probe(ctx)) > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+		runTunnel(ctx)
+	}()
 	for _, worker := range serveWorkers {
 		go worker(ctx, cfg, bus)
 	}

@@ -172,6 +172,20 @@ Every step is an event on `cos.events.deploy.>`: `deploy.started`,
 `node.updated`, `gate.failed`, `deploy.rolled_back`, `deploy.completed`, with
 `{"rollout","to","change","hosts","from","reason"}` data.
 
+### Zero-downtime updates in the browser (TS-818)
+
+A node registers its Cloudflare connector only after it passes the same signed-in
+dashboard probe as the gate, so `cos.terrascale.tech` never sends users to a node
+that is still starting. Long-lived SSE streams open with `sseGet(path)`
+(`{retry: 'always', retryMaxCount: 1000}`): Datastar reconnects after a clean
+stream end or an error page too, so an open tab follows a restarting node to
+another one. Every page body includes `@releaseWatch()`: it subscribes to
+`/release`, which streams the cluster release (`release` in `cos_deploy`, set only
+when a rollout completes), and reloads the tab once when it changes, then shows
+"Updated: <change>". The change text is the deployed commit's `Update-Note:`
+trailer, else its subject without the ticket key and PR number. `GET /version`
+returns this node's build and the cluster release.
+
 The CLI connects to **its local** NATS node. Calls to `cos.<host>.<command>` route
 through that cluster; remote T3 HTTP connections and SSH tunnels are not used.
 Client cancellation is sent to the remote operation; it cannot undo a mutation
