@@ -284,10 +284,6 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	defer s.Close()
-	token, err := loadDashboardToken(cfg.Home)
-	if err != nil {
-		return err
-	}
 	bus, err := StartBus(ctx, cfg, func(ctx context.Context, cmd string, args []string) (any, error) {
 		return LocalCommand(ctx, cfg, cmd, args)
 	})
@@ -295,7 +291,13 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	defer bus.Close()
-	w := NewWeb(s, token)
+	js, err := bus.JetStream()
+	if err != nil {
+		return err
+	}
+	auth := NewAuth(cfg.Home, js)
+	go auth.Start(ctx)
+	w := NewWeb(s, auth)
 	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s))
 	if err != nil {
 		return err
@@ -311,6 +313,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	server := &http.Server{Handler: w.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	pollDone := make(chan struct{})
 	go func() { defer close(pollDone); w.Poll(ctx, cfg, bus) }()
+	go runTunnel(ctx)
 	defer func() { cancel(); <-pollDone }()
 	slog.Info("COS dashboard listening", "address", l.Addr().String())
 	err = serveDashboard(ctx, server, l, cancel)

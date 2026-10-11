@@ -56,7 +56,34 @@ another node takes over within about 20 seconds. Two of three nodes keep the
 cluster working. `cos cluster` prints the local host, the leader and the build
 revision; every node also advertises its revision in its micro metadata.
 
-Every HTTP route, including `/status` and `/events`, requires authentication.
+### Sign-in and public URL
+
+`https://cos.terrascale.tech` and `http://<host>:8790` on the tailnet serve the
+same dashboard from any node. Cloudflare Tunnel `cos`
+(`88533e25-445e-4353-9739-2e4a5509fab6`, CNAME record
+`ccb97b18ca5ab1fc0a9f409c5983be96`) routes the hostname to
+`http://localhost:8790`; every node runs its own `cloudflared` connector with the
+token from Vault secret `cos-tunnel`, so Cloudflare fails over between hosts and
+a stopped node stops receiving traffic. The connector token was stored once in
+Vault; nobody copies it.
+
+Only `GET /login` is public. Users, sessions and lockouts are three-replica
+JetStream KV (`cos_auth`, `cos_sessions`), so a session or password change from
+one node works on every node at once. On first start each node seeds
+`~/.config/cos/admin.json` (`{"user","bcrypt"}`, 0600) unless the user already
+exists; the file is never rewritten and the hash is never logged.
+
+- Sessions: random 32-byte token, `HttpOnly`, `SameSite=Lax`, `Secure` over
+  HTTPS, 7 days; logout ends the session on every node.
+- `/password` (current + new, 12 to 72 characters) replaces the bcrypt hash
+  everywhere and signs out the user's other sessions.
+- Five consecutive failures lock a user for 15 minutes on every node, even with
+  the right password. Each node allows 10 attempts per client address per
+  minute (`Cf-Connecting-Ip` from the local connector).
+- Cross-site form posts are rejected; pages are `no-store` and cannot be framed.
+  Requests from outside loopback and Tailscale are refused.
+
+Every other HTTP route, including `/status` and `/events`, requires a session.
 
 The CLI connects to **its local** NATS node. Calls to `cos.<host>.<command>` route
 through that cluster; remote T3 HTTP connections and SSH tunnels are not used.
@@ -72,7 +99,6 @@ Legacy credential locations below are implementation debt; OCI Vault must delive
 | Local T3 | `~/.config/cos/tokens/<local hostname>` |
 | Ku MCP | `~/.config/cos/ku-token` |
 | Forgejo | `~/.local/share/forgejo-cli/keys.json`, host `git.terrascale.tech` |
-| Dashboard | `~/.config/cos/dashboard-token` (generated, 0600) |
 
 ## Commands
 

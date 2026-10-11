@@ -16,15 +16,15 @@ import (
 type Web struct {
 	Store       *Store
 	Autopilot   *Autopilot
-	token       string
+	auth        *Auth
 	mu          sync.Mutex
 	clients     map[chan struct{}]struct{}
 	watchCancel context.CancelFunc
 	watchDone   chan struct{}
 }
 
-func NewWeb(s *Store, token string) *Web {
-	return &Web{Store: s, token: token, clients: map[chan struct{}]struct{}{}}
+func NewWeb(s *Store, auth *Auth) *Web {
+	return &Web{Store: s, auth: auth, clients: map[chan struct{}]struct{}{}}
 }
 func (w *Web) Broadcast() {
 	w.mu.Lock()
@@ -37,6 +37,11 @@ func (w *Web) Broadcast() {
 	}
 }
 func (w *Web) Handler() http.Handler {
+	return w.auth.Protect(w.routes())
+}
+
+// routes are the dashboard pages behind sign-in.
+func (w *Web) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := View(r.Context(), w.Store)
@@ -62,7 +67,7 @@ func (w *Web) Handler() http.Handler {
 		rw.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(rw).Encode(v)
 	})
-	return dashboardAuth(w.token, mux)
+	return mux
 }
 func (w *Web) Events(rw http.ResponseWriter, r *http.Request) {
 	if _, ok := rw.(http.Flusher); !ok {

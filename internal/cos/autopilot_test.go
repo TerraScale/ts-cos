@@ -143,11 +143,10 @@ func TestAutopilotWebRequiresDatastar(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	server := httptest.NewServer(NewWeb(store, "test-secret").Handler())
+	server := httptest.NewServer(NewWeb(store, nil).routes())
 	defer server.Close()
 	post := func(path string, datastar bool) *http.Response {
 		req, _ := http.NewRequest("POST", server.URL+path, nil)
-		req.SetBasicAuth(dashboardUser, "test-secret")
 		if datastar {
 			req.Header.Set("Datastar-Request", "true")
 		}

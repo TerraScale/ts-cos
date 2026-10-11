@@ -8,8 +8,8 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.54.0
-	github.com/nats-io/nkeys v0.4.16
 	github.com/oracle/oci-go-sdk/v65 v65.126.0
+	golang.org/x/crypto v0.57.0
 	modernc.org/sqlite v1.60.1
 )
 
@@ -30,12 +30,12 @@ require (
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/natefinch/atomic v1.0.1 // indirect
 	github.com/nats-io/jwt/v2 v2.8.2 // indirect
+	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sony/gobreaker/v2 v2.4.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect

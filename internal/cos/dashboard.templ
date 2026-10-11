@@ -12,6 +12,7 @@ templ page(v Dashboard) {
 			<style>main{max-width:1440px} .table-scroll{overflow-x:auto} td{vertical-align:top} small{display:block} mark{white-space:nowrap}</style>
 		</head>
 		<body data-init="@get('/events')">
+			<nav><a href="/password">Change password</a><form method="post" action="/logout"><button type="submit" class="secondary">Log out</button></form></nav>
 			<p id="autopilot-notice" role="status"></p>
 			@dashboard(v)
 		</body>

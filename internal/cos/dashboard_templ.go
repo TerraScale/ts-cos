@@ -29,7 +29,7 @@ func page(v Dashboard) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>COS · TerraScale</title><link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.classless.min.css\"><script type=\"module\" src=\"https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js\"></script><style>main{max-width:1440px} .table-scroll{overflow-x:auto} td{vertical-align:top} small{display:block} mark{white-space:nowrap}</style></head><body data-init=\"@get('/events')\"><p id=\"autopilot-notice\" role=\"status\"></p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>COS · TerraScale</title><link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.classless.min.css\"><script type=\"module\" src=\"https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js\"></script><style>main{max-width:1440px} .table-scroll{overflow-x:auto} td{vertical-align:top} small{display:block} mark{white-space:nowrap}</style></head><body data-init=\"@get('/events')\"><nav><a href=\"/password\">Change password</a><form method=\"post\" action=\"/logout\"><button type=\"submit\" class=\"secondary\">Log out</button></form></nav><p id=\"autopilot-notice\" role=\"status\"></p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -73,7 +73,7 @@ func dashboard(v Dashboard) templ.Component {
 		var templ_7745c5c3_Var3 string
 		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(v.Live.At)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 25, Col: 31}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 26, Col: 31}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 		if templ_7745c5c3_Err != nil {
@@ -91,7 +91,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(key)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 28, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 29, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -104,7 +104,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var5 string
 			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(v.Live.Errors[key])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 28, Col: 80}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 29, Col: 80}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 			if templ_7745c5c3_Err != nil {
@@ -132,7 +132,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var6 string
 			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(v.Story.Direction)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 35, Col: 26}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 36, Col: 26}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
@@ -150,7 +150,7 @@ func dashboard(v Dashboard) templ.Component {
 		var templ_7745c5c3_Var7 string
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(integer(v.Running))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 37, Col: 26}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 38, Col: 26}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 		if templ_7745c5c3_Err != nil {
@@ -163,7 +163,7 @@ func dashboard(v Dashboard) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(integer(len(v.Live.PRs)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 37, Col: 74}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 38, Col: 74}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
@@ -176,7 +176,7 @@ func dashboard(v Dashboard) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(integer(v.Ready))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 37, Col: 107}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 38, Col: 107}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -189,7 +189,7 @@ func dashboard(v Dashboard) templ.Component {
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(integer(v.Failing))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 37, Col: 139}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 38, Col: 139}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
@@ -202,7 +202,7 @@ func dashboard(v Dashboard) templ.Component {
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(integer(len(v.Tasks)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 37, Col: 179}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 38, Col: 179}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
@@ -226,7 +226,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var12 string
 			templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(a.Host)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 46, Col: 21}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 47, Col: 21}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 			if templ_7745c5c3_Err != nil {
@@ -239,7 +239,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(a.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 46, Col: 36}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 47, Col: 36}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 			if templ_7745c5c3_Err != nil {
@@ -263,7 +263,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(a.Error)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 51, Col: 31}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 52, Col: 31}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -281,7 +281,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(a.RequestKind)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 53, Col: 32}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 54, Col: 32}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
@@ -294,7 +294,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(jsonText(a.Payload))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 54, Col: 32}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 55, Col: 32}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
@@ -312,7 +312,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var17 string
 				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(a.Question)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 56, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 57, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 				if templ_7745c5c3_Err != nil {
@@ -335,7 +335,7 @@ func dashboard(v Dashboard) templ.Component {
 						var templ_7745c5c3_Var18 string
 						templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(option)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 60, Col: 21}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 61, Col: 21}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 						if templ_7745c5c3_Err != nil {
@@ -358,7 +358,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var19 string
 				templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(a.Why)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 64, Col: 16}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 65, Col: 16}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 				if templ_7745c5c3_Err != nil {
@@ -408,7 +408,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var20 string
 			templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(task.Ticket)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 85, Col: 37}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 86, Col: 37}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 			if templ_7745c5c3_Err != nil {
@@ -426,7 +426,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var21 string
 				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(task.Priority)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 88, Col: 31}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 89, Col: 31}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 				if templ_7745c5c3_Err != nil {
@@ -440,7 +440,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var22 string
 				templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(task.Priority)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 90, Col: 25}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 91, Col: 25}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 				if templ_7745c5c3_Err != nil {
@@ -454,7 +454,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var23 string
 			templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(task.Repo)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 93, Col: 23}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 94, Col: 23}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 			if templ_7745c5c3_Err != nil {
@@ -467,7 +467,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var24 string
 			templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(task.Outcome)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 93, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 94, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 			if templ_7745c5c3_Err != nil {
@@ -480,7 +480,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(task.Status)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 94, Col: 25}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 95, Col: 25}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 			if templ_7745c5c3_Err != nil {
@@ -493,7 +493,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(task.Host)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 94, Col: 45}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 95, Col: 45}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
@@ -516,7 +516,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var27 string
 			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(task.Model)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 99, Col: 24}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 100, Col: 24}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
@@ -529,7 +529,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var28 string
 			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(task.ModelWhy)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 99, Col: 48}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 100, Col: 48}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 			if templ_7745c5c3_Err != nil {
@@ -542,7 +542,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var29 string
 			templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(task.Why)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 100, Col: 22}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 101, Col: 22}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 			if templ_7745c5c3_Err != nil {
@@ -560,7 +560,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var30 templ.SafeURL
 				templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(task.PR))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 103, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 104, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 				if templ_7745c5c3_Err != nil {
@@ -578,7 +578,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(task.Next)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 106, Col: 23}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 107, Col: 23}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 			if templ_7745c5c3_Err != nil {
@@ -617,7 +617,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var32 templ.SafeURL
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(pr.URL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 119, Col: 40}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 120, Col: 40}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 			if templ_7745c5c3_Err != nil {
@@ -630,7 +630,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var33 string
 			templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(pr.Repo)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 119, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 120, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 			if templ_7745c5c3_Err != nil {
@@ -643,7 +643,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var34 string
 			templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(integer(pr.Number))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 119, Col: 75}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 120, Col: 75}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 			if templ_7745c5c3_Err != nil {
@@ -656,7 +656,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var35 string
 			templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(pr.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 119, Col: 95}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 120, Col: 95}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 			if templ_7745c5c3_Err != nil {
@@ -669,7 +669,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var36 string
 			templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(pr.CI)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 120, Col: 19}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 121, Col: 19}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 			if templ_7745c5c3_Err != nil {
@@ -682,7 +682,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var37 string
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(reviewLabel(pr))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 120, Col: 50}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 121, Col: 50}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 			if templ_7745c5c3_Err != nil {
@@ -695,7 +695,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var38 string
 			templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(mergeLabel(pr))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 120, Col: 79}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 121, Col: 79}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 			if templ_7745c5c3_Err != nil {
@@ -713,7 +713,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(join(pr.Failing))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 122, Col: 36}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 123, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 				if templ_7745c5c3_Err != nil {
@@ -732,7 +732,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var40 string
 				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(join(pr.Pending))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 125, Col: 36}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 126, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
@@ -766,7 +766,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var41 string
 			templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(host.Host)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 137, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 138, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 			if templ_7745c5c3_Err != nil {
@@ -779,7 +779,7 @@ func dashboard(v Dashboard) templ.Component {
 			var templ_7745c5c3_Var42 string
 			templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(integer(host.Active))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 137, Col: 69}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 138, Col: 69}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 			if templ_7745c5c3_Err != nil {
@@ -797,7 +797,7 @@ func dashboard(v Dashboard) templ.Component {
 				var templ_7745c5c3_Var43 string
 				templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(host.Error)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 139, Col: 34}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 140, Col: 34}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 				if templ_7745c5c3_Err != nil {
@@ -827,7 +827,7 @@ func dashboard(v Dashboard) templ.Component {
 					var templ_7745c5c3_Var44 string
 					templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(thread.Status)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 147, Col: 35}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 148, Col: 35}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 					if templ_7745c5c3_Err != nil {
@@ -840,7 +840,7 @@ func dashboard(v Dashboard) templ.Component {
 					var templ_7745c5c3_Var45 string
 					templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(thread.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 147, Col: 64}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 148, Col: 64}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 					if templ_7745c5c3_Err != nil {
@@ -853,7 +853,7 @@ func dashboard(v Dashboard) templ.Component {
 					var templ_7745c5c3_Var46 string
 					templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(thread.Model)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 147, Col: 87}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 148, Col: 87}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 					if templ_7745c5c3_Err != nil {
@@ -866,7 +866,7 @@ func dashboard(v Dashboard) templ.Component {
 					var templ_7745c5c3_Var47 string
 					templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(thread.Project)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 147, Col: 109}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 148, Col: 109}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 					if templ_7745c5c3_Err != nil {
@@ -890,7 +890,7 @@ func dashboard(v Dashboard) templ.Component {
 						var templ_7745c5c3_Var48 string
 						templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(thread.LastError)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 152, Col: 35}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 153, Col: 35}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 						if templ_7745c5c3_Err != nil {
@@ -969,7 +969,7 @@ func noteList(notes []Note, kind string) templ.Component {
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(note.Text)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 173, Col: 19}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/cos/dashboard.templ`, Line: 174, Col: 19}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
