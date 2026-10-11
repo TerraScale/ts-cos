@@ -166,11 +166,31 @@ func TestBudgetClassify(t *testing.T) {
 	}
 
 	unresolved := budgetTestEvent(t, KindBudgetExceeded, budgetData{Scope: scope, Day: budgetTestDay, Used: 10_000_000, Limit: 10_000_000})
-	unresolved.Thread = "t-gone"
+	unresolved.Thread = ""
 	got = Classify(unresolved, live, nil, WakeMemory{}, nil)
 	assertRules(t, got, []Decision{{Class: ClassRecord, Rule: "budget-exceeded"}})
 	if got[0].Wake != "" {
 		t.Fatalf("unresolved thread was woken: %+v", got[0])
+	}
+
+	// The sweep resolved the thread, but the leader's snapshot has not caught up yet: still a pause.
+	lagging := budgetTestEvent(t, KindBudgetExceeded, budgetData{Scope: scope, Day: budgetTestDay, Used: 10_000_000, Limit: 10_000_000})
+	got = Classify(lagging, Live{}, nil, WakeMemory{}, nil)
+	assertRules(t, got, []Decision{{Class: ClassAct, Rule: "budget-pause"}, {Class: ClassEscalate, Rule: "budget-pause"}})
+	if got[0].Host != "beta" || got[0].Thread != "t1" || !strings.HasPrefix(got[0].Wake, "PAUSED: budget") {
+		t.Fatalf("lagging pause = %+v, want a wake for beta/t1", got[0])
+	}
+	budgetItemValid(t, got[1].Inbox)
+	if got[1].Inbox.Kind != "question" || got[1].Inbox.Thread != "t1" {
+		t.Fatalf("lagging pause inbox = %+v, want a thread question on t1", got[1].Inbox)
+	}
+
+	// COS is never paused, even when the sweep resolved a thread for it and the snapshot is empty.
+	cosLagging := budgetTestEvent(t, KindBudgetExceeded, budgetData{Scope: scope, Day: budgetTestDay, Used: 10_000_000, Limit: 10_000_000, Label: budgetCOSLabel})
+	got = Classify(cosLagging, Live{}, nil, WakeMemory{}, nil)
+	assertRules(t, got, []Decision{{Class: ClassRecord, Rule: "budget-exceeded"}})
+	if got[0].Wake != "" {
+		t.Fatalf("COS was woken on a lagging snapshot: %+v", got[0])
 	}
 
 	fleet := budgetTestEvent(t, KindBudgetExceeded, budgetData{Scope: budgetDaily, Day: budgetTestDay, Used: 100_000_000, Limit: 100_000_000,

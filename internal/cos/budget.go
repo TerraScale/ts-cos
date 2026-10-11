@@ -190,13 +190,14 @@ func budgetCrossings(totals []UsageTotal, daily UsageTotal, limits budgetLimits,
 }
 
 // budgetDecisions acts on one budget event. The thread pause and fleet pause both carry
-// a question for the user; COS and unresolved groups only get an FYI.
+// a question for the user; COS and events with no thread only get an FYI. The sweep
+// resolves the thread, so a live snapshot that lags behind a new thread does not block the pause.
 func budgetDecisions(e Event, live Live, owner *FleetThread) []Decision {
 	var b budgetData
 	if err := json.Unmarshal(e.Data, &b); err != nil {
 		return []Decision{{Class: ClassRecord, Rule: "budget", Reason: "budget data unreadable: " + err.Error()}}
 	}
-	thread := ""
+	thread := e.Thread
 	if owner != nil {
 		thread = owner.ThreadID
 	}
@@ -212,7 +213,7 @@ func budgetDecisions(e Event, live Live, owner *FleetThread) []Decision {
 	switch {
 	case b.Scope == budgetDaily:
 		return budgetPauseFleet(e, b, live, key)
-	case owner == nil || b.Label == budgetCOSLabel:
+	case thread == "" || e.Host == "" || b.Label == budgetCOSLabel:
 		return []Decision{{Class: ClassRecord, Rule: "budget-exceeded", Reason: e.Summary, Host: e.Host, Ticket: e.Ticket,
 			Inbox: inbox("fyi", nil, key)}}
 	}

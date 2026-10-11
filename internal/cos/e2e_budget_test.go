@@ -122,3 +122,29 @@ func TestBudgetCleanupRunsEveryStep(t *testing.T) {
 		t.Fatalf("cleanup ran %v with error %v; want every step and the first error", ran, err)
 	}
 }
+
+// The stale sweep removes only keys a budget check made: fake t-e2e groups with eight hex digits.
+func TestBudgetE2EStaleKeyMatchesOnlyFakeGroups(t *testing.T) {
+	day := budgetTestDay
+	for _, c := range []struct {
+		key  string
+		want bool
+	}{
+		{budgetExceededKey(day, budgetE2EScopeTest, e2eBudgetLimit), true},
+		{budgetE2EPauseKey(day, budgetE2EScopeTest), true},
+		{budgetRaiseKey(day, budgetE2EScopeTest), true},
+		{budgetRaiseKey("20260101", budgetE2EScopeTest), true},
+		{budgetExceededKey(day, budgetScope("beta/proj"), 1000), false},
+		{budgetRaiseKey(day, budgetScope("beta/proj")), false},
+		{budgetExceededKey(day, "t-e2e", 1000), false},
+		{budgetExceededKey(day, "t-e2e0123abcdz", 1000), false},
+		{budgetExceededKey(day, "t-e2e0123ab", 1000), false},
+		{"budget:" + day + ":t-e2e0123abcd:100", false},
+		{"e2e:" + budgetE2EScopeTest, false},
+		{budgetAppliedKey("04230dd1ea369d48"), false},
+	} {
+		if got := budgetE2EStaleKey(c.key); got != c.want {
+			t.Errorf("budgetE2EStaleKey(%q) = %v, want %v", c.key, got, c.want)
+		}
+	}
+}

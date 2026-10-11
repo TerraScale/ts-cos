@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,6 @@ const (
 	e2eBudgetLimit     = 1000
 	e2eBudgetLabel     = "e2e budget check"
 	e2eBudgetFYIWait   = 60 * time.Second
-	e2eBudgetLiveWait  = 75 * time.Second
 	e2eBudgetPauseWait = 90 * time.Second
 	e2eBudgetRaiseWait = 3 * time.Minute
 	e2eBudgetPoll      = 2 * time.Second
@@ -85,15 +85,86 @@ func budgetE2EWait(ctx context.Context, d time.Duration, what string, get func(c
 }
 
 // budgetCleanup runs every step, even after one fails or the check was cancelled, so a
-// failed run never leaves an item, key or thread behind.
+// failed run never leaves an item, key or thread behind. Transient errors retry with backoff.
 func budgetCleanup(ctx context.Context, steps ...func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 	defer cancel()
 	var errs []error
 	for _, step := range steps {
-		errs = append(errs, step(ctx))
+		errs = append(errs, retryUsage(ctx, func() error { return step(ctx) }))
 	}
 	return errors.Join(errs...)
+}
+
+// budgetE2EFakeScope reports whether scope is a fake group a budget check made: t-e2e and eight hex digits.
+func budgetE2EFakeScope(scope string) bool {
+	hex, ok := strings.CutPrefix(scope, "t-e2e")
+	_, err := strconv.ParseUint(hex, 16, 32)
+	return ok && len(hex) == 8 && err == nil
+}
+
+// budgetE2EStaleKey reports whether an Inbox key or a raise key names a fake group. Raise keys read
+// budget.raise.<day>.<scope>; Inbox keys read budget:<day>:<scope>:<mark>:<limit>.
+func budgetE2EStaleKey(key string) bool {
+	if rest, ok := strings.CutPrefix(key, "budget.raise."); ok {
+		_, scope, _ := strings.Cut(rest, ".")
+		return budgetE2EFakeScope(scope)
+	}
+	parts := strings.Split(key, ":")
+	return len(parts) == 5 && parts[0] == "budget" && budgetE2EFakeScope(parts[2])
+}
+
+// budgetE2EClearStale removes what earlier checks left behind: fake Inbox items with their applied
+// markers, and fake raise keys. A run cut off by a restart never reaches its own cleanup.
+func budgetE2EClearStale(ctx context.Context, in *Inbox, settings jetstream.KeyValue) error {
+	inboxKeys, err := budgetE2EKeys(ctx, in.kv)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range inboxKeys {
+		entry, err := in.kv.Get(ctx, id)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var item InboxItem
+		if err := json.Unmarshal(entry.Value(), &item); err != nil {
+			return err
+		}
+		if budgetE2EStaleKey(item.Key) {
+			errs = append(errs, budgetE2EPurge(in, settings, item.Key)(ctx))
+		}
+	}
+	settingKeys, err := budgetE2EKeys(ctx, settings)
+	if err != nil {
+		return err
+	}
+	for _, key := range settingKeys {
+		if strings.HasPrefix(key, "budget.raise.") && budgetE2EStaleKey(key) {
+			errs = append(errs, budgetE2EDeleteRaise(settings, key)(ctx))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// budgetE2EKeys lists every key in kv; an empty bucket has none.
+func budgetE2EKeys(ctx context.Context, kv jetstream.KeyValue) ([]string, error) {
+	lister, err := kv.ListKeys(ctx)
+	if errors.Is(err, jetstream.ErrNoKeysFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer lister.Stop()
+	var keys []string
+	for key := range lister.Keys() {
+		keys = append(keys, key)
+	}
+	return keys, nil
 }
 
 // budgetE2EPurge removes the item under key, if the check filed it, and the applied marker an answer left
@@ -144,6 +215,9 @@ func checkBudgetFYI(ctx context.Context, e *E2EEnv) (evidence string, err error)
 	settings, err := js.KeyValue(ctx, autopilotSettings)
 	if err != nil {
 		return "", err
+	}
+	if err := retryUsage(ctx, func() error { return budgetE2EClearStale(ctx, in, settings) }); err != nil {
+		return "", fmt.Errorf("clear earlier budget leftovers: %w", err)
 	}
 	scope, err := budgetE2EScope()
 	if err != nil {
@@ -225,6 +299,9 @@ func checkBudgetPause(ctx context.Context, e *E2EEnv) (evidence string, err erro
 	if err != nil {
 		return "", err
 	}
+	if err := retryUsage(ctx, func() error { return budgetE2EClearStale(ctx, in, settings) }); err != nil {
+		return "", fmt.Errorf("clear earlier budget leftovers: %w", err)
+	}
 	scope, err := budgetE2EScope()
 	if err != nil {
 		return "", err
@@ -248,7 +325,7 @@ func checkBudgetPause(ctx context.Context, e *E2EEnv) (evidence string, err erro
 		err = errors.Join(err, budgetCleanup(ctx, steps...))
 	}()
 
-	// A thread the rules cannot find is filed as an FYI, not paused, so wait until the fleet lists it.
+	// Wait until the fleet lists the thread, so the wake reaches a live thread.
 	err = budgetE2EWait(ctx, e2eBudgetFYIWait, "thread "+threadID+" in the fleet", func(ctx context.Context) (bool, error) {
 		fleets, err := Fleet(ctx, bus)
 		for _, f := range fleets {
@@ -262,12 +339,6 @@ func checkBudgetPause(ctx context.Context, e *E2EEnv) (evidence string, err erro
 	})
 	if err != nil {
 		return "", err
-	}
-	// shortcut: waits one live-refresh period (60 s) plus margin for the leader's snapshot; upgrade when Live exposes its refresh time
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case <-time.After(e2eBudgetLiveWait):
 	}
 	ev, err := budgetE2EEvent(scope, day, host, threadID)
 	if err != nil {
@@ -302,9 +373,6 @@ func checkBudgetPause(ctx context.Context, e *E2EEnv) (evidence string, err erro
 		question = item
 		if err != nil {
 			return false, err
-		}
-		if ok && item.Kind == "fyi" {
-			return false, errors.New("leader snapshot did not include the thread")
 		}
 		if !ok || item.Status != "open" {
 			return false, nil
