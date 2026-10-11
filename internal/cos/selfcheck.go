@@ -2,8 +2,6 @@ package cos
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +19,7 @@ import (
 )
 
 // A self-change acceptance check is declarative so COS can write it before any code
-// exists: GET a dashboard path on every node (signed in as cos-probe) or render a
+// exists: GET a dashboard path on every node (signed in as the first admin) or render a
 // behavior template, then require or forbid substrings. The same check runs in CI
 // against the PR build and on every deployed node after rollout.
 type selfCheck struct {
@@ -97,7 +95,7 @@ func (c selfCheck) runLocal(ctx context.Context, js jetstream.JetStream, l *Beha
 		}
 		return c.judge(out)
 	}
-	cookie, end, err := selfProbeCookie(ctx, js)
+	cookie, end, err := ownerProbeCookie(ctx, js, js.Conn())
 	if err != nil {
 		return err
 	}
@@ -118,23 +116,6 @@ func (c selfCheck) runLocal(ctx context.Context, js jetstream.JetStream, l *Beha
 		return fmt.Errorf("GET %s: HTTP %d", c.Path, res.StatusCode)
 	}
 	return c.judge(string(body))
-}
-
-// selfProbeCookie signs in as the password-less "cos-probe" session user, like
-// Auth.ProbeSession, from any process with COS NATS access; end deletes the session.
-func selfProbeCookie(ctx context.Context, js jetstream.JetStream) (string, func(), error) {
-	sessions, err := js.KeyValue(ctx, sessionBucket)
-	if err != nil {
-		return "", nil, fmt.Errorf("COS sessions unavailable: %w", err)
-	}
-	raw := make([]byte, 32)
-	rand.Read(raw)
-	token := base64.RawURLEncoding.EncodeToString(raw)
-	key, _ := sessionKey(probeUserID, token)
-	if _, err := sessions.Put(ctx, key, sessionValue(probeUser)); err != nil {
-		return "", nil, err
-	}
-	return probeUserID + "." + token, func() { _ = sessions.Delete(context.Background(), key) }, nil
 }
 
 func selfCheckSubject(host string) string { return "cos." + host + ".selfcheck" }

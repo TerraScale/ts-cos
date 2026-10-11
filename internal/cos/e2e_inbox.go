@@ -158,10 +158,11 @@ func pollE2E(ctx context.Context, timeout, every time.Duration, check func(conte
 func checkInboxAddVisible(ctx context.Context, in *Inbox, _ *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
 	defer func() { err = errors.Join(err, purgeE2EInbox(ctx, in, ids...)) }()
-	cookie, err := e.session(ctx, urls[0])
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	start := time.Now()
 	item, err := in.Add(ctx, e2eInboxInput("add-visible", InboxInput{}))
 	if err != nil {
@@ -180,10 +181,11 @@ func checkInboxAddVisible(ctx context.Context, in *Inbox, _ *Bus, urls []string,
 func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
 	defer func() { err = errors.Join(err, purgeE2EInbox(ctx, in, ids...)) }()
-	cookie, err := e.session(ctx, urls[0])
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	item, err := in.Add(ctx, e2eInboxInput("answer-closes", InboxInput{}))
 	if err != nil {
 		return "", err
@@ -220,10 +222,11 @@ func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []str
 func checkInboxConcurrentAnswer(ctx context.Context, in *Inbox, _ *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
 	defer func() { err = errors.Join(err, purgeE2EInbox(ctx, in, ids...)) }()
-	cookie, err := e.session(ctx, urls[0])
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	item, err := in.Add(ctx, e2eInboxInput("concurrent-answer", InboxInput{}))
 	if err != nil {
 		return "", err
@@ -380,10 +383,11 @@ func checkInboxNeedsUserForward(ctx context.Context, in *Inbox, bus *Bus, urls [
 		return "", err
 	}
 	idx := slices.IndexFunc(e2eHosts, func(h string) bool { return h != leader })
-	cookie, err := e.session(ctx, urls[0])
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	status, _, _, _, err := e2eRequest(ctx, "POST", urls[idx]+"/inbox/"+itemID+"/answer", cookie,
 		url.Values{"option": {"A"}, "text": {"e2e forward"}}, "Datastar-Request", "true")
 	if err != nil {

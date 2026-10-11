@@ -640,3 +640,67 @@ func TestTrustedDashboardRemote(t *testing.T) {
 		t.Fatal("accepted invalid remote address")
 	}
 }
+
+// TestOwnerProbeSignsInAsTheFirstAdmin: a check's owner session reads the owner's pages through Protect, ends with end,
+// and is refused before the bootstrap and for a disabled first admin.
+func TestOwnerProbeSignsInAsTheFirstAdmin(t *testing.T) {
+	bus, js := releaseTestBus(t)
+	ctx := t.Context()
+	auth := NewAuth(t.TempDir(), js)
+	// One replica: the test server is not clustered, so Auth.open's three replicas would be refused.
+	var kvs [3]jetstream.KeyValue
+	for i, cfg := range []jetstream.KeyValueConfig{{Bucket: authBucket, History: 1}, {Bucket: sessionBucket, TTL: sessionTTL, History: 1}, {Bucket: lockoutBucket, TTL: lockFor, History: 1}} {
+		kv, err := js.CreateOrUpdateKeyValue(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kvs[i] = kv
+	}
+	users := kvs[0]
+	auth.mu.Lock()
+	auth.users, auth.sessions, auth.lockouts = kvs[0], kvs[1], kvs[2]
+	auth.mu.Unlock()
+	web := NewWeb(openTestStore(t), auth)
+	web.Hooks = http.NotFoundHandler()
+	handler := web.Handler()
+	status := func(cookie string) int {
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if _, _, err := ownerProbeCookie(ctx, js, bus.conn); err == nil {
+		t.Fatal("owner session before the bootstrap")
+	}
+	admin, err := createUser(ctx, users, "admin-a", roleAdmin, "not-a-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := users.Put(ctx, "bootstrapped", []byte(admin.ID)); err != nil {
+		t.Fatal(err)
+	}
+	cookie, end, err := ownerProbeCookie(ctx, js, bus.conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := status(cookie); code != http.StatusOK {
+		t.Fatalf("owner session GET /status = %d, want 200", code)
+	}
+	end()
+	if !untilRevoked(func() bool { return status(cookie) == http.StatusUnauthorized }) {
+		t.Fatal("the owner session outlived end")
+	}
+
+	disabled, _ := json.Marshal(authUser{Name: admin.Name, Role: roleAdmin, DisabledAt: time.Now().UTC()})
+	if _, err := users.Put(ctx, "uid."+admin.ID, disabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ownerProbeCookie(ctx, js, bus.conn); err == nil {
+		t.Fatal("owner session for a disabled first admin")
+	}
+}
