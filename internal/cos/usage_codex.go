@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 )
@@ -71,8 +70,8 @@ func scanCodexSession(path, host string, since time.Time) ([]UsageRow, error) {
 	defer f.Close()
 	var session, project, branch, model, effort string
 	var prev codexTokens
-	var pending string // kind of the latest rework output not yet answered
-	rebases := map[string]bool{}
+	var pending string              // kind of the latest rework output not yet answered
+	calls := map[string]usageCall{} // call_id -> what the call runs
 	merged := map[usageGroup]UsageRow{}
 	r := bufio.NewReader(f)
 	for {
@@ -98,16 +97,12 @@ func scanCodexSession(path, host string, since time.Time) ([]UsageRow, error) {
 		case "response_item":
 			switch e.Payload.Type {
 			case "custom_tool_call", "function_call":
-				if strings.Contains(e.Payload.Input, "git rebase") || strings.Contains(e.Payload.Arguments, "git rebase") {
-					rebases[e.Payload.CallID] = true
+				if c := usageCallOf(e.Payload.Input + " " + e.Payload.Arguments); c.gate || c.rebase {
+					calls[e.Payload.CallID] = c
 				}
 			case "custom_tool_call_output", "function_call_output":
-				text := usageResultText(e.Payload.Output)
-				switch {
-				case slices.ContainsFunc(usageGateFails, func(s string) bool { return strings.Contains(text, s) }):
-					pending = "gate"
-				case rebases[e.Payload.CallID]:
-					pending = "rebase"
+				if kind := usageRework(calls[e.Payload.CallID], usageResultText(e.Payload.Output)); kind != "" {
+					pending = kind
 				}
 			}
 		case "event_msg":

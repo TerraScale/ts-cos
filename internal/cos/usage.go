@@ -126,21 +126,47 @@ type usageEntry struct {
 // usageGateFails are the failure lines of .cos/gate.sh.
 var usageGateFails = []string{"LOCAL GATE FAIL", "CONFLICT vs origin/main", "NOT MERGED"}
 
+// usageGateRun matches a command that runs .cos/gate.sh. The gate always takes the PR number
+// first, so cat, grep or sed of the script does not match.
+var usageGateRun = regexp.MustCompile(`(^|[;&|]\s*|\s)(\S*/)?gate\.sh\s+\d+`)
+
+// usageCall is what a tool call runs: the gate, a git rebase, or both.
+type usageCall struct{ gate, rebase bool }
+
+// usageCallOf classifies a command from a Bash call or a Codex exec call.
+func usageCallOf(command string) usageCall {
+	return usageCall{gate: usageGateRun.MatchString(command), rebase: strings.Contains(command, "git rebase")}
+}
+
+// usageRework is the rework kind a tool result sets, or "" for none. A failed gate wins over a rebase.
+func usageRework(c usageCall, text string) string {
+	switch {
+	case c.gate && slices.ContainsFunc(usageGateFails, func(s string) bool { return strings.Contains(text, s) }):
+		return "gate"
+	case c.rebase:
+		return "rebase"
+	}
+	return ""
+}
+
 // usageWaste finds rework: a failed gate, a git rebase or an API retry. The turn that
 // reacts to it is the next new message, and that message's tokens are waste.
 type usageWaste struct {
-	rebases map[string]bool   // Bash tool_use IDs whose command is a git rebase
-	pending string            // kind of the latest rework result not yet answered
-	kinds   map[string]string // message ID -> kind of the rework it reacts to
+	calls   map[string]usageCall // Bash tool_use ID -> what the call runs
+	pending string               // kind of the latest rework result not yet answered
+	kinds   map[string]string    // message ID -> kind of the rework it reacts to
 }
 
-// rebaseCall reports whether a tool_use is a Bash call running git rebase.
-func (w *usageWaste) rebaseCall(id, name string, input json.RawMessage) {
+// call records a Bash tool_use that runs the gate or a git rebase.
+func (w *usageWaste) call(id, name string, input json.RawMessage) {
 	var in struct {
 		Command string `json:"command"`
 	}
-	if name == "Bash" && json.Unmarshal(input, &in) == nil && strings.Contains(in.Command, "git rebase") {
-		w.rebases[id] = true
+	if name != "Bash" || json.Unmarshal(input, &in) != nil {
+		return
+	}
+	if c := usageCallOf(in.Command); c.gate || c.rebase {
+		w.calls[id] = c
 	}
 }
 
@@ -162,12 +188,8 @@ func (w *usageWaste) results(line []byte) {
 		if c.Type != "tool_result" {
 			continue
 		}
-		text := usageResultText(c.Content)
-		switch {
-		case slices.ContainsFunc(usageGateFails, func(s string) bool { return strings.Contains(text, s) }):
-			w.pending = "gate"
-		case w.rebases[c.ToolUseID]:
-			w.pending = "rebase"
+		if kind := usageRework(w.calls[c.ToolUseID], usageResultText(c.Content)); kind != "" {
+			w.pending = kind
 		}
 	}
 }
@@ -202,7 +224,7 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 	kind, worktree := usageProject(project)
 	msgs := map[string]*UsageRow{}
 	seenTool := map[string]bool{} // a tool_use block can repeat on later lines
-	waste := usageWaste{rebases: map[string]bool{}, kinds: map[string]string{}}
+	waste := usageWaste{calls: map[string]usageCall{}, kinds: map[string]string{}}
 	r := bufio.NewReader(f)
 	for n := 0; ; n++ {
 		line, err := r.ReadBytes('\n')
@@ -256,7 +278,7 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 			m.Last = ts
 		}
 		for _, c := range e.Message.Content {
-			waste.rebaseCall(c.ID, c.Name, c.Input) // every model, not only advisors
+			waste.call(c.ID, c.Name, c.Input) // every model, not only advisors
 		}
 		if usageWorker(e.Message.Model) {
 			continue
