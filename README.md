@@ -527,7 +527,7 @@ event is classified with zero tokens:
 | Class | When | What happens |
 |---|---|---|
 | ACT | READY `cos/` or `cos-hold/` PR of a running ticket | squash-merge |
-| ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed or interrupted run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
+| ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
 | ACT | the same failure after a new push | model escalation (Opus 5.5 high → xhigh) plus ESCALATE |
 | ACT | a top-level thread on any Haiku model | switch to Opus 5.5 high |
 | RECORD | paused tickets, tickets with no open thread or PR (`not-running`), progress, main changes | feed only |
