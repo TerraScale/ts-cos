@@ -518,6 +518,16 @@ ticket leaves the paused set, its idle threads are compacted and sent `RESUME`.
 Each action or failure is one feed entry. Per-thread state lives in `COS_AUTOPILOT`
 under `compact.<hash>`, so a new leader keeps it.
 
+**Registered rules:** a feature adds a rule from its own file with `RegisterRule(Rule{...})`
+in `init()`. `Event` runs for every event after the built-in rules; `Beat` runs on each
+leader heartbeat. Decisions are logged like built-in ones, and a decision with `Do` runs
+its custom action with a `RuleEnv` (the `Bus` and `Publish`). Node alerts (TS-825) and
+budgets (TS-826) register their rules this way. A panicking rule logs an `error` entry
+and the other rules still run.
+
+**Action-log writes** retry three times with backoff (1 s, then 3 s), 5 s per attempt.
+A WARN marks the first retry; an ERROR is logged only when every attempt fails.
+
 ## Inbox
 
 The Inbox (`/inbox`, linked with its open count from the chat header) holds

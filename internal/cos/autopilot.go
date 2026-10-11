@@ -29,7 +29,12 @@ const (
 	autopilotTick         = 15 * time.Second
 	autopilotLogKeep      = 200
 	autopilotForbiddenRun = "mariogk-desktop"
+	autopilotLogAttempts  = 3
+	autopilotLogTimeout   = 5 * time.Second
 )
+
+// autopilotLogBackoff is the wait before each retry of a log write; a var so tests can shrink it.
+var autopilotLogBackoff = []time.Duration{time.Second, 3 * time.Second}
 
 // AutopilotEntry is one logged heartbeat step; every action carries its reason.
 type AutopilotEntry struct {
@@ -80,6 +85,9 @@ type Autopilot struct {
 	reconcile func(context.Context) []AutopilotEntry
 	engine    *RulesEngine // run while this node leads
 	compactor *Compactor   // worker compaction, run by the leader's beat
+	pub       func(ctx context.Context, subject string, data []byte) error
+	// leaseHolder reads the lease itself: a node whose lease already moved must not beat or answer.
+	leaseHolder func(context.Context) (string, error)
 
 	mu       sync.Mutex
 	leading  context.Context // non-nil while this node holds the cluster lease
@@ -94,7 +102,12 @@ func StartAutopilot(ctx context.Context, host string, bus *Bus, store *Store, re
 	if err != nil {
 		return nil, err
 	}
-	a := &Autopilot{Host: host, bus: bus, store: store, conn: bus.conn, js: js, reconcile: reconcile, engine: engine}
+	a := &Autopilot{Host: host, bus: bus, store: store, conn: bus.conn, js: js, reconcile: reconcile, engine: engine,
+		leaseHolder: bus.Leader,
+		pub: func(ctx context.Context, subject string, data []byte) error {
+			_, err := js.Publish(ctx, subject, data)
+			return err
+		}}
 	a.compactor = &Compactor{Call: bus.Call, KV: func(ctx context.Context) (jetstream.KeyValue, error) {
 		return js.KeyValue(ctx, autopilotSettings)
 	}, Publish: a.publish}
@@ -118,11 +131,14 @@ func Reconcile(cfg Config, bus *Bus, store *Store) func(context.Context) []Autop
 	return func(ctx context.Context) []AutopilotEntry {
 		old, err := store.Live(ctx)
 		if err != nil {
-			return []AutopilotEntry{{Kind: "error", Action: "Read live state", Reason: err.Error()}}
+			return liveError(ctx, AutopilotEntry{Kind: "error", Action: "Read live state", Reason: err.Error()})
 		}
 		live := Refresh(ctx, cfg, bus, old)
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err := store.SaveLive(ctx, live); err != nil {
-			return []AutopilotEntry{{Kind: "error", Action: "Save live state", Reason: err.Error()}}
+			return liveError(ctx, AutopilotEntry{Kind: "error", Action: "Save live state", Reason: err.Error()})
 		}
 		threads := 0
 		for _, h := range live.Fleet {
@@ -142,6 +158,15 @@ func Reconcile(cfg Config, bus *Bus, store *Store) func(context.Context) []Autop
 		}
 		return out
 	}
+}
+
+// liveError reports a live-state failure only while ctx is live. A cancelled context
+// is a shutdown or lost lease, which is normal and must not log an ERROR.
+func liveError(ctx context.Context, e AutopilotEntry) []AutopilotEntry {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return []AutopilotEntry{e}
 }
 
 func (a *Autopilot) setup(ctx context.Context) error {
@@ -222,7 +247,7 @@ func (a *Autopilot) lead(ctx context.Context) {
 		if !announced {
 			announced = a.announce(ctx)
 		}
-		if interval, last, ok := a.schedule(ctx); ok && time.Since(last) >= interval {
+		if interval, last, ok := a.schedule(ctx); ok && time.Since(last) >= interval && a.holdsLease(ctx) {
 			a.beat(ctx, "scheduled every "+interval.String())
 		}
 		select {
@@ -240,6 +265,20 @@ func (a *Autopilot) announce(ctx context.Context) bool {
 		return false
 	}
 	return true
+}
+
+// holdsLease asks the lease, not this node's memory: a leader whose lease moved must not beat.
+func (a *Autopilot) holdsLease(ctx context.Context) bool {
+	leaseCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	holder, err := a.leaseHolder(leaseCtx)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("autopilot lease check failed", "error", err)
+		}
+		return false
+	}
+	return holder == a.Host
 }
 
 // schedule reads the interval and last beat; ok is false when KV is unreadable,
@@ -276,24 +315,64 @@ func (a *Autopilot) beat(ctx context.Context, reason string) {
 		return
 	}
 	a.publish(ctx, AutopilotEntry{Kind: "beat", Action: "Heartbeat", Reason: reason})
-	for _, e := range a.reconcile(ctx) {
+	entries := a.reconcile(ctx)
+	if ctx.Err() != nil {
+		return
+	}
+	for _, e := range entries {
 		a.publish(ctx, e)
 	}
-	if live, err := a.store.Live(ctx); err == nil && ctx.Err() == nil {
+	if live, err := a.store.Live(ctx); err != nil {
+		if a.engine != nil && ctx.Err() == nil {
+			slog.Warn("autopilot rules beat skipped", "error", err)
+		}
+	} else if ctx.Err() == nil {
 		a.compactor.Beat(ctx, live)
+		if a.engine != nil {
+			if err := a.engine.Beat(ctx, live); err != nil {
+				slog.Warn("autopilot rules beat skipped", "error", err)
+			}
+		}
 	}
 }
 
+// publish writes one log entry. A failed write is retried with backoff; the WARN marks the
+// first retry, and an ERROR is logged only when the entry is lost while ctx is live. A
+// shutdown or lost lease drops the entry at INFO: rolling deploys restart nodes, and
+// deploy.logs.* fails on any ERROR.
 func (a *Autopilot) publish(ctx context.Context, e AutopilotEntry) {
 	e.At = time.Now().UTC().Format(time.RFC3339)
 	e.Host = a.Host
 	data, err := json.Marshal(e)
-	if err == nil {
-		_, err = a.js.Publish(ctx, "cos.autopilot.log."+e.Kind, data)
-	}
 	if err != nil {
 		slog.Error("autopilot log", "error", err, "action", e.Action)
+		return
 	}
+	subject := "cos.autopilot.log." + e.Kind
+	for attempt := range autopilotLogAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				slog.Info("autopilot log dropped", "reason", ctx.Err(), "action", e.Action)
+				return
+			case <-time.After(autopilotLogBackoff[min(attempt-1, len(autopilotLogBackoff)-1)]):
+			}
+			if attempt == 1 {
+				slog.Warn("autopilot log retry", "action", e.Action, "error", err)
+			}
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, autopilotLogTimeout)
+		err = a.pub(attemptCtx, subject, data)
+		cancel()
+		if err == nil {
+			return
+		}
+	}
+	if ctx.Err() != nil {
+		slog.Info("autopilot log dropped", "reason", ctx.Err(), "action", e.Action)
+		return
+	}
+	slog.Error("autopilot log", "error", err, "action", e.Action)
 }
 
 func (a *Autopilot) handleRun(ctx context.Context) nats.MsgHandler {
@@ -303,6 +382,9 @@ func (a *Autopilot) handleRun(ctx context.Context) nats.MsgHandler {
 		a.mu.Unlock()
 		if leading == nil {
 			return // only the leader answers
+		}
+		if !a.holdsLease(leading) {
+			return // a stale leader whose lease already moved does not answer
 		}
 		reply := map[string]any{"host": a.Host, "started": !busy}
 		data, _ := json.Marshal(reply)

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -31,6 +32,9 @@ const (
 	rulesMaxDeliver = 5
 	prLineLimit     = 1500
 )
+
+// rulesBackoff spaces consumer restarts; the last step repeats. A var so tests can shrink it.
+var rulesBackoff = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 
 // Wake texts are behavior files (behavior/templates/wake_<rule>.tmpl), hot-reloaded
 // over NATS; a bundle missing one, or rendering more than one line, is rejected.
@@ -71,11 +75,12 @@ type Decision struct {
 	Thread string
 	Ticket string
 	// At most one action per decision.
-	Wake  string         // message queued to Host/Thread
-	Merge *PR            // squash-merge this READY PR
-	Model map[string]any // next-run model for Host/Thread
-	Inbox *InboxInput    // file this item in the COS Inbox
-	Sig   string         // wake signature for dedup and "same failure twice"
+	Wake  string                                       // message queued to Host/Thread
+	Merge *PR                                          // squash-merge this READY PR
+	Model map[string]any                               // next-run model for Host/Thread
+	Inbox *InboxInput                                  // file this item in the COS Inbox
+	Sig   string                                       // wake signature for dedup and "same failure twice"
+	Do    func(ctx context.Context, env RuleEnv) error // custom action of a registered rule
 }
 
 // PRFacts is the fresh state of the event's PR, fetched by the engine.
@@ -288,6 +293,7 @@ func prOwner(live Live, pr PR) (string, *FleetThread) {
 // RulesEngine consumes cos.events.> on the leader and executes decisions.
 type RulesEngine struct {
 	Store   *Store
+	Bus     *Bus
 	JS      jetstream.JetStream
 	Publish func(context.Context, AutopilotEntry)
 	PR      func(ctx context.Context, repo string, number int) (*PRFacts, error)
@@ -296,6 +302,9 @@ type RulesEngine struct {
 	Inbox   func(ctx context.Context, in InboxInput) error
 	kvMu    sync.Mutex
 	memory  jetstream.KeyValue
+	// consumeFn runs one consumer session; handled counts messages it has acked.
+	consumeFn func(context.Context) error
+	handled   atomic.Int64
 }
 
 // settingsKV opens the replicated COS_AUTOPILOT bucket once; consume, Handle and the
@@ -317,7 +326,7 @@ func (r *RulesEngine) settingsKV(ctx context.Context) (jetstream.KeyValue, error
 func NewRulesEngine(cfg Config, bus *Bus, store *Store) *RulesEngine {
 	f := Forgejo{Config: cfg}
 	var inbox *Inbox
-	return &RulesEngine{Store: store, PR: f.prFacts,
+	r := &RulesEngine{Store: store, Bus: bus, PR: f.prFacts,
 		Merge: func(ctx context.Context, repo string, number int) error {
 			_, err := f.Merge(ctx, repo, number)
 			return err
@@ -335,18 +344,41 @@ func NewRulesEngine(cfg Config, bus *Bus, store *Store) *RulesEngine {
 			_, err := inbox.Add(ctx, in)
 			return err
 		}}
+	r.consumeFn = r.consume
+	return r
 }
 
 // Run consumes until ctx ends (the lease is lost); the durable consumer resumes
-// where the previous leader stopped.
+// where the previous leader stopped. A consumer that fails restarts with backoff:
+// a rolling restart drops it for a moment, which is not an ERROR until it keeps failing.
 func (r *RulesEngine) Run(ctx context.Context) {
-	for ctx.Err() == nil {
-		if err := r.consume(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("rules engine", "error", err)
+	failures := 0
+	consume := r.consumeFn
+	if consume == nil {
+		consume = r.consume
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	for {
+		handled := r.handled.Load()
+		err := consume(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if r.handled.Load() > handled {
+			failures = 0
+		}
+		failures++
+		if failures == 5 {
+			slog.Error("rules engine consumer keeps failing", "error", err, "attempt", failures)
+		} else {
+			slog.Warn("rules engine consumer restarting", "error", err, "attempt", failures)
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(5 * time.Second):
+			return
+		case <-time.After(rulesBackoff[min(failures-1, len(rulesBackoff)-1)]):
 		}
 	}
 }
@@ -394,6 +426,7 @@ func (r *RulesEngine) consume(ctx context.Context) error {
 			continue
 		}
 		_ = m.Ack()
+		r.handled.Add(1)
 	}
 }
 
@@ -437,40 +470,59 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 			}
 		}
 	}
-	for _, d := range Classify(e, live, pr, memory, paused) {
-		entry := AutopilotEntry{Kind: d.Class, Event: e.ID, Ticket: d.Ticket, Target: decisionTarget(d), Action: d.Rule, Reason: d.Reason}
-		switch {
-		case d.Merge != nil:
-			if err := r.Merge(ctx, d.Merge.Repo, d.Merge.Number); err != nil {
-				entry.Kind, entry.Reason = "error", d.Reason+"; merge failed: "+publicText(err)
-			}
-		case d.Model != nil:
-			sel, _ := json.Marshal(d.Model)
-			if err := r.Call(ctx, d.Host, "model", []string{d.Thread, string(sel)}); err != nil {
-				entry.Kind, entry.Reason = "error", d.Reason+"; model change failed: "+publicText(err)
-			}
-		case d.Inbox != nil:
-			if err := r.Inbox(ctx, *d.Inbox); err != nil {
-				entry.Kind, entry.Reason = "error", d.Reason+"; inbox failed: "+publicText(err)
-			}
-		case d.Wake != "":
-			if err := r.Call(ctx, d.Host, "send", []string{d.Thread, d.Wake}); err != nil {
-				return fmt.Errorf("wake %s: %w", d.Thread, err) // retried: the worker must hear it
-			}
-			sha := e.ID
-			if pr != nil {
-				sha = pr.SHA
-			}
-			next := WakeMemory{Sig: d.Sig, SHA: sha, Count: 1}
-			if memory.Sig == d.Sig {
-				next.Count = memory.Count + 1
-			}
-			if data, err := json.Marshal(next); err == nil && key != "" {
-				_, _ = kv.Put(ctx, key, data)
-			}
+	decisions := Classify(e, live, pr, memory, paused)
+	for _, rule := range registeredRules {
+		if rule.Event != nil {
+			decisions = append(decisions, skipPaused(r.runRule(ctx, e.ID, rule.Name, func() []Decision { return rule.Event(e, live) }), paused)...)
 		}
-		r.Publish(ctx, entry)
 	}
+	for _, d := range decisions {
+		if err := r.execute(ctx, e.ID, d, pr, key, memory); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// execute runs one decision's action, then publishes it with its reason. A failed wake
+// returns an error instead, so the event is retried: the worker must hear it.
+func (r *RulesEngine) execute(ctx context.Context, eventID string, d Decision, pr *PRFacts, key string, memory WakeMemory) error {
+	entry := AutopilotEntry{Kind: d.Class, Event: eventID, Ticket: d.Ticket, Target: decisionTarget(d), Action: d.Rule, Reason: d.Reason}
+	switch {
+	case d.Merge != nil:
+		if err := r.Merge(ctx, d.Merge.Repo, d.Merge.Number); err != nil {
+			entry.Kind, entry.Reason = "error", d.Reason+"; merge failed: "+publicText(err)
+		}
+	case d.Model != nil:
+		sel, _ := json.Marshal(d.Model)
+		if err := r.Call(ctx, d.Host, "model", []string{d.Thread, string(sel)}); err != nil {
+			entry.Kind, entry.Reason = "error", d.Reason+"; model change failed: "+publicText(err)
+		}
+	case d.Inbox != nil:
+		if err := r.Inbox(ctx, *d.Inbox); err != nil {
+			entry.Kind, entry.Reason = "error", d.Reason+"; inbox failed: "+publicText(err)
+		}
+	case d.Wake != "":
+		if err := r.Call(ctx, d.Host, "send", []string{d.Thread, d.Wake}); err != nil {
+			return fmt.Errorf("wake %s: %w", d.Thread, err)
+		}
+		sha := eventID
+		if pr != nil {
+			sha = pr.SHA
+		}
+		next := WakeMemory{Sig: d.Sig, SHA: sha, Count: 1}
+		if memory.Sig == d.Sig {
+			next.Count = memory.Count + 1
+		}
+		if data, err := json.Marshal(next); err == nil && key != "" {
+			_, _ = r.memory.Put(ctx, key, data)
+		}
+	case d.Do != nil:
+		if err := safeDo(ctx, d.Do, RuleEnv{Bus: r.Bus, Publish: r.Publish}); err != nil {
+			entry.Kind, entry.Reason = "error", d.Reason+"; "+publicText(err)
+		}
+	}
+	r.Publish(ctx, entry)
 	return nil
 }
 
