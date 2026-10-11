@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -224,15 +225,24 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	}
 	defer s.Close()
 	var bus *Bus
+	var gate atomic.Pointer[Gate]
 	bus, err = StartBus(ctx, cfg, func(ctx context.Context, cmd string, args []string) (any, error) {
 		if cmd == "usage-verify" {
 			return usageVerify(ctx, bus, s, cfg.LocalHost, args)
+		}
+		if slices.Contains(gatedCommands, cmd) {
+			g := gate.Load()
+			if g == nil {
+				return nil, OperationError("COS is starting; try again")
+			}
+			return g.Command(ctx, cmd, args)
 		}
 		return LocalCommand(ctx, cfg, cmd, args)
 	})
 	if err != nil {
 		return err
 	}
+	gate.Store(newSendGate(cfg, bus))
 	defer bus.Close()
 	js, err := bus.JetStream()
 	if err != nil {

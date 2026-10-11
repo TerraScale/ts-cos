@@ -44,11 +44,35 @@ type wakeData struct {
 	Lines               int
 }
 
+// limitWake is the data of wake_limit: the model that has headroom again.
+type limitWake struct{ Model string }
+
 func init() {
 	for _, rule := range wakeRules {
 		behaviorTemplates["wake_"+rule] = wakeData{PR: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/9", Checks: "test", Summary: "exit 1", Lines: 2000}
 		behaviorLines = append(behaviorLines, "wake_"+rule)
 	}
+	behaviorTemplates["wake_limit"] = limitWake{Model: "claude-opus-5-5"}
+}
+
+// queueLimitResume queues the one resume a thread gets after a provider limit. The send gate delivers it once the
+// model has headroom; it never says "continue" and never changes the model.
+func queueLimitResume(ctx context.Context, bus *Bus, host, thread, title, model string) error {
+	text, err := wakeText("wake_limit", limitWake{Model: model})
+	if err != nil {
+		return err
+	}
+	kv, err := openSendQueue(ctx, bus)
+	if err != nil {
+		return err
+	}
+	key, _ := sendKeys(host, thread)
+	now := time.Now()
+	return casSend(ctx, kv, key, func(e *queuedSend, _ bool) bool {
+		mergeSend(e, queuedSend{Host: host, Thread: thread, Title: title, Model: model, Kind: "resume", Texts: []string{text},
+			NotBefore: now.Add(2 * limitsPoll), Reason: "stopped on a provider limit"}, now)
+		return true
+	})
 }
 
 // Model rules (user 2026-10-11): threads run Opus 5.5 at high effort; the same failure twice escalates to xhigh, never to Haiku.
@@ -155,7 +179,20 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		// Provider failures are state: a wake would only retry into the same limit or outage.
 		switch providerFailure(e) {
 		case "limit":
-			return []Decision{d(ClassRecord, "limit-failure", "stopped on a provider limit: errors become state, no wake")}
+			record := d(ClassRecord, "limit-failure", "stopped on a provider limit: errors become state, no wake")
+			if owner == nil || owner.Lineage != nil {
+				return []Decision{record}
+			}
+			if running, _ := ticketRunning(live, paused, ticket); !running {
+				return []Decision{record}
+			}
+			var data struct{ Model, Title string }
+			_ = json.Unmarshal(e.Data, &data)
+			resume := d(ClassAct, "limit-resume", "one resume queued; the send gate delivers it when "+data.Model+" has headroom")
+			resume.Do = func(ctx context.Context, env RuleEnv) error {
+				return queueLimitResume(ctx, env.Bus, host, thread, data.Title, data.Model)
+			}
+			return []Decision{record, resume}
 		case "api":
 			return []Decision{d(ClassRecord, "api-failure", "stopped on an API error: errors become state, no wake")}
 		}

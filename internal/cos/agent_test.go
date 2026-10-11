@@ -109,6 +109,7 @@ type agentTestEnv struct {
 	contextKV jetstream.KeyValue
 	memoryKV  jetstream.KeyValue
 	savingsKV jetstream.KeyValue
+	limitsKV  jetstream.KeyValue
 	js        jetstream.JetStream
 	store     *Store
 	fake      *agentTestT3
@@ -148,6 +149,7 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 	e.contextKV = agentTestOpen(t, ctx, nodes, contextBucket)
 	e.memoryKV = agentTestOpen(t, ctx, nodes, memoryBucket)
 	e.savingsKV = agentTestOpen(t, ctx, nodes, savingsBucket)
+	e.limitsKV = agentTestOpen(t, ctx, nodes, limitsBucket)
 	js, err := nodes[0].JetStream()
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +193,8 @@ func (e *agentTestEnv) reset(t *testing.T) {
 	e.fake = &agentTestT3{projection: `{}`}
 	e.remote = nil
 	e.skipTree = false
-	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV, js: e.js,
+	e.setLimits(LimitsState{At: time.Now(), Reachable: true, Credentials: []LimitCredential{{Provider: "claude", Account: "a", State: "active"}}})
+	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV, Limits: e.limitsKV, js: e.js,
 		T3: func(context.Context) (agentT3, error) { return e.fake, nil },
 		Remote: func(_ context.Context, host, command string, args []string, out any) error {
 			e.remote = append(e.remote, agentTestRemote{host, command, args})
@@ -206,6 +209,14 @@ func (e *agentTestEnv) reset(t *testing.T) {
 		},
 	}
 	e.step() // claims COS for this node
+}
+
+// setLimits replaces the replicated CLIProxyAPI state that the agent reads.
+func (e *agentTestEnv) setLimits(s LimitsState) {
+	e.t.Helper()
+	if err := kvPutJSON(e.ctx, e.limitsKV, limitsKey, s); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 // say posts a user message and waits until this node's cache holds it, so the next step sees it.
@@ -331,6 +342,28 @@ func (e *agentTestEnv) savePRs(numbers ...int) {
 	if err := e.store.SaveLive(e.ctx, live); err != nil {
 		e.t.Fatal(err)
 	}
+}
+
+// A limited COS model takes no input: nothing is sent or launched and Delivered stays put, so the held message goes out once when headroom returns.
+func TestAgentWaitsForHeadroom(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	e := newAgentTestEnv(t, ctx)
+	e.reset(t)
+	e.start()
+	delivered := e.state().Delivered
+	e.setLimits(LimitsState{At: time.Now(), Reachable: true, Credentials: []LimitCredential{{Provider: "claude", Account: "a", State: "cooling", Until: time.Now().Add(time.Hour)}}})
+	e.say("held while cooling")
+	e.step()
+	if len(e.fake.sends) != 0 || e.state().Delivered != delivered {
+		t.Fatalf("limited step sent %d messages; Delivered %q, want %q", len(e.fake.sends), e.state().Delivered, delivered)
+	}
+	e.setLimits(LimitsState{At: time.Now(), Reachable: true, Credentials: []LimitCredential{{Provider: "claude", Account: "a", State: "active"}}})
+	e.step()
+	if len(e.fake.sends) != 1 || !strings.Contains(e.fake.sends[0].Text, "User: held while cooling") {
+		t.Fatalf("sends after headroom = %+v, want one combined wake", e.fake.sends)
+	}
+	e.expectLaunches(1)
 }
 
 func TestAgent(t *testing.T) {
