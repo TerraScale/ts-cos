@@ -260,7 +260,7 @@ func providerFailure(e Event) string {
 	if data.ErrorClass == "provider_error" || data.ErrorClass == "transport_error" {
 		return "api"
 	}
-	text := strings.ToLower(data.Error + " " + e.Summary)
+	text := strings.ToLower(data.Error)
 	if containsAny(text, "rate limit", "rate_limit", "usage limit", "usage_limit", "cooling down", "temporarily limiting", "quota", "429", "too many requests") {
 		return "limit"
 	}
