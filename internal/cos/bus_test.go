@@ -818,7 +818,7 @@ func TestDiscoverDoesNotReloadConnectedPeer(t *testing.T) {
 	discovered := make(chan struct{})
 	go func() {
 		defer close(discovered)
-		a.discover(discoverCtx, busOptions(cfgA, nodeA), peers)
+		a.discover(discoverCtx, busOptions(cfgA, nodeA), peers, map[string]bool{})
 	}()
 	for range 2 {
 		select {

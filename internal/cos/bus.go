@@ -287,8 +287,8 @@ func (b *Bus) routeConnected(name string) bool {
 // discover adds a route to every COS node found; NATS gossip completes the mesh
 // and retries configured routes while a peer restarts. A reload briefly rejects
 // client auth, so peers already connected through gossip are not reloaded for.
-func (b *Bus) discover(ctx context.Context, opts *server.Options, peers func(context.Context) ([]string, error)) {
-	routed := map[string]bool{}
+// routed holds the peers startBus already routed to.
+func (b *Bus) discover(ctx context.Context, opts *server.Options, peers func(context.Context) ([]string, error), routed map[string]bool) {
 	for {
 		candidates, _ := peers(ctx)
 		added := false
@@ -423,6 +423,16 @@ func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHa
 		return nil, errors.New("COS bus requires a valid local host and operation handler")
 	}
 	opts := busOptions(cfg, node)
+	// Routes to COS peers already up go in before start: any later route reload also reloads
+	// authorization and accounts in NATS, which drops this node's clients.
+	routed := map[string]bool{}
+	candidates, _ := node.peers(ctx)
+	for _, peer := range candidates {
+		if _, ok := cosRoute(ctx, peer); ok {
+			routed[peer] = true
+			opts.Routes = append(opts.Routes, busRoute(opts.Cluster.Password, peer))
+		}
+	}
 	credential := busCredential{Port: node.clientPort, Password: opts.Password}
 	hookSecrets := map[string]string{}
 	for source := range hookSources {
@@ -483,7 +493,7 @@ func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHa
 		return nil, err
 	}
 	next := opts.Clone()
-	b.tasks.Go(func() { b.discover(ctx, next, node.peers) })
+	b.tasks.Go(func() { b.discover(ctx, next, node.peers, routed) })
 	b.tasks.Go(func() { b.elect(ctx) })
 	b.watch(ctx)
 	return b, nil

@@ -11,7 +11,7 @@ import (
 
 // Two clustered nodes: delta relays its (replayed) T3, a client on beta follows it.
 func TestT3RelayAcrossNodes(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	thread := t3Frames(t, "subscribe-thread-lifecycle.jsonl")
 	drifted := mutateFrame(thread, `"kind":"event"`, `"kind":"event"`, `"kind":"delta"`)
@@ -26,7 +26,7 @@ func TestT3RelayAcrossNodes(t *testing.T) {
 	})
 	ports := busTestPorts(t, 4)
 	hosts := []string{"delta", "beta"}
-	var client, delta *Bus
+	var client, delta, beta *Bus
 	for i, host := range hosts {
 		cfg, busNode := busTestConfig(t, host, ports[i], ports[i+2], []int{ports[3-i]})
 		node, err := startBus(ctx, cfg, busNode, func(context.Context, string, []string) (any, error) { return nil, nil })
@@ -41,27 +41,34 @@ func TestT3RelayAcrossNodes(t *testing.T) {
 			delta = node
 			continue
 		}
+		beta = node
 		if client, err = ConnectBus(ctx, cfg); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(client.Close)
 	}
-	busTestReady(t, "route", func() bool { return delta.server.NumRoutes() == 1 })
+	// Wait until beta has learned delta's endpoint over the route, so each stream below is one deterministic attempt.
+	busTestReady(t, "delta's stream endpoint on beta", func() bool {
+		return beta.server.GlobalAccount().SubscriptionInterest("cos.delta.stream")
+	})
+	// beta found delta already up, so neither node reloaded its routes (a reload drops local clients).
+	if n := delta.reloads.Load() + beta.reloads.Load(); n != 0 {
+		t.Fatalf("%d route reloads during startup", n)
+	}
 	stop := errors.New("stop")
 
 	t.Run("thread events reach another node", func(t *testing.T) {
 		var events []ThreadEvent
-		busTestReady(t, "remote stream endpoint", func() bool {
-			events = nil
-			err := client.StreamThread(ctx, "delta", "thread-1", func(e ThreadEvent) error {
-				events = append(events, e)
-				if e.Type == "thread.metadata-updated" {
-					return stop
-				}
-				return nil
-			})
-			return errors.Is(err, stop)
+		err := client.StreamThread(ctx, "delta", "thread-1", func(e ThreadEvent) error {
+			events = append(events, e)
+			if e.Type == "thread.metadata-updated" {
+				return stop
+			}
+			return nil
 		})
+		if !errors.Is(err, stop) {
+			t.Fatal(err)
+		}
 		first := events[0]
 		if len(events) != 72 || first.Snapshot == nil || first.Snapshot.ProviderTurns != nil || first.Context == nil || first.Snapshot.Thread.ID == "" {
 			t.Fatalf("got %d events, first %+v", len(events), first)
