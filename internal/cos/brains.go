@@ -108,6 +108,7 @@ func runBrains(ctx context.Context, cfg Config, bus *Bus, chat *Chat, store *Sto
 		for {
 			if now := time.Now(); !now.Before(nextMigrate) {
 				buckets.migrateLegacy(ctx, bus.conn)
+				buckets.sweepDeleted(ctx, bus.conn)
 				nextMigrate = now.Add(brainMigrateEvery)
 			}
 			users, err := brainUsers(ctx, bus.conn, buckets.auth)
@@ -217,6 +218,17 @@ func (b brainBuckets) migrateLegacy(ctx context.Context, nc *nats.Conn) {
 			logErr(ctx, slog.LevelWarn, "COS brain migration", err, "bucket", m.bucket)
 			return
 		}
+	}
+}
+
+// sweepDeleted purges the data of deleted users left behind by a crash or a late brain step. Only the leader calls it.
+func (b brainBuckets) sweepDeleted(ctx context.Context, nc *nats.Conn) {
+	purged, err := sweepDeletedUsers(ctx, b.js, nc)
+	if purged > 0 {
+		slog.Info("COS deleted-user sweep", "users", purged)
+	}
+	if err != nil {
+		logErr(ctx, slog.LevelWarn, "COS deleted-user sweep", err)
 	}
 }
 

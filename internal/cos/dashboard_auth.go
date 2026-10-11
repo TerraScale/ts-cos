@@ -237,6 +237,8 @@ func (a *Auth) Protect(next, hooks http.Handler) http.Handler {
 		renderAuth(rw, r, http.StatusOK, passwordPage(""))
 	})))
 	mux.Handle("POST /password", a.require(http.HandlerFunc(a.changePassword)))
+	mux.HandleFunc("GET /invite/{token}", a.inviteForm)
+	mux.HandleFunc("POST /invite/{token}", a.inviteAccept)
 	mux.Handle("/", a.require(next))
 	protected := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {

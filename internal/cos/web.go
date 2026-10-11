@@ -110,7 +110,8 @@ func (w *Web) webRoutes() []webRoute {
 	routes = append(routes, w.autopilotRoutes()...)
 	routes = append(routes, w.pushRoutes()...)
 	routes = append(routes, w.nodesRoutes()...)
-	return append(routes, w.nodeDetailRoutes()...)
+	routes = append(routes, w.nodeDetailRoutes()...)
+	return append(routes, adminRoutes(adminPages{auth: w.auth, threads: w.Bus, head: w.header})...)
 }
 
 // scoped runs h only when the caller may use scope; otherwise the route does not exist for them.

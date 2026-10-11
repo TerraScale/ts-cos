@@ -161,6 +161,7 @@ button:disabled:where(:not([class*="ts-"])), .btn:disabled { opacity: 0.5; curso
 .btn-primary:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-2); }
 .btn-ghost:not(:disabled):hover { background: var(--hover); color: var(--text); }
+.btn-danger { color: var(--danger); }
 .btn-block { width: 100%; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: var(--t-sm); font-weight: 500; color: var(--text); }

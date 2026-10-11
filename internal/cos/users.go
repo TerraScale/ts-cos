@@ -447,7 +447,7 @@ func createUser(ctx context.Context, users jetstream.KeyValue, name, role, hash 
 	id := newULID()
 	if _, err := users.Create(ctx, "name."+name, []byte(id)); err != nil {
 		if errors.Is(err, jetstream.ErrKeyExists) {
-			return User{}, fmt.Errorf("user %s exists", name)
+			return User{}, fmt.Errorf("user %s exists: %w", name, jetstream.ErrKeyExists)
 		}
 		return User{}, err
 	}
@@ -460,7 +460,7 @@ func createUser(ctx context.Context, users jetstream.KeyValue, name, role, hash 
 }
 
 // deleteUser removes u's login name, account and sessions, in that order, so no login name is left
-// pointing at a missing account. Slice d will add per-user data deletion here; nothing else is per-user yet.
+// pointing at a missing account. The admin delete purges u's data and invite before calling it.
 func deleteUser(ctx context.Context, users, sessions, lockouts jetstream.KeyValue, u User) error {
 	// Checked first: an empty or malformed ID would make the session filter ".*" and match every session.
 	if !ulidPattern.MatchString(u.ID) {

@@ -207,6 +207,9 @@ templ chatHead(h chatHeader, page string) {
 					<a class="ts-nav-link" href={ templ.SafeURL(l.href) } { currentPage(page, l.page)... }>{ l.label }</a>
 				}
 			}
+			if isAdmin(ctx) {
+				<a class="ts-nav-link" href="/admin" { currentPage(page, "admin")... }>Admin</a>
+			}
 		</nav>
 		<a id="inbox-slot" class="ts-nav-link ts-topbar-inbox" href="/inbox" { currentPage(page, "inbox")... }>Inbox <span class="ts-nav-count">{ integer(h.Inbox) }</span></a>
 		if page == "chat" {

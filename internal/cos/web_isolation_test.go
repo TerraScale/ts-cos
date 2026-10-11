@@ -197,6 +197,13 @@ func (f isolationFixture) cases() map[string]isolationCase {
 		"POST /push/unsubscribe":              {path: "/push/unsubscribe", body: `{"endpoint":"` + f.device + `"}`},
 		"POST /push/test":                     {path: "/push/test"},
 		"POST /push/prefs/{category}/{state}": {path: "/push/prefs/chat/off"},
+		"GET /admin":                          {path: "/admin"},
+		"POST /admin/invite":                  {path: "/admin/invite", body: "name=newbie"},
+		"POST /admin/users/{id}/invite":       {path: "/admin/users/" + f.b.ID + "/invite"},
+		"POST /admin/users/{id}/disable":      {path: "/admin/users/" + f.b.ID + "/disable"},
+		"POST /admin/users/{id}/enable":       {path: "/admin/users/" + f.b.ID + "/enable"},
+		"GET /admin/users/{id}/delete":        {path: "/admin/users/" + f.b.ID + "/delete"},
+		"POST /admin/users/{id}/delete":       {path: "/admin/users/" + f.b.ID + "/delete"},
 	}
 }
 
