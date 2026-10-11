@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"slices"
 
-	"git.terrascale.tech/TerraScale/ts-cos/internal/webpush"
+	"github.com/TerraScale/ts-cos/internal/webpush"
 	"github.com/a-h/templ"
 )
 
