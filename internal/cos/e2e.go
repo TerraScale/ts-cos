@@ -313,6 +313,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "rules.heartbeat-leader", Stream: "TS-813", Smoke: true, Run: checkHeartbeatLeader},
 		E2ECheck{ID: "threads.no-haiku", Stream: "TS-812", Run: checkNoHaikuThreads},
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
+		E2ECheck{ID: "memory.recall", Stream: "TS-828", Run: checkMemoryRecall},
 		E2ECheck{ID: "access.login.tailnet", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginTailnet)},
 		E2ECheck{ID: "access.login.public", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginPublic)},
 		E2ECheck{ID: "access.wrong-password", Stream: "TS-810", Run: accessCheck(checkWrongPassword)},
