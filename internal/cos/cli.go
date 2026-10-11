@@ -313,7 +313,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	hooks := NewHooks(bus)
 	go hooks.Start(ctx)
 	w.Hooks = hooks
-	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s))
+	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s), NewRulesEngine(cfg, bus, s))
 	if err != nil {
 		return err
 	}

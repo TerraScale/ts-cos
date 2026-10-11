@@ -45,10 +45,11 @@ func TestAutopilotLeaderOnlyAndReplicated(t *testing.T) {
 	})
 	for i, host := range hosts {
 		var err error
+		engine := &RulesEngine{Store: stores[i], Call: func(context.Context, string, string, []string) error { return nil }}
 		pilots[i], err = StartAutopilot(ctx, host, nodes[i], stores[i], func(context.Context) []AutopilotEntry {
 			beats[i].Add(1)
 			return []AutopilotEntry{{Kind: "record", Action: "Reconciled live state", Reason: "test"}}
-		})
+		}, engine)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,6 +106,9 @@ func TestAutopilotLeaderOnlyAndReplicated(t *testing.T) {
 	if err != nil || host != hosts[leader] {
 		t.Fatalf("run now from a follower: %q %v", host, err)
 	}
+	if lease, err := nodes[follower].Leader(ctx); err != nil || lease != host {
+		t.Fatalf("one election: run now answered by %s, cos_leader holder %q (%v)", host, lease, err)
+	}
 	slow("run now beat on the leader", func() bool { return beats[leader].Load() == 2 })
 	slow("run now logged on every node", func() bool {
 		for i := range stores {
@@ -123,6 +127,35 @@ func TestAutopilotLeaderOnlyAndReplicated(t *testing.T) {
 			t.Fatalf("%s beat without the lock", hosts[i])
 		}
 	}
+
+	// An event published on a follower reaches the leader's rules engine once,
+	// and its escalation shows on every node.
+	js, err := nodes[follower].JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow("event streams", func() bool { _, err := js.Stream(ctx, EventsStream); return err == nil })
+	question := Event{ID: "t3:ask-1", Source: SourceT3, Kind: KindRequestPending, Time: time.Now(), Severity: SeverityUrgent,
+		Summary: "TS-1 asks which region", Host: "beta", Thread: "t1"}
+	for range 2 {
+		if _, err := PublishEvent(ctx, js, question); err != nil {
+			t.Fatal(err)
+		}
+	}
+	slow("escalation on every node", func() bool {
+		for i := range stores {
+			n := 0
+			for _, e := range state(i).Log {
+				if e.Kind == ClassEscalate && e.Event == question.ID && e.Host == hosts[leader] {
+					n++
+				}
+			}
+			if n != 1 {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 func TestAutopilotNeverLeadsOnDesktop(t *testing.T) {
@@ -131,9 +164,6 @@ func TestAutopilotNeverLeadsOnDesktop(t *testing.T) {
 	}
 	if ok, _ := leaderEligible("beta"); !ok {
 		t.Fatal("beta may not lead")
-	}
-	if (&Autopilot{Host: "mariogk-desktop"}).holdLock(context.Background()) {
-		t.Fatal("desktop took the lock")
 	}
 }
 

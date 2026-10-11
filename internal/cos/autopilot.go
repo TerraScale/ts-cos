@@ -22,12 +22,10 @@ var autopilotPresets = []int{10, 15, 30, 60}
 const (
 	autopilotDefault      = 30
 	autopilotSettings     = "COS_AUTOPILOT"
-	autopilotLock         = "COS_AUTOPILOT_LEADER"
 	autopilotLogStream    = "COS_AUTOPILOT_LOG"
-	autopilotLogSubject   = "cos.autopilot.log"
+	autopilotLogSubjects  = "cos.autopilot.log.>" // cos.autopilot.log.<kind>; B's COS inbox consumes .escalate
 	autopilotRunSubject   = "cos.autopilot.run"
 	autopilotReplicas     = 3
-	autopilotLockTTL      = 45 * time.Second
 	autopilotTick         = 15 * time.Second
 	autopilotLogKeep      = 200
 	autopilotForbiddenRun = "mariogk-desktop"
@@ -38,7 +36,9 @@ type AutopilotEntry struct {
 	Seq    uint64 `json:"seq"`
 	At     string `json:"at"`
 	Host   string `json:"host"`
-	Kind   string `json:"kind"`
+	Kind   string `json:"kind"` // beat, act, record, escalate, error
+	Event  string `json:"event,omitempty"`
+	Ticket string `json:"ticket,omitempty"`
 	Target string `json:"target,omitempty"`
 	Action string `json:"action"`
 	Reason string `json:"reason"`
@@ -71,27 +71,31 @@ func leaderEligible(host string) (bool, string) {
 
 type Autopilot struct {
 	Host      string
+	bus       *Bus
 	store     *Store
 	conn      *nats.Conn
 	js        jetstream.JetStream
 	settings  jetstream.KeyValue
-	lock      jetstream.KeyValue
 	reconcile func(context.Context) []AutopilotEntry
+	engine    *RulesEngine // run while this node leads
 
 	mu       sync.Mutex
-	revision uint64
+	leading  context.Context // non-nil while this node holds the cluster lease
 	beating  bool
 	mirrorMu sync.Mutex
 }
 
 // StartAutopilot runs the heartbeat machinery until ctx ends. Every host mirrors
-// the replicated state; only the lock holder beats.
-func StartAutopilot(ctx context.Context, host string, bus *Bus, store *Store, reconcile func(context.Context) []AutopilotEntry) (*Autopilot, error) {
+// the replicated state; only the cluster leader beats and runs the rules engine.
+func StartAutopilot(ctx context.Context, host string, bus *Bus, store *Store, reconcile func(context.Context) []AutopilotEntry, engine *RulesEngine) (*Autopilot, error) {
 	js, err := jetstream.New(bus.conn)
 	if err != nil {
 		return nil, err
 	}
-	a := &Autopilot{Host: host, store: store, conn: bus.conn, js: js, reconcile: reconcile}
+	a := &Autopilot{Host: host, bus: bus, store: store, conn: bus.conn, js: js, reconcile: reconcile, engine: engine}
+	if engine != nil {
+		engine.JS, engine.Publish = js, a.publish
+	}
 	sub, err := bus.conn.Subscribe(autopilotRunSubject, a.handleRun(ctx))
 	if err != nil {
 		return nil, err
@@ -135,21 +139,22 @@ func (a *Autopilot) setup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("autopilot settings: %w", err)
 	}
-	lock, err := autopilotBucket(ctx, a.js, jetstream.KeyValueConfig{Bucket: autopilotLock, Replicas: autopilotReplicas, Storage: jetstream.FileStorage, TTL: autopilotLockTTL})
-	if err != nil {
-		return fmt.Errorf("autopilot lock: %w", err)
-	}
-	if _, err := a.js.Stream(ctx, autopilotLogStream); errors.Is(err, jetstream.ErrStreamNotFound) {
-		_, err = a.js.CreateStream(ctx, jetstream.StreamConfig{Name: autopilotLogStream, Subjects: []string{autopilotLogSubject},
-			Replicas: autopilotReplicas, Storage: jetstream.FileStorage, MaxMsgs: 1000, Discard: jetstream.DiscardOld})
-		if err != nil && !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
-			return fmt.Errorf("autopilot log: %w", err)
+	logConfig := jetstream.StreamConfig{Name: autopilotLogStream, Subjects: []string{autopilotLogSubjects},
+		Replicas: autopilotReplicas, Storage: jetstream.FileStorage, MaxMsgs: 1000, Discard: jetstream.DiscardOld}
+	stream, err := a.js.Stream(ctx, autopilotLogStream)
+	if errors.Is(err, jetstream.ErrStreamNotFound) {
+		_, err = a.js.CreateStream(ctx, logConfig)
+		if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
+			err = nil
 		}
-	} else if err != nil {
+	} else if err == nil && !slices.Equal(stream.CachedInfo().Config.Subjects, logConfig.Subjects) {
+		_, err = a.js.UpdateStream(ctx, logConfig)
+	}
+	if err != nil {
 		return fmt.Errorf("autopilot log: %w", err)
 	}
 	a.mu.Lock()
-	a.settings, a.lock = settings, lock
+	a.settings = settings
 	a.mu.Unlock()
 	return nil
 }
@@ -181,13 +186,28 @@ func (a *Autopilot) run(ctx context.Context) {
 	}
 	a.mirror(ctx, func(s *AutopilotState) { s.Error = "" })
 	go a.follow(ctx)
+	a.bus.Lead(ctx, a.lead)
+}
+
+// lead runs while this node holds the cluster lease; ctx ends when it is lost.
+func (a *Autopilot) lead(ctx context.Context) {
+	if ok, reason := leaderEligible(a.Host); !ok {
+		slog.Error("autopilot resigns the lease", "reason", reason)
+		go a.bus.Resign()
+		return
+	}
+	a.mu.Lock()
+	a.leading = ctx
+	a.mu.Unlock()
+	defer func() { a.mu.Lock(); a.leading = nil; a.mu.Unlock() }()
+	if a.engine != nil {
+		go a.engine.Run(ctx)
+	}
 	ticker := time.NewTicker(autopilotTick)
 	defer ticker.Stop()
 	for {
-		if a.holdLock(ctx) {
-			if interval, last := a.schedule(ctx); time.Since(last) >= interval {
-				a.beat(ctx, "scheduled every "+interval.String())
-			}
+		if interval, last, ok := a.schedule(ctx); ok && time.Since(last) >= interval {
+			a.beat(ctx, "scheduled every "+interval.String())
 		}
 		select {
 		case <-ctx.Done():
@@ -197,49 +217,23 @@ func (a *Autopilot) run(ctx context.Context) {
 	}
 }
 
-// holdLock acquires or renews the KV lock. Renewal needs a quorum, so a
-// partitioned leader loses the lock within one TTL.
-func (a *Autopilot) holdLock(ctx context.Context) bool {
-	if ok, _ := leaderEligible(a.Host); !ok {
-		return false
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.revision != 0 {
-		rev, err := a.lock.Update(ctx, "leader", []byte(a.Host), a.revision)
-		if err == nil {
-			a.revision = rev
-			return true
-		}
-		a.revision = 0
-	}
-	rev, err := a.lock.Create(ctx, "leader", []byte(a.Host))
-	if err == nil {
-		a.revision = rev
-		return true
-	}
-	// A restarted leader finds its own unexpired lock and takes it back.
-	if entry, err := a.lock.Get(ctx, "leader"); err == nil && string(entry.Value()) == a.Host {
-		if rev, err := a.lock.Update(ctx, "leader", []byte(a.Host), entry.Revision()); err == nil {
-			a.revision = rev
-			return true
-		}
-	}
-	return false
-}
-
-func (a *Autopilot) schedule(ctx context.Context) (time.Duration, time.Time) {
-	interval := autopilotDefault
+// schedule reads the interval and last beat; ok is false when KV is unreadable,
+// so a leader that just took over never beats on a failed read.
+func (a *Autopilot) schedule(ctx context.Context) (interval time.Duration, last time.Time, ok bool) {
+	minutes := autopilotDefault
 	if e, err := a.settings.Get(ctx, "interval"); err == nil {
 		if n, err := strconv.Atoi(string(e.Value())); err == nil && slices.Contains(autopilotPresets, n) {
-			interval = n
+			minutes = n
 		}
+	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return 0, last, false
 	}
-	var last time.Time
 	if e, err := a.settings.Get(ctx, "lastBeat"); err == nil {
 		last, _ = time.Parse(time.RFC3339, string(e.Value()))
+	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return 0, last, false
 	}
-	return time.Duration(interval) * time.Minute, last
+	return time.Duration(minutes) * time.Minute, last, true
 }
 
 func (a *Autopilot) beat(ctx context.Context, reason string) {
@@ -267,7 +261,7 @@ func (a *Autopilot) publish(ctx context.Context, e AutopilotEntry) {
 	e.Host = a.Host
 	data, err := json.Marshal(e)
 	if err == nil {
-		_, err = a.js.Publish(ctx, autopilotLogSubject, data)
+		_, err = a.js.Publish(ctx, "cos.autopilot.log."+e.Kind, data)
 	}
 	if err != nil {
 		slog.Error("autopilot log", "error", err, "action", e.Action)
@@ -277,23 +271,26 @@ func (a *Autopilot) publish(ctx context.Context, e AutopilotEntry) {
 func (a *Autopilot) handleRun(ctx context.Context) nats.MsgHandler {
 	return func(m *nats.Msg) {
 		a.mu.Lock()
-		leader, busy := a.revision != 0, a.beating
+		leading, busy := a.leading, a.beating
 		a.mu.Unlock()
-		if !leader {
+		if leading == nil {
 			return // only the leader answers
 		}
 		reply := map[string]any{"host": a.Host, "started": !busy}
 		data, _ := json.Marshal(reply)
 		_ = m.Respond(data)
 		if !busy {
-			go a.beat(ctx, "run now from the dashboard")
+			go a.beat(leading, "run now from the dashboard")
 		}
 	}
 }
 
 // RunNow asks the current leader to beat immediately.
-func (a *Autopilot) RunNow(ctx context.Context) (string, error) {
-	m, err := a.conn.RequestWithContext(ctx, autopilotRunSubject, nil)
+func (a *Autopilot) RunNow(ctx context.Context) (string, error) { return autopilotRunNow(ctx, a.conn) }
+
+// autopilotRunNow returns the host whose autopilot answered: only the cluster leader's does.
+func autopilotRunNow(ctx context.Context, conn *nats.Conn) (string, error) {
+	m, err := conn.RequestWithContext(ctx, autopilotRunSubject, nil)
 	if err != nil {
 		return "", errors.New("no autopilot leader answered")
 	}
@@ -305,10 +302,12 @@ func (a *Autopilot) RunNow(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if !reply.Started {
-		return reply.Host, errors.New("a heartbeat is already running on " + reply.Host)
+		return reply.Host, errAutopilotBusy
 	}
 	return reply.Host, nil
 }
+
+var errAutopilotBusy = errors.New("a heartbeat is already running on the leader")
 
 func (a *Autopilot) SetInterval(ctx context.Context, minutes int) error {
 	if !slices.Contains(autopilotPresets, minutes) {
@@ -326,7 +325,7 @@ func (a *Autopilot) SetInterval(ctx context.Context, minutes int) error {
 
 // follow mirrors replicated settings, the lock holder and the action log into SQLite.
 func (a *Autopilot) follow(ctx context.Context) {
-	go a.watch(ctx, a.settings, func(s *AutopilotState, key, value string) {
+	go a.watch(ctx, func() (jetstream.KeyValue, error) { return a.settings, nil }, func(s *AutopilotState, key, value string) {
 		switch key {
 		case "interval":
 			if n, err := strconv.Atoi(value); err == nil && slices.Contains(autopilotPresets, n) {
@@ -336,7 +335,7 @@ func (a *Autopilot) follow(ctx context.Context) {
 			s.LastBeat = value
 		}
 	})
-	go a.watch(ctx, a.lock, func(s *AutopilotState, _, value string) { s.Leader = value })
+	go a.watch(ctx, func() (jetstream.KeyValue, error) { return leaseKV(ctx, a.js, false) }, func(s *AutopilotState, _, value string) { s.Leader = value })
 	for ctx.Err() == nil {
 		if err := a.followLog(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("autopilot log mirror", "error", err)
@@ -348,9 +347,13 @@ func (a *Autopilot) follow(ctx context.Context) {
 	}
 }
 
-func (a *Autopilot) watch(ctx context.Context, kv jetstream.KeyValue, apply func(*AutopilotState, string, string)) {
+func (a *Autopilot) watch(ctx context.Context, open func() (jetstream.KeyValue, error), apply func(*AutopilotState, string, string)) {
 	for ctx.Err() == nil {
-		w, err := kv.WatchAll(ctx)
+		kv, err := open()
+		var w jetstream.KeyWatcher
+		if err == nil {
+			w, err = kv.WatchAll(ctx)
+		}
 		if err == nil {
 			for e := range w.Updates() {
 				if e == nil {

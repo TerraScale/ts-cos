@@ -210,8 +210,9 @@ func (e *E2EEnv) reconnect(ctx context.Context, timeout time.Duration) (*Bus, er
 	}
 }
 
-// checkHeartbeatLeader requires leader-only work to run on the cluster leader: the autopilot
-// heartbeat's lock holder must be the cluster lease holder.
+// checkHeartbeatLeader requires leader-only work to run on the cluster leader. There is one
+// election (cos_leader): only the lease holder's autopilot answers run now, which starts one
+// zero-token reconcile beat.
 func checkHeartbeatLeader(ctx context.Context, e *E2EEnv) (string, error) {
 	bus, err := e.bus(ctx)
 	if err != nil {
@@ -224,20 +225,12 @@ func checkHeartbeatLeader(ctx context.Context, e *E2EEnv) (string, error) {
 	}
 	call, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	js, err := jetstream.New(bus.conn)
-	if err != nil {
-		return "", err
+	holder, err := autopilotRunNow(call, bus.conn)
+	if err != nil && !errors.Is(err, errAutopilotBusy) {
+		return "", fmt.Errorf("autopilot did not answer from the cluster leader %s: %w", leader, err)
 	}
-	kv, err := js.KeyValue(call, autopilotLock)
-	if err != nil {
-		return "", fmt.Errorf("autopilot lock %s: %w", autopilotLock, err)
-	}
-	entry, err := kv.Get(call, "leader") // autopilot.go's lock key
-	if err != nil {
-		return "", fmt.Errorf("autopilot has no lock holder (cluster leader %s): %w", leader, err)
-	}
-	if holder := string(entry.Value()); holder != leader {
-		return "", fmt.Errorf("autopilot heartbeat runs on %s but the cluster leader is %s: two independent elections (%s vs %s)", holder, leader, autopilotLock, leaseBucket)
+	if holder != leader {
+		return "", fmt.Errorf("autopilot heartbeat runs on %s but the cluster leader is %s", holder, leader)
 	}
 	return "autopilot heartbeat runs on the cluster leader " + leader, nil
 }

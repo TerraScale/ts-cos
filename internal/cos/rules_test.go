@@ -1,0 +1,470 @@
+package cos
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"git.terrascale.tech/TerraScale/ts-cos/behavior"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+const (
+	rulesPRURL = "https://git.terrascale.tech/TerraScale/ts-cos/pulls/7"
+	rulesCISig = "ci:ts-cos#7 CI failed: build"
+)
+
+func rulesLive() Live {
+	return Live{
+		Issues: []Issue{
+			{Identifier: "TS-1", Status: "In Progress", StatusType: "started"},
+			{Identifier: "TS-2", Status: "Todo", StatusType: "unstarted"},
+		},
+		Fleet: []HostFleet{{Host: "beta", Threads: []FleetThread{
+			{ThreadID: "t1", Title: "TS-1 · ts-cos: x", Branch: "cos/ts-1-x", Model: "claude-haiku-5-5", PRs: []ThreadPR{{URL: rulesPRURL}}},
+			{ThreadID: "t2", Title: "TS-2 · ts-cos: y", Branch: "cos/ts-2-y", Model: "claude-opus-5-5"},
+			{ThreadID: "t3", Title: "TS-1 old", Model: "claude-haiku-4-5"},
+			{ThreadID: "sub", Title: "TS-1 sub", Branch: "cos/ts-1-x", Lineage: &struct {
+				Parent   string `json:"parent"`
+				Relation string `json:"rel"`
+			}{Parent: "t1"}},
+		}}},
+	}
+}
+
+func rulesPR(mod func(*PRFacts)) *PRFacts {
+	pr := &PRFacts{
+		PR: PR{Repo: "ts-cos", Number: 7, URL: rulesPRURL, Branch: "cos/ts-1-x", Cos: true, Issues: []string{"TS-1"},
+			Mergeable: true, CI: "pending", SHA: "aaa", Base: "main"},
+		State: "open",
+	}
+	if mod != nil {
+		mod(pr)
+	}
+	return pr
+}
+
+func rulesPREvent(kind EventKind, number int) Event {
+	return Event{ID: "forgejo:1", Source: SourceForgejo, Kind: kind, Summary: "PR update", Repo: "TerraScale/ts-cos", PR: number}
+}
+
+func assertRules(t *testing.T, got, want []Decision) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %d decisions, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].Class != want[i].Class || got[i].Rule != want[i].Rule {
+			t.Errorf("decision %d = %s/%s, want %s/%s (reason: %s)", i, got[i].Class, got[i].Rule, want[i].Class, want[i].Rule, got[i].Reason)
+		}
+	}
+}
+
+func TestClassify(t *testing.T) {
+	ciFail := func(p *PRFacts) { p.CI = "failure"; p.Failing = []string{"build"} }
+	tests := []struct {
+		name   string
+		event  Event
+		pr     *PRFacts
+		memory WakeMemory
+		want   []Decision
+		check  func(*testing.T, []Decision)
+	}{
+		{
+			name:  "ready COS PR merges on the owner's running ticket",
+			event: rulesPREvent(KindCIStatus, 7),
+			pr: rulesPR(func(p *PRFacts) {
+				p.Ready, p.CI = true, "success"
+				p.BotApproved = true
+			}),
+			want: []Decision{{Class: ClassAct, Rule: "merge-ready"}},
+			check: func(t *testing.T, got []Decision) {
+				d := got[0]
+				if d.Merge == nil || d.Merge.Number != 7 || d.Merge.URL != rulesPRURL {
+					t.Errorf("Merge = %+v, want PR 7", d.Merge)
+				}
+				if d.Host != "beta" || d.Thread != "t1" {
+					t.Errorf("target = %s %s, want beta t1", d.Host, d.Thread)
+				}
+			},
+		},
+		{
+			name:  "paused ticket records instead of merging",
+			event: Event{ID: "forgejo:1", Source: SourceForgejo, Kind: KindCIStatus, Summary: "PR update", Repo: "TerraScale/ts-cos", PR: 7, Ticket: "TS-2"},
+			pr: rulesPR(func(p *PRFacts) {
+				p.Ready, p.CI, p.BotApproved = true, "success", true
+			}),
+			want: []Decision{{Class: ClassRecord, Rule: "paused"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Merge != nil {
+					t.Errorf("Merge = %+v, want nil", got[0].Merge)
+				}
+				if !strings.Contains(got[0].Reason, "paused") {
+					t.Errorf("reason = %q, want it to contain paused", got[0].Reason)
+				}
+			},
+		},
+		{
+			name:  "CI failure wakes the owner with the failing check",
+			event: rulesPREvent(KindCIStatus, 7),
+			pr:    rulesPR(ciFail),
+			want:  []Decision{{Class: ClassAct, Rule: "ci"}},
+			check: func(t *testing.T, got []Decision) {
+				d := got[0]
+				for _, s := range []string{"CI failed", rulesPRURL, "build"} {
+					if !strings.Contains(d.Wake, s) {
+						t.Errorf("Wake = %q, want it to contain %q", d.Wake, s)
+					}
+				}
+				if d.Sig != rulesCISig {
+					t.Errorf("Sig = %q, want %q", d.Sig, rulesCISig)
+				}
+				if d.Thread != "t1" {
+					t.Errorf("Thread = %q, want t1", d.Thread)
+				}
+			},
+		},
+		{
+			name:   "same failure on the same SHA records only",
+			event:  rulesPREvent(KindCIStatus, 7),
+			pr:     rulesPR(ciFail),
+			memory: WakeMemory{Sig: rulesCISig, SHA: "aaa", Count: 1},
+			want:   []Decision{{Class: ClassRecord, Rule: "ci"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Wake != "" {
+					t.Errorf("Wake = %q, want none", got[0].Wake)
+				}
+			},
+		},
+		{
+			name:   "same failure on a new SHA escalates the model",
+			event:  rulesPREvent(KindCIStatus, 7),
+			pr:     rulesPR(ciFail),
+			memory: WakeMemory{Sig: rulesCISig, SHA: "old", Count: 1},
+			want: []Decision{
+				{Class: ClassAct, Rule: "escalate-model"},
+				{Class: ClassAct, Rule: "ci"},
+				{Class: ClassEscalate, Rule: "same-failure-twice"},
+			},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Model["model"] != "claude-opus-5-5" {
+					t.Errorf("Model = %v, want claude-opus-5-5 before the wake", got[0].Model)
+				}
+				if got[1].Wake == "" {
+					t.Error("second decision has no wake text")
+				}
+			},
+		},
+		{
+			name:  "conflicting PR wakes the owner to rebase",
+			event: rulesPREvent(KindPRConflict, 7),
+			pr:    rulesPR(func(p *PRFacts) { p.Mergeable = false }),
+			want:  []Decision{{Class: ClassAct, Rule: "conflict"}},
+			check: func(t *testing.T, got []Decision) {
+				if !strings.Contains(got[0].Wake, "CONFLICT") {
+					t.Errorf("Wake = %q, want it to contain CONFLICT", got[0].Wake)
+				}
+			},
+		},
+		{
+			name:  "requested changes wakes the owner for review",
+			event: rulesPREvent(KindReview, 7),
+			pr:    rulesPR(func(p *PRFacts) { p.ChangesRequested = true }),
+			want:  []Decision{{Class: ClassAct, Rule: "review"}},
+		},
+		{
+			name:  "oversized PR wakes the owner to split",
+			event: rulesPREvent(KindPRSynchronized, 7),
+			pr:    rulesPR(func(p *PRFacts) { p.Lines = 2000 }),
+			want:  []Decision{{Class: ClassAct, Rule: "size"}},
+			check: func(t *testing.T, got []Decision) {
+				if !strings.Contains(got[0].Wake, "2000 lines") {
+					t.Errorf("Wake = %q, want it to contain 2000 lines", got[0].Wake)
+				}
+			},
+		},
+		{
+			name:  "merged slice wakes the owner for the next slice",
+			event: rulesPREvent(KindPRMerged, 7),
+			pr:    rulesPR(func(p *PRFacts) { p.Merged, p.State, p.Body = true, "closed", "Part of TS-1" }),
+			want:  []Decision{{Class: ClassAct, Rule: "slice"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Thread != "t1" {
+					t.Errorf("Thread = %q, want t1", got[0].Thread)
+				}
+			},
+		},
+		{
+			name:  "merged ticket records completion",
+			event: rulesPREvent(KindPRMerged, 7),
+			pr:    rulesPR(func(p *PRFacts) { p.Merged, p.State, p.Body = true, "closed", "Closes TS-1" }),
+			want:  []Decision{{Class: ClassRecord, Rule: "merged"}},
+		},
+		{
+			name:  "PR no thread owns escalates as orphan",
+			event: rulesPREvent(KindCIStatus, 99),
+			pr: rulesPR(func(p *PRFacts) {
+				p.Number, p.URL, p.Branch = 99, "https://git.terrascale.tech/TerraScale/ts-cos/pulls/99", "cos/ts-1-other"
+				ciFail(p)
+			}),
+			want: []Decision{{Class: ClassEscalate, Rule: "orphan"}},
+		},
+		{
+			name:  "worker question escalates",
+			event: Event{ID: "t3:req-1", Source: SourceT3, Kind: KindRequestPending, Summary: "approve the migration?", Host: "beta", Thread: "t1"},
+			want:  []Decision{{Class: ClassEscalate, Rule: "worker-question"}},
+		},
+		{
+			name:  "failed run wakes the thread",
+			event: Event{ID: "t3:turn-9", Source: SourceT3, Kind: KindTurnFailed, Summary: "exit 1", Host: "beta", Thread: "t1"},
+			want:  []Decision{{Class: ClassAct, Rule: "failed"}},
+			check: func(t *testing.T, got []Decision) {
+				if !strings.Contains(got[0].Wake, "exit 1") {
+					t.Errorf("Wake = %q, want it to contain exit 1", got[0].Wake)
+				}
+				if got[0].Host != "beta" || got[0].Thread != "t1" {
+					t.Errorf("target = %s %s, want beta t1", got[0].Host, got[0].Thread)
+				}
+			},
+		},
+		{
+			name:  "haiku 4.5 owner is moved to 5.5 on completion",
+			event: Event{ID: "t3:turn-10", Source: SourceT3, Kind: KindTurnCompleted, Summary: "done", Host: "beta", Thread: "t3"},
+			want:  []Decision{{Class: ClassAct, Rule: "model-haiku-5-5"}, {Class: ClassRecord, Rule: "progress"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Model["model"] != "claude-haiku-5-5" {
+					t.Errorf("Model = %v, want claude-haiku-5-5", got[0].Model)
+				}
+			},
+		},
+		{
+			name:  "user chat is left to the COS inbox",
+			event: Event{ID: "user:1", Source: SourceUser, Kind: KindChatMessage, Summary: "hello"},
+			want:  nil,
+		},
+		{
+			name:  "Ku issue update records state",
+			event: Event{ID: "ku:1", Source: SourceKu, Kind: KindIssueUpdated, Summary: "TS-1 updated", Ticket: "TS-1"},
+			want:  []Decision{{Class: ClassRecord, Rule: "state"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(tt.event, rulesLive(), tt.pr, tt.memory)
+			assertRules(t, got, tt.want)
+			if tt.check != nil {
+				tt.check(t, got)
+			}
+		})
+	}
+}
+
+func TestRulesTicketRunning(t *testing.T) {
+	tests := []struct {
+		name    string
+		ticket  string
+		running bool
+		reason  string
+	}{
+		{name: "empty ticket is not COS work", ticket: "", running: false, reason: "no ticket key"},
+		{name: "started issue runs", ticket: "TS-1", running: true},
+		{name: "todo issue is paused", ticket: "TS-2", running: false, reason: "paused"},
+		{name: "unknown issue is not ours", ticket: "TS-9", running: false, reason: "not an open Ku issue"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			running, reason := ticketRunning(rulesLive(), tt.ticket)
+			if running != tt.running {
+				t.Errorf("running = %t, want %t", running, tt.running)
+			}
+			if !strings.Contains(reason, tt.reason) {
+				t.Errorf("reason = %q, want it to contain %q", reason, tt.reason)
+			}
+		})
+	}
+}
+
+func TestRulesPROwnerSkipsSubagent(t *testing.T) {
+	host, owner := prOwner(rulesLive(), PR{Repo: "ts-cos", Number: 7, URL: rulesPRURL, Branch: "cos/ts-1-x"})
+	if owner == nil {
+		t.Fatal("no owner, want t1")
+	}
+	if owner.ThreadID != "t1" || host != "beta" {
+		t.Errorf("owner = %s %s, want beta t1", host, owner.ThreadID)
+	}
+}
+
+type fakeEntry struct {
+	jetstream.KeyValueEntry
+	value []byte
+}
+
+func (e fakeEntry) Value() []byte { return e.value }
+
+type fakeKV struct {
+	jetstream.KeyValue
+	data map[string][]byte
+}
+
+func (kv *fakeKV) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
+	v, ok := kv.data[key]
+	if !ok {
+		return nil, jetstream.ErrKeyNotFound
+	}
+	return fakeEntry{value: v}, nil
+}
+
+func (kv *fakeKV) Put(_ context.Context, key string, value []byte) (uint64, error) {
+	kv.data[key] = value
+	return 1, nil
+}
+
+type rulesCall struct {
+	host, command string
+	args          []string
+}
+
+type rulesRecorder struct {
+	sha       string
+	sendErr   error
+	merges    int
+	calls     []rulesCall
+	published []AutopilotEntry
+}
+
+func newRulesEngine(t *testing.T, rec *rulesRecorder) *RulesEngine {
+	t.Helper()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.SaveLive(context.Background(), rulesLive()); err != nil {
+		t.Fatal(err)
+	}
+	return &RulesEngine{
+		Store: store,
+		PR: func(context.Context, string, int) (*PRFacts, error) {
+			return rulesPR(func(p *PRFacts) { p.CI, p.Failing, p.SHA = "failure", []string{"build"}, rec.sha }), nil
+		},
+		Merge: func(context.Context, string, int) error { rec.merges++; return nil },
+		Call: func(_ context.Context, host, command string, args []string) error {
+			rec.calls = append(rec.calls, rulesCall{host, command, args})
+			if command == "send" {
+				return rec.sendErr
+			}
+			return nil
+		},
+		Publish: func(_ context.Context, e AutopilotEntry) { rec.published = append(rec.published, e) },
+		memory:  &fakeKV{data: map[string][]byte{}},
+	}
+}
+
+func rulesCIEvent() Event {
+	return Event{ID: "forgejo:ci-1", Source: SourceForgejo, Kind: KindCIStatus, Summary: "CI failed on PR 7", Repo: "TerraScale/ts-cos", PR: 7}
+}
+
+func TestRulesEngineHandle(t *testing.T) {
+	ctx := context.Background()
+	rec := &rulesRecorder{sha: "aaa"}
+	r := newRulesEngine(t, rec)
+	kv := r.memory.(*fakeKV)
+
+	// First failure on a SHA wakes t1 once.
+	if err := r.Handle(ctx, rulesCIEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 1 || rec.calls[0].host != "beta" || rec.calls[0].command != "send" ||
+		rec.calls[0].args[0] != "t1" || !strings.Contains(rec.calls[0].args[1], "CI failed") {
+		t.Fatalf("calls = %+v, want one send to t1 about CI failed", rec.calls)
+	}
+	if len(rec.published) != 1 || rec.published[0].Kind != "act" {
+		t.Fatalf("published = %+v, want one act entry", rec.published)
+	}
+	if n := storedWakeCount(t, kv); n != 1 {
+		t.Fatalf("stored wake count = %d, want 1", n)
+	}
+
+	// A new SHA with the same failure escalates t1's model and wakes it again.
+	rec.calls, rec.published, rec.sha = nil, nil, "bbb"
+	if err := r.Handle(ctx, rulesCIEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 2 || rec.calls[0].command != "model" || rec.calls[0].args[0] != "t1" ||
+		!strings.Contains(rec.calls[0].args[1], "claude-opus-5-5") || rec.calls[1].command != "send" {
+		t.Fatalf("calls = %+v, want a model change for t1 to claude-opus-5-5, then the wake", rec.calls)
+	}
+	if last := rec.published[len(rec.published)-1]; last.Kind != "escalate" {
+		t.Fatalf("last published = %+v, want escalate", last)
+	}
+	if n := storedWakeCount(t, kv); n != 2 {
+		t.Fatalf("stored wake count = %d, want 2", n)
+	}
+
+	// The same SHA again is already woken: no new send, no new model change.
+	rec.calls, rec.published = nil, nil
+	if err := r.Handle(ctx, rulesCIEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("calls = %+v, want none", rec.calls)
+	}
+	if len(rec.published) != 1 || rec.published[0].Kind != "record" {
+		t.Fatalf("published = %+v, want one record entry", rec.published)
+	}
+}
+
+func TestRulesEngineHandleWakeFailure(t *testing.T) {
+	rec := &rulesRecorder{sha: "aaa", sendErr: errors.New("bus down")}
+	r := newRulesEngine(t, rec)
+	err := r.Handle(context.Background(), rulesCIEvent())
+	if err == nil || !strings.Contains(err.Error(), "wake t1") {
+		t.Fatalf("Handle error = %v, want a wake t1 error", err)
+	}
+}
+
+func storedWakeCount(t *testing.T, kv *fakeKV) int {
+	t.Helper()
+	if len(kv.data) != 1 {
+		t.Fatalf("wake memory entries = %d, want 1", len(kv.data))
+	}
+	var m WakeMemory
+	for _, v := range kv.data {
+		if err := json.Unmarshal(v, &m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return m.Count
+}
+
+func TestWakeTemplatesAreRequiredBehavior(t *testing.T) {
+	files := map[string]string{}
+	err := fs.WalkDir(behavior.Files, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := behavior.Files.ReadFile(name)
+		files[name] = string(data)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range wakeRules {
+		if out, err := embeddedBehavior().Render("wake_"+rule, wakeData{PR: "u", Checks: "c", Summary: "s", Lines: 1}); err != nil || out == "" {
+			t.Fatalf("wake_%s: %q %v", rule, out, err)
+		}
+	}
+	delete(files, "templates/wake_ci.tmpl")
+	if _, err := ParseBehavior("test", files); err == nil || !strings.Contains(err.Error(), "wake_ci") {
+		t.Fatalf("bundle without wake_ci accepted: %v", err)
+	}
+	files["templates/wake_ci.tmpl"] = "line one\nline two {{.PR}}"
+	if _, err := ParseBehavior("test", files); err == nil {
+		t.Fatal("multi-line wake accepted")
+	}
+}

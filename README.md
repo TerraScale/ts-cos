@@ -284,20 +284,35 @@ open PRs, and all open threads grouped by host. Datastar SSE patches HTML;
 SQLite/WAL and post-commit notifications push story edits from another process without
 waiting for the 60-second source refresh. No completed-work history is shown.
 
-## Autopilot heartbeat
+## Autopilot: heartbeat and rules engine
 
 Every node serves the same Autopilot panel. The heartbeat interval is one of
 10, 15, 30 or 60 minutes (default 30); one tap on any node stores it in the
-replicated `COS_AUTOPILOT` KV bucket. Only the holder of the `COS_AUTOPILOT_LEADER`
-KV lock (45-second TTL, renewed every 15 seconds over a quorum) beats;
-mariogk-desktop never takes the lock. **Run now** sends a NATS request that only
-the leader answers, so it works from any node. Each beat records its time in KV
-first, so a failover leader keeps the schedule instead of beating again.
+replicated `COS_AUTOPILOT` KV bucket. Only the cluster leader (the TS-810 lease)
+beats and runs the rules engine; mariogk-desktop resigns the lease. **Run now**
+sends a NATS request that only the leader answers, so it works from any node.
+Each beat records its time in KV first, so a new leader keeps the schedule.
 
-The beat is the reconciler: it refreshes T3, Forgejo and Ku and logs what it saw.
-Every step is published with its reason to the 3-replica `COS_AUTOPILOT_LOG`
-stream; each node mirrors the stream and the KV state into its SQLite, so a
-restarted or joining node catches up and the feed shows the same entries everywhere.
+The rules engine is the durable `cos-rules` consumer on `cos.events.>`. Each
+event is classified with zero tokens:
+
+| Class | When | What happens |
+|---|---|---|
+| ACT | READY `cos/` or `cos-hold/` PR of a running ticket | squash-merge |
+| ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed or interrupted run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
+| ACT | the same failure after a new push | model escalation (Haiku 5.5 → Opus 5.5 high → xhigh) plus ESCALATE |
+| ACT | a thread on Haiku 4.5 | switch to Haiku 5.5 |
+| RECORD | paused tickets (Ku Todo/Backlog), progress, Ku/main changes | feed only |
+| ESCALATE | worker question or pending request, orphan PR, same failure twice | `cos.autopilot.log.escalate` for the COS inbox |
+
+Wake texts are behavior files (`behavior/templates/wake_<rule>.tmpl`): a change
+merged to main reaches every node over NATS without a rebuild, and a bundle missing
+one or rendering more than one line is rejected. FOCUS/PAUSED come from Ku: In
+Progress runs, Todo/Backlog is paused. Wake
+memory lives in KV, so a new leader does not repeat a wake. Every decision is
+published with its reason to the 3-replica `COS_AUTOPILOT_LOG` stream
+(`cos.autopilot.log.<class>`); each node mirrors the stream and the KV state into
+its SQLite, so a restarted or joining node catches up and every node shows the same feed.
 
 ## Inbox
 
