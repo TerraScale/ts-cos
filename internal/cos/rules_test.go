@@ -247,6 +247,57 @@ func TestClassify(t *testing.T) {
 			},
 		},
 		{
+			name:  "real failure in a top-level thread still wakes it",
+			event: Event{ID: "t3:turn-11", Source: SourceT3, Kind: KindTurnFailed, Summary: "go test failed", Host: "beta", Thread: "t1"},
+			want:  []Decision{{Class: ClassAct, Rule: "failed"}},
+			check: func(t *testing.T, got []Decision) {
+				if !strings.Contains(got[0].Wake, "go test failed") {
+					t.Errorf("Wake = %q, want it to contain go test failed", got[0].Wake)
+				}
+			},
+		},
+		{
+			name:  "subagent failure is left to its parent",
+			event: Event{ID: "t3:turn-12", Source: SourceT3, Kind: KindTurnFailed, Summary: "go test failed", Host: "beta", Thread: "sub"},
+			want:  []Decision{{Class: ClassRecord, Rule: "child-thread"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Wake != "" || got[0].Model != nil {
+					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
+				}
+			},
+		},
+		{
+			name:  "subagent rate limit is not woken or escalated",
+			event: Event{ID: "t3:turn-13", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached", Host: "beta", Thread: "sub"},
+			want:  []Decision{{Class: ClassRecord, Rule: "child-thread"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Wake != "" || got[0].Model != nil {
+					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
+				}
+			},
+		},
+		{
+			name:  "top-level rate limit records without waking",
+			event: Event{ID: "t3:turn-14", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached. Try again later.", Host: "beta", Thread: "t1"},
+			want:  []Decision{{Class: ClassRecord, Rule: "transient-failure"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Wake != "" || got[0].Model != nil {
+					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
+				}
+			},
+		},
+		{
+			name:   "repeated top-level rate limit does not escalate the model",
+			event:  Event{ID: "t3:turn-15", Source: SourceT3, Kind: KindTurnFailed, Summary: "Claude API rate limit reached. Try again later.", Host: "beta", Thread: "t1"},
+			memory: WakeMemory{Sig: "failed:run failed: Claude API rate limit reached. Try again later.", SHA: "t3:turn-15", Count: 1},
+			want:   []Decision{{Class: ClassRecord, Rule: "transient-failure"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Wake != "" || got[0].Model != nil {
+					t.Errorf("Wake = %q, Model = %v, want neither", got[0].Wake, got[0].Model)
+				}
+			},
+		},
+		{
 			name:  "haiku 4.5 owner is moved to 5.5 on completion",
 			event: Event{ID: "t3:turn-10", Source: SourceT3, Kind: KindTurnCompleted, Summary: "done", Host: "beta", Thread: "t3"},
 			want:  []Decision{{Class: ClassAct, Rule: "model-haiku-5-5"}, {Class: ClassRecord, Rule: "progress"}},

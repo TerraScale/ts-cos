@@ -132,6 +132,15 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 			return []Decision{d(ClassRecord, "state", e.Summary)}
 		}
 	}
+	if pr == nil && (e.Kind == KindTurnFailed || e.Kind == KindTurnInterrupted) {
+		// findThread matches subagents too: the parent owns their retries, not the rules engine.
+		if owner != nil && owner.Lineage != nil {
+			return []Decision{d(ClassRecord, "child-thread", "delegated subagent: its parent thread owns it")}
+		}
+		if transientFailure(e.Summary) {
+			return []Decision{d(ClassRecord, "transient-failure", "transient ("+e.Summary+"): no wake, T3 retries")}
+		}
+	}
 	if running, why := ticketRunning(live, paused, ticket); !running {
 		rule := "not-running"
 		if paused[ticket] {
@@ -200,6 +209,17 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		return wake("interrupted", "run interrupted: "+e.Summary, e.ID, data)
 	}
 	return append(out, d(ClassRecord, "progress", e.Summary))
+}
+
+// transientFailure: provider limits and outages clear on their own; waking the worker only adds load.
+func transientFailure(summary string) bool {
+	s := strings.ToLower(summary)
+	for _, marker := range []string{"rate limit", "overloaded", "429", "529", "timeout", "temporarily unavailable"} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ticketRunning: work runs while its key is on an open thread or an open PR, unless the ticket is paused.
