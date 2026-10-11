@@ -1,0 +1,30 @@
+package charts
+
+templ Ring(data RingData) {
+	<span class="ts-chart-meter" tabindex="0" role="img" aria-label={ data.Label }>
+		<svg class={ "ts-ring ts-ring-" + data.Tone } viewBox="0 0 120 120" aria-hidden="true">
+			<circle class="ts-ring-track" cx="60" cy="60" r="52" pathLength="100"></circle>
+			<circle class="ts-ring-fill" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray={ data.Dash }></circle>
+		</svg>
+		@meterTip(data.Name, data.Value)
+	</span>
+}
+
+templ Bar(data BarData) {
+	<span class="ts-chart-meter" tabindex="0" role="img" aria-label={ data.Label }>
+		<svg class="ts-svg-sharebar" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true">
+			<rect class="ts-svg-sharebar-track" x="0" y="0" width="100" height="8"></rect>
+			<rect class="ts-svg-sharebar-fill" x="0" y="0" width={ data.Width } height="8"></rect>
+		</svg>
+		@meterTip(data.Name, data.Value)
+	</span>
+}
+
+// meterTip is the HTML tooltip above a ring or bar, revealed on :hover and
+// :focus-visible of its meter.
+templ meterTip(name, value string) {
+	<span class="ts-chart-tooltip" aria-hidden="true">
+		<span class="ts-chart-tooltip-label">{ name }</span>
+		<strong>{ value }</strong>
+	</span>
+}
