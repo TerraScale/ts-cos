@@ -8,7 +8,7 @@ import (
 // agentMaxWakes keeps the newest wakes in the replicated state.
 const agentMaxWakes = 100
 
-// WakeRecord is one COS wake, with its token use at API-equivalent cost.
+// WakeRecord is one COS wake, with its token use.
 type WakeRecord struct {
 	At          time.Time `json:"at"`
 	Reason      string    `json:"reason"` // chat, digest, focus, failover, or the restart reason
@@ -18,7 +18,6 @@ type WakeRecord struct {
 	CachedInput int       `json:"cachedInput"`
 	CacheWrite  int       `json:"cacheWrite"`
 	Output      int       `json:"output"`
-	USD         float64   `json:"usd"`
 }
 
 // recordWake appends a wake and keeps the newest agentMaxWakes.
@@ -46,7 +45,7 @@ func (st *AgentState) attachRun(run string) {
 	}
 }
 
-// meterWakes fills in the tokens and API-equivalent cost of each wake whose run has finished.
+// meterWakes fills in the tokens of each wake whose run has finished.
 func meterWakes(st *AgentState, p agentProjection) {
 	for _, r := range p.Runs {
 		if active(r.Status) {
@@ -58,7 +57,6 @@ func meterWakes(st *AgentState, p agentProjection) {
 				continue
 			}
 			w.Input, w.CachedInput, w.CacheWrite, w.Output = p.runUsage(r.RootNodeID)
-			w.USD = wakeCost(w.Input, w.CachedInput, w.CacheWrite, w.Output)
 		}
 	}
 }
@@ -81,10 +79,4 @@ func (p agentProjection) runUsage(root string) (input, cached, write, output int
 func tokenCount(usage map[string]any, key string) int {
 	n, _ := usage[key].(float64)
 	return int(n)
-}
-
-// wakeCost is the Opus 5.5 API-equivalent cost in USD; the subscription pays the real bill.
-func wakeCost(input, cached, cacheWrite, output int) float64 {
-	uncached := max(0, input-cached-cacheWrite)
-	return (float64(uncached)*4 + float64(cached)*0.2 + float64(cacheWrite)*5 + float64(output)*20) / 1e6
 }

@@ -156,9 +156,6 @@ func (w *Web) agentState(ctx context.Context) (AgentState, error) {
 	return st, json.Unmarshal(e.Value(), &st)
 }
 
-// dollars formats an API-equivalent amount with n decimals.
-func dollars(usd float64, n int) string { return strconv.FormatFloat(usd, 'f', n, 64) }
-
 // settings hosts the heartbeat presets (TS-813), token budgets (TS-826) and the COS wakes; account settings join it here.
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
 	w.renderSettings(rw, r, http.StatusOK, w.budgetPanel(r.Context(), time.Now()))

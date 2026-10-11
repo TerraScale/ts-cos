@@ -505,12 +505,12 @@ the replicated bucket `COS_AGENT`; the chat stays in `COS_CHAT`, never in T3.
 ```sh
 cos agent                        # thread, host, last restart reason
 cos agent restart 'new plan'     # fresh brief at the next wake
-cos agent wakes                  # last 20 wakes: reason, items, tokens, API-equivalent cost
+cos agent wakes                  # last 20 wakes: reason, items, tokens per wake
 cos context set focus '<text>'   # change focus: COS restarts with a fresh brief now
 ```
 
-Each COS wake records its tokens and API-equivalent cost (Opus 5.5 rates) once its
-run finishes; the subscription pays the real bill. `/settings` shows the same list.
+Each COS wake records its tokens per wake (input, cached, cache writes, output) once
+its run finishes. `/settings` shows the same list.
 
 ## Autopilot: heartbeat and rules engine
 

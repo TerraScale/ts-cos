@@ -189,7 +189,7 @@ templ settingsPage(a AutopilotState, b budgetPanelData, push PushState, wakes []
 					<header class="panel-head"><h2 id="wakes-heading">COS wakes</h2></header>
 					<table>
 						<thead>
-							<tr><th>Time (UTC)</th><th>Reason</th><th>Items</th><th>Input</th><th>Cached</th><th>Output</th><th>$</th></tr>
+							<tr><th>Time (UTC)</th><th>Reason</th><th>Items</th><th>Input</th><th>Cached</th><th>Output</th></tr>
 						</thead>
 						<tbody>
 							for _, wk := range wakes {
@@ -200,12 +200,10 @@ templ settingsPage(a AutopilotState, b budgetPanelData, push PushState, wakes []
 									<td>{ integer(wk.Input) }</td>
 									<td>{ integer(wk.CachedInput) }</td>
 									<td>{ integer(wk.Output) }</td>
-									<td>{ dollars(wk.USD, 3) }</td>
 								</tr>
 							}
 						</tbody>
 					</table>
-					<p><small>API-equivalent cost at Opus 5.5 rates; the subscription pays.</small></p>
 				</section>
 				<section class="panel" aria-labelledby="account-heading">
 					<header class="panel-head"><h2 id="account-heading">Account</h2></header>
