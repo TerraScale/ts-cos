@@ -144,7 +144,7 @@ func (c LimitCredential) gate(model string, now time.Time) (free bool, recover t
 		}
 	}
 	for _, m := range c.Models {
-		if (m.Model == model || strings.HasPrefix(m.Model, model)) && m.Until.After(now) {
+		if limitsModelMatches(m.Model, model) && m.Until.After(now) {
 			hold(m.Until)
 		}
 	}
@@ -155,6 +155,15 @@ func (c LimitCredential) gate(model string, now time.Time) (free bool, recover t
 		return false, time.Time{}
 	}
 	return false, recover
+}
+
+// limitsModelMatches reports whether a cooldown key covers model: the same name, or model plus a -YYYYMMDD date.
+func limitsModelMatches(key, model string) bool {
+	if key == model {
+		return true
+	}
+	date, ok := strings.CutPrefix(key, model+"-")
+	return ok && len(date) == 8 && strings.Trim(date, "0123456789") == ""
 }
 
 // limitsProvider names the CLIProxyAPI provider that serves model, or "" when CLIProxyAPI does not route it.

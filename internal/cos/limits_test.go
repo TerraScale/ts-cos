@@ -113,6 +113,8 @@ func TestLimitsUnitHeadroom(t *testing.T) {
 		{"credential quota blocks every model", at(LimitCredential{Provider: "claude", Account: "q", State: "quota", Until: limitsNow.Add(2 * time.Hour)}), "claude-sonnet-5-5", false, limitsNow.Add(2 * time.Hour)},
 		{"elapsed cooldown is free", at(LimitCredential{Provider: "claude", Account: "q", State: "quota", Until: limitsNow.Add(-time.Minute)}), "claude-sonnet-5-5", true, time.Time{}},
 		{"rejected 7d window blocks", at(LimitCredential{Provider: "claude", Account: "w", State: "active", Windows: []LimitWindow{{Name: "7d", Status: "rejected", Reset: limitsNow.Add(72 * time.Hour)}}}), "claude-opus-5-5", false, limitsNow.Add(72 * time.Hour)},
+		{"opus cooldown does not block claude-opus-5", at(LimitCredential{Provider: "claude", Account: "m", State: "active", Models: []LimitModel{{Model: "claude-opus-5-5", State: "quota", Until: limitsNow.Add(time.Hour)}}}), "claude-opus-5", true, time.Time{}},
+		{"dated cooldown blocks its base model", at(LimitCredential{Provider: "claude", Account: "m", State: "active", Models: []LimitModel{{Model: "claude-haiku-4-5-20251001", State: "quota", Until: limitsNow.Add(time.Hour)}}}), "claude-haiku-4-5", false, limitsNow.Add(time.Hour)},
 		{"disabled codex alone is limited", at(LimitCredential{Provider: "codex", Account: "d", State: "disabled"}), "gpt-6.1-sol", false, time.Time{}},
 		{"active codex serves gpt", at(limitsCred(t, fixture, "codex2@example.com")), "gpt-6.1-sol", true, time.Time{}},
 		{"o-digit model maps to codex", at(LimitCredential{Provider: "codex", Account: "d", State: "disabled"}), "o3", false, time.Time{}},
