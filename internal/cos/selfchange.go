@@ -8,8 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
-	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,12 +18,11 @@ import (
 
 // The self-change loop: the COS agent turns "X is broken / change Y" into
 // `cos self change`, and the cluster leader drives it without further input:
-// Ku ticket -> branch with a failing acceptance check -> worker thread -> CI +
+// work item key -> branch with a failing acceptance check -> worker thread -> CI +
 // e2e gate -> squash merge -> rollout -> check on every node -> "Updated" in chat.
 // Records live in a replicated KV bucket, so a failover resumes where it stopped.
 const (
 	selfBucket          = "COS_SELF"
-	selfParent          = "TS-769"
 	selfTick            = 15 * time.Second
 	selfRolloutDeadline = 45 * time.Minute
 	selfVerifyDeadline  = 5 * time.Minute
@@ -98,7 +97,7 @@ func (r selfRecord) entry() SelfChange {
 	return SelfChange{Summary: r.Summary, SHA: r.SHA, Ticket: r.Ticket, PR: r.PRURL, At: at, Reverted: r.RevertedBy != ""}
 }
 
-func selfBranch(ticket string) string { return "cos/" + strings.ToLower(ticket) + "-self" }
+func selfBranch(key string) string { return "cos/" + strings.ToLower(key) }
 
 // selfStore is the replicated changelog and queue.
 type selfStore struct{ kv jetstream.KeyValue }
@@ -129,6 +128,9 @@ func (s selfStore) list(ctx context.Context) ([]selfRecord, error) {
 	}
 	var out []selfRecord
 	for k := range keys.Keys() {
+		if k == "seq" {
+			continue
+		}
 		e, err := s.kv.Get(ctx, k)
 		var r selfRecord
 		if err == nil && json.Unmarshal(e.Value(), &r) == nil {
@@ -159,6 +161,32 @@ func (s selfStore) save(ctx context.Context, r selfRecord, rev uint64) error {
 	data, _ := json.Marshal(r)
 	_, err := s.kv.Update(ctx, r.ID, data, rev)
 	return err
+}
+
+// nextKey allocates the next self-change key (SELF-<n>) from a counter in COS_SELF;
+// ts-cos tracks its own work, so there is no external ticket.
+func (s selfStore) nextKey(ctx context.Context) (string, error) {
+	for range 10 {
+		n, rev := 0, uint64(0)
+		e, err := s.kv.Get(ctx, "seq")
+		switch {
+		case err == nil:
+			n, _ = strconv.Atoi(string(e.Value()))
+			rev = e.Revision()
+		case !errors.Is(err, jetstream.ErrKeyNotFound):
+			return "", err
+		}
+		value := []byte(strconv.Itoa(n + 1))
+		if rev == 0 {
+			_, err = s.kv.Create(ctx, "seq", value)
+		} else {
+			_, err = s.kv.Update(ctx, "seq", value, rev)
+		}
+		if err == nil {
+			return fmt.Sprintf("SELF-%d", n+1), nil
+		}
+	}
+	return "", errors.New("self-change key allocation kept conflicting")
 }
 
 func selfID(now time.Time) string { return fmt.Sprintf("%016x", now.UnixNano()) }
@@ -230,7 +258,8 @@ type selfDriver struct {
 
 func newSelfDriver(cfg Config, bus *Bus, store selfStore) *selfDriver {
 	d := &selfDriver{cfg: cfg, bus: bus, store: store, f: Forgejo{Config: cfg}, now: func() time.Time { return time.Now().UTC() }}
-	d.ticket, d.launch, d.finish = d.kuTicket, d.launchWorker, d.closeOut
+	d.launch, d.finish = d.launchWorker, d.closeOut
+	d.ticket = func(ctx context.Context, _ selfRecord) (string, error) { return store.nextKey(ctx) }
 	d.check = func(ctx context.Context, c selfCheck) ([]selfCheckResult, bool, error) {
 		return runSelfCheck(ctx, bus, c)
 	}
@@ -474,7 +503,7 @@ func (d *selfDriver) progress(ctx context.Context, r selfRecord) {
 	case r.State == selfDone:
 		line, err = b.Render("updated", r.entry())
 	default:
-		steps := map[string]string{selfTicketed: "ticket created", selfChecked: "acceptance check fails on main as expected",
+		steps := map[string]string{selfTicketed: "started", selfChecked: "acceptance check fails on main as expected",
 			selfWorking: "worker started", selfGating: "PR open, waiting for CI and e2e", selfMerged: "merged, rolling out",
 			selfLive: "live, checking every node", selfFailed: "stopped", selfBlocked: "needs you"}
 		detail := r.Note
@@ -493,23 +522,10 @@ func (d *selfDriver) progress(ctx context.Context, r selfRecord) {
 	}
 }
 
-// closeOut records the outcome on Ku, closes the worker thread and links an undo to its change.
+// closeOut closes the worker thread, files an Inbox item for a stopped change and links an undo to its change.
 func (d *selfDriver) closeOut(ctx context.Context, r selfRecord) {
-	ku := Ku{Config: d.cfg}
-	text := fmt.Sprintf("Self-change %s: %s. PR %s, commit %s.", r.State, r.Note, r.PRURL, r.SHA)
-	if r.State == selfDone {
-		text = fmt.Sprintf("Live and verified on every node at %s: %s (%s, commit %s).", r.VerifiedAt.Format(time.RFC3339), r.note(), r.PRURL, r.SHA)
-	}
-	if _, err := ku.Call(ctx, "create_comment", map[string]any{"workspace": "terrascale", "identifier": r.Ticket, "body": text}); err != nil {
-		slog.Warn("self-change Ku comment failed", "error", err)
-	}
-	if r.State == selfDone {
-		if _, err := ku.Call(ctx, "update_issue", map[string]any{"workspace": "terrascale", "identifier": r.Ticket, "status": "done"}); err != nil {
-			slog.Warn("self-change Ku close failed", "error", err)
-		}
-		if r.Thread != "" {
-			_ = d.bus.Call(ctx, r.Host, "close", []string{r.Thread}, nil)
-		}
+	if r.State == selfDone && r.Thread != "" {
+		_ = d.bus.Call(ctx, r.Host, "close", []string{r.Thread}, nil)
 	}
 	if r.State == selfBlocked || r.State == selfFailed {
 		in, err := OpenInbox(ctx, d.bus, d.cfg.LocalHost, false)
@@ -529,29 +545,6 @@ func (d *selfDriver) closeOut(ctx context.Context, r selfRecord) {
 			_ = d.store.save(ctx, orig, rev)
 		}
 	}
-}
-
-var selfTicketKey = regexp.MustCompile(`"identifier"\s*:\s*"([A-Z]+-[0-9]+)"`)
-
-func (d *selfDriver) kuTicket(ctx context.Context, r selfRecord) (string, error) {
-	res, err := (Ku{Config: d.cfg}).Call(ctx, "create_issue", map[string]any{
-		"workspace": "terrascale", "team_key": "TS", "parent": selfParent, "assignees": []string{"mariogk@terrascale.tech"},
-		"status": "in_progress", "priority": 1, "title": "ts-cos self-change: " + r.Summary,
-		"description": "<p>User request (chat): " + selfHTML(r.Request) + "</p><p>Acceptance check (" + selfHTML(r.Check.Summary) + "):</p><pre>" + selfHTML(selfCheckJSON(r.Check)) + "</pre>",
-	})
-	if err != nil {
-		return "", err
-	}
-	data, _ := json.Marshal(res)
-	m := selfTicketKey.FindSubmatch(data)
-	if m == nil {
-		return "", errors.New("Ku did not return the new ticket key")
-	}
-	return string(m[1]), nil
-}
-
-func selfHTML(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
 func (d *selfDriver) brief(r selfRecord) string {

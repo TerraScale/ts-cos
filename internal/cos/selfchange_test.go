@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -165,7 +166,7 @@ func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && p == "/pulls":
 		list := []any{}
 		if _, ok := f.prOpen[7]; ok {
-			list = append(list, pr(7, "cos/ts-901-self"))
+			list = append(list, pr(7, "cos/ts-901"))
 		}
 		forgejoTestJSON(w, list)
 	case r.Method == "POST" && p == "/pulls":
@@ -306,7 +307,7 @@ func TestSelfChangeLoopAndUndo(t *testing.T) {
 	if got.State != selfGating || got.Ticket != "TS-901" || got.Thread != "thread-1" || got.PR != 7 {
 		t.Fatalf("after 4 steps: %+v", got)
 	}
-	if rig.fake.files["cos/ts-901-self"]["checks/TS-901.json"] != selfCheckJSON(r.Check) {
+	if rig.fake.files["cos/ts-901"]["checks/TS-901.json"] != selfCheckJSON(r.Check) {
 		t.Fatal("acceptance check not committed first on the branch")
 	}
 	steps(1)
@@ -444,7 +445,7 @@ func TestSelfChangeGuardsAndQueue(t *testing.T) {
 	// One rollout at a time: a green PR waits while another change is rolling out.
 	rolling := selfRecord{ID: "a0", Ticket: "TS-800", State: selfMerged, MergedAt: time.Now()}
 	rig.d.store.create(ctx, rolling)
-	waiting := selfRecord{ID: "a1", Ticket: "TS-901", Branch: "cos/ts-901-self", PR: 7, State: selfGating, Check: r.Check, CreatedAt: time.Now()}
+	waiting := selfRecord{ID: "a1", Ticket: "TS-901", Branch: "cos/ts-901", PR: 7, State: selfGating, Check: r.Check, CreatedAt: time.Now()}
 	rig.set(func(f *selfFake) {
 		f.prOpen[7], f.prFiles[7] = true, []string{"internal/cos/dashboard.templ", "checks/TS-901.json"}
 		f.files["head7"] = map[string]string{"checks/TS-901.json": selfCheckJSON(r.Check)}
@@ -506,5 +507,23 @@ func TestSelfCheckOnEveryNode(t *testing.T) {
 	m, err := buses[0].conn.RequestWithContext(ctx, selfCheckSubject("beta"), bad)
 	if err != nil || !strings.Contains(string(m.Data), "plain dashboard path") {
 		t.Fatalf("node ran an invalid check: %v %s", err, m.Data)
+	}
+}
+
+func TestSelfKeyAllocation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rig := newSelfTestRig(t, ctx)
+	for want := 1; want <= 3; want++ {
+		key, err := rig.d.store.nextKey(ctx)
+		if err != nil || key != fmt.Sprintf("SELF-%d", want) {
+			t.Fatalf("key %d = %q, %v", want, key, err)
+		}
+	}
+	if records, err := rig.d.store.list(ctx); err != nil || len(records) != 0 {
+		t.Fatalf("counter leaked into the changelog: %v %v", records, err)
+	}
+	if b := selfBranch("SELF-3"); b != "cos/self-3" {
+		t.Fatal(b)
 	}
 }

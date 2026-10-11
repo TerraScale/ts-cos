@@ -232,8 +232,8 @@ When the user asks the COS chat to fix or change COS itself, the agent runs
 acceptance check: a dashboard path or a behavior template, plus text that must
 appear or disappear. The cluster leader then drives it with no further input:
 
-1. Ku ticket under TS-769, branch `cos/<ticket>-self` whose first commit is
-   `checks/<ticket>.json`; the check must fail on all 3 live nodes.
+1. Key `SELF-<n>` from a counter in `COS_SELF`, branch `cos/self-<n>` whose first
+   commit is `checks/SELF-<n>.json`; the check must fail on all 3 live nodes.
 2. Opus 5.5 worker thread (effort high; Haiku 5.5 only as its delegate_task
    subagents) on the least busy host with a brief rendered from `behavior/templates/selfbrief.tmpl`.
 3. Gate: every CI context green (CI runs every `checks/*.json` against the PR
@@ -244,7 +244,7 @@ appear or disappear. The cluster leader then drives it with no further input:
    changes are live once every node loads the new bundle, code waits for the
    TS-818 rollout event.
 5. The check runs on every node; on success the chat shows
-   `Updated: <summary> (<sha>)` and the ticket closes.
+   `Updated: <summary> (<sha>)` and the worker thread closes.
 
 `cos self undo [ticket]` reverts the newest (or named) live change through the
 same gate and posts `Reverted: ...` once the check fails again everywhere.
