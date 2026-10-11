@@ -2,9 +2,12 @@ package cos
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -209,4 +212,162 @@ func checkNodeDownsampling(ctx context.Context, e *E2EEnv) (string, error) {
 		evidence += "; " + strings.Join(without, "; ")
 	}
 	return evidence, nil
+}
+
+// checkNodeCollectorStop publishes two samples for a synthetic host, then stops; the leader should call it missing.
+func checkNodeCollectorStop(ctx context.Context, e *E2EEnv) (string, error) {
+	bus, err := e.bus(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer bus.Close()
+	js, err := bus.JetStream()
+	if err != nil {
+		return "", err
+	}
+	if _, err := nodeStreamInfo(ctx, js, NodesRawStream); err != nil {
+		return "", err
+	}
+	return publishGhostNode(ctx, e, js)
+}
+
+// checkNodeCollectorMissing waits for the leader's missing alert for the stopped synthetic host, then purges its samples.
+func checkNodeCollectorMissing(ctx context.Context, e *E2EEnv) (string, error) {
+	bus, err := e.bus(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer bus.Close()
+	js, err := bus.JetStream()
+	if err != nil {
+		return "", err
+	}
+	if _, err := nodeStreamInfo(ctx, js, NodesRawStream); err != nil {
+		return "", err
+	}
+	if e.nodeGhost == "" { // run alone by a filter: stop a host here first
+		if _, err := publishGhostNode(ctx, e, js); err != nil {
+			return "", err
+		}
+	}
+	ghost, at := e.nodeGhost, e.nodeGhostAt
+	defer purgeGhostNode(ctx, js, ghost)
+	// Start a little early so the consumer also sees an alert published just before this check.
+	start := at.Add(-5 * time.Second)
+	cons, err := js.OrderedConsumer(ctx, EventsStream, jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{Event{Source: SourceNode, Kind: KindNodeAlert}.Subject()},
+		DeliverPolicy:  jetstream.DeliverByStartTimePolicy,
+		OptStartTime:   &start,
+	})
+	if err != nil {
+		return "", err
+	}
+	deadline := at.Add(100 * time.Second)
+	for {
+		seen, found, err := ghostMissingAlert(cons, ghost)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return fmt.Sprintf("%s reported missing after %.0f s", ghost, seen.Sub(at).Seconds()), nil
+		}
+		if time.Now().After(deadline) {
+			if why := e.leaderPredatesMain(ctx, bus); why != "" {
+				return "", e2eSkip(why)
+			}
+			return "", fmt.Errorf("no node.alert missing event for %s within 100 s of its last sample", ghost)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// publishGhostNode writes two raw samples for a random synthetic host one second apart and records them on e.
+func publishGhostNode(ctx context.Context, e *E2EEnv, js jetstream.JetStream) (string, error) {
+	raw := make([]byte, 3)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	ghost := "e2e-" + hex.EncodeToString(raw)
+	var last time.Time
+	for i := range 2 {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+		last = time.Now().UTC()
+		s := NodeSample{Host: ghost, Time: last, N: 1, Synthetic: true, Mem: NodeMem{Total: 1, Available: 1}}
+		if err := PublishNodeSample(ctx, js, "raw", s); err != nil {
+			return "", err
+		}
+	}
+	e.nodeGhost, e.nodeGhostAt = ghost, last
+	return fmt.Sprintf("published 2 samples for %s, then stopped", ghost), nil
+}
+
+// ghostMissingAlert drains the alerts delivered so far and reports when the ghost's missing alert was raised.
+func ghostMissingAlert(cons jetstream.Consumer, ghost string) (time.Time, bool, error) {
+	batch, err := cons.Fetch(nodesBatch, jetstream.FetchMaxWait(time.Second))
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	var at time.Time
+	found := false
+	for m := range batch.Messages() {
+		var e Event
+		if json.Unmarshal(m.Data(), &e) != nil || e.Host != ghost || !e.Synthetic {
+			continue
+		}
+		var d struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(e.Data, &d)
+		if d.Type == "missing" {
+			at, found = e.Time, true
+		}
+	}
+	return at, found, batch.Error()
+}
+
+// purgeGhostNode removes a synthetic host's raw samples so no later leader sees it. Cleanup runs even when the check fails.
+func purgeGhostNode(ctx context.Context, js jetstream.JetStream, ghost string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	st, err := js.Stream(ctx, NodesRawStream)
+	if err == nil {
+		err = st.Purge(ctx, jetstream.WithPurgeSubject(nodeSubject("raw", ghost)))
+	}
+	if err != nil {
+		slog.Warn("e2e node cleanup", "host", ghost, "error", err)
+	}
+}
+
+// leaderPredatesMain explains a missing alert by the leader still running an older build than main
+// (whose watcher may predate the alerts); "" means the leader runs main and the alert really is missing.
+func (e *E2EEnv) leaderPredatesMain(ctx context.Context, bus *Bus) string {
+	leader, err := bus.Leader(ctx)
+	if err != nil {
+		return ""
+	}
+	head, err := e.mainSHA(ctx)
+	if err != nil {
+		return ""
+	}
+	f, err := e.hostFacts(ctx, leader, false)
+	if err != nil {
+		return ""
+	}
+	var v struct {
+		Revision string `json:"revision"`
+	}
+	if json.Unmarshal([]byte(f["Version"]), &v) != nil || v.Revision == head.SHA {
+		return ""
+	}
+	return fmt.Sprintf("TS-825: leader %s runs %.12s, not main %.12s; its node alert watcher may predate the alerts", leader, v.Revision, head.SHA)
 }

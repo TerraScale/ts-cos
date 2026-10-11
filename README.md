@@ -65,6 +65,8 @@ process and its local T3 every 10 seconds and publishes the sample to JetStream.
 replicated streams keep the samples: `COS_NODES_RAW` (6 hours), `COS_NODES_1M` (7 days)
 and `COS_NODES_15M` (90 days). Each node averages its own samples into 1-minute and
 15-minute buckets in memory; a bucket still open when that node restarts is lost.
+The leader turns a disk over 85 %, memory over 90 % and a host with no sample for 60 s into `node.alert` events. The rules engine files each as an Inbox FYI, deduplicated: disk per mount per day, memory per day, missing once per outage.
+Synthetic e2e hosts raise info-level alerts that never reach web push.
 
 ### Sign-in and public URL
 
@@ -326,6 +328,9 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
 - `deploy.reconnect` (TS-818): on each node `/version` reports the host, protocol and one
   shared revision, `/release` streams its `_release` signal (or `: release unknown`), and
   the dashboard renders `releaseWatch`. It skips until `/version` is served.
+- `nodes.collector-stop` and `nodes.collector-missing`: a synthetic host publishes two
+  samples and stops; the leader must raise a missing `node.alert` for it within 100 s.
+  Its samples are purged afterwards.
 - `--smoke` runs the fast health-gate subset (under 25 s). The rollout gate calls
   `E2ESmoke(ctx, cfg, host, revision)`: smoke checks for that host plus cluster-wide
   ones, with `deploy.version` expecting the rolled-out revision.

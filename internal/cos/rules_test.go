@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"git.terrascale.tech/TerraScale/ts-cos/behavior"
 	"github.com/nats-io/nats.go/jetstream"
@@ -308,6 +309,30 @@ func TestClassify(t *testing.T) {
 			},
 		},
 		{
+			name:  "node alert files an Inbox FYI",
+			event: Event{ID: "node:disk:delta:/:2026-10-11", Source: SourceNode, Kind: KindNodeAlert, Severity: SeverityWarn, Summary: "delta: disk / is 87% full (alert above 85%)", Host: "delta"},
+			want:  []Decision{{Class: ClassAct, Rule: "node-alert"}},
+			check: func(t *testing.T, got []Decision) {
+				f := got[0].Inbox
+				if f == nil || f.Kind != "fyi" || f.Key != "node:disk:delta:/:2026-10-11" || f.Host != "delta" {
+					t.Fatalf("FYI = %+v, want an fyi keyed by the event on delta", f)
+				}
+				if _, err := f.item(time.Now()); err != nil {
+					t.Errorf("FYI is not a valid Inbox input: %v", err)
+				}
+			},
+		},
+		{
+			name:  "synthetic node alert only records",
+			event: Event{ID: "node:missing:e2e-abc123:1", Source: SourceNode, Kind: KindNodeAlert, Severity: SeverityInfo, Summary: "e2e-abc123: no node sample", Host: "e2e-abc123", Synthetic: true},
+			want:  []Decision{{Class: ClassRecord, Rule: "node-alert"}},
+			check: func(t *testing.T, got []Decision) {
+				if got[0].Inbox != nil {
+					t.Errorf("FYI = %+v, want none", got[0].Inbox)
+				}
+			},
+		},
+		{
 			name:  "user chat is left to the COS inbox",
 			event: Event{ID: "user:1", Source: SourceUser, Kind: KindChatMessage, Summary: "hello"},
 			want:  nil,
@@ -402,8 +427,10 @@ type rulesCall struct {
 type rulesRecorder struct {
 	sha       string
 	sendErr   error
+	fyiErr    error
 	merges    int
 	calls     []rulesCall
+	fyi       []InboxInput
 	published []AutopilotEntry
 }
 
@@ -423,6 +450,10 @@ func newRulesEngine(t *testing.T, rec *rulesRecorder) *RulesEngine {
 			return rulesPR(func(p *PRFacts) { p.CI, p.Failing, p.SHA = "failure", []string{"build"}, rec.sha }), nil
 		},
 		Merge: func(context.Context, string, int) error { rec.merges++; return nil },
+		Inbox: func(_ context.Context, in InboxInput) error {
+			rec.fyi = append(rec.fyi, in)
+			return rec.fyiErr
+		},
 		Call: func(_ context.Context, host, command string, args []string) error {
 			rec.calls = append(rec.calls, rulesCall{host, command, args})
 			if command == "send" {
@@ -501,6 +532,28 @@ func TestRulesEngineHandlePausedRecordsOnly(t *testing.T) {
 	}
 	if len(rec.published) != 1 || rec.published[0].Kind != ClassRecord || rec.published[0].Action != "paused" {
 		t.Fatalf("published = %+v, want one paused record", rec.published)
+	}
+}
+
+func TestRulesEngineHandleNodeAlert(t *testing.T) {
+	ctx := context.Background()
+	rec := &rulesRecorder{}
+	r := newRulesEngine(t, rec)
+	e := Event{ID: "node:disk:delta:/:2026-10-11", Source: SourceNode, Kind: KindNodeAlert, Severity: SeverityWarn,
+		Summary: "delta: disk / is 87% full (alert above 85%)", Host: "delta"}
+	if err := r.Handle(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.fyi) != 1 || rec.fyi[0].Key != e.ID || len(rec.calls) != 0 {
+		t.Fatalf("fyi = %+v, calls = %+v, want one FYI keyed by the event and no calls", rec.fyi, rec.calls)
+	}
+	if len(rec.published) != 1 || rec.published[0].Kind != ClassAct {
+		t.Fatalf("published = %+v, want one act entry", rec.published)
+	}
+	// A failed Inbox write shows as an error in the feed (the shared Inbox executor does not redeliver).
+	rec.fyiErr = errors.New("inbox unavailable")
+	if err := r.Handle(ctx, e); err != nil || len(rec.published) != 2 || rec.published[1].Kind != "error" {
+		t.Fatalf("Handle = %v, published = %+v, want an error entry", err, rec.published)
 	}
 }
 

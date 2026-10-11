@@ -118,6 +118,10 @@ type E2EEnv struct {
 	mu         sync.Mutex
 	facts      map[string]e2eFacts
 	collectors map[string]collectorProbe
+
+	// Set by nodes.collector-stop: the synthetic host it stopped and its last sample time.
+	nodeGhost   string
+	nodeGhostAt time.Time
 }
 
 // Host runs a bash script on a COS host (locally or over ssh) and returns its combined output.
@@ -282,7 +286,8 @@ func slicesHasPrefix(prefixes []string, id string) bool {
 }
 
 func e2eChecks() []E2ECheck {
-	var checks []E2ECheck
+	// First, so the leader's 60 s missing window overlaps the rest of the suite.
+	checks := []E2ECheck{{ID: "nodes.collector-stop", Stream: "TS-825", Run: checkNodeCollectorStop}}
 	for _, h := range e2eHosts {
 		checks = append(checks,
 			E2ECheck{ID: "deploy.unit." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkUnit(ctx, e, h) }},
@@ -327,6 +332,8 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "inbox.answer-closes", Stream: "TS-815", Run: inboxCheck(checkInboxAnswerCloses)},
 		E2ECheck{ID: "inbox.concurrent-answer", Stream: "TS-815", Run: inboxCheck(checkInboxConcurrentAnswer)},
 		E2ECheck{ID: "inbox.dedup", Stream: "TS-815", Run: inboxCheck(checkInboxDedup)},
+		// Last, so the 100 s wait only starts after the rest of the suite has run.
+		E2ECheck{ID: "nodes.collector-missing", Stream: "TS-825", Run: checkNodeCollectorMissing},
 	)
 	return append(append(checks, e2ePending...), e2eRegistered...)
 }
