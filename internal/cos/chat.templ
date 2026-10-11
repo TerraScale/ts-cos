@@ -1,7 +1,7 @@
 package cos
 
-// The chat page is the chat with the Inbox, Nodes and Work beside it; the KPI tiles sit above the log.
-templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b workBoard, ok bool, nodes []NodeCard, nodesOK bool) {
+// The chat page is the chat with the Inbox column beside it; the top bar's Inbox toggle shows it on phones.
+templ chatPage(h chatHeader, v Dashboard, entries []ChatEntry) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("COS · TerraScale")
@@ -10,7 +10,6 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 			@chatHead(h, "chat")
 			<div class="cos-chat-body">
 				<main id="main" class="cos-chat-main">
-					@kpiTiles(k)
 					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)
 					</div>
@@ -20,10 +19,8 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 					</form>
 					<p id="chat-notice" class="toast" role="status"></p>
 				</main>
-				<aside class="cos-inbox-col" aria-label="Inbox, nodes and work">
+				<aside class="cos-inbox-col" aria-label="Inbox">
 					<section id="pane-inbox" class="pane">@inbox(v)</section>
-					@nodesSummary(nodes, nodesOK)
-					@workPane(b, ok)
 				</aside>
 			</div>
 		</body>

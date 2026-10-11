@@ -1,0 +1,23 @@
+package cos
+
+// metricsPage is the Metrics page: the KPI tiles, then the Nodes and Work summaries; metricsEvents repaints them.
+templ metricsPage(h chatHeader, k kpiView, nodes []NodeCard, nodesOK bool, b workBoard, ok bool) {
+	<!DOCTYPE html>
+	<html lang="en">
+		@docHead("Metrics · COS")
+		<body class="ts-app" data-init="@get('/metrics/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
+			@releaseWatch()
+			@chatHead(h, "metrics")
+			<main id="main" class="ts-main">
+				<div class="ts-page">
+					<h1 class="ts-sr-only">Metrics</h1>
+					@kpiTiles(k)
+					<div class="ts-grid-2">
+						@nodesSummary(nodes, nodesOK)
+						@workPane(b, ok)
+					</div>
+				</div>
+			</main>
+		</body>
+	</html>
+}

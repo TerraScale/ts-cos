@@ -72,6 +72,7 @@ h3 { font-size: var(--t-md); font-weight: 600; }
   display: flex; flex-direction: column; gap: var(--s-4);
 }
 .page-narrow { max-width: 48rem; }
+.page { container-type: inline-size; }
 .grid-2 { display: grid; gap: var(--s-4); }
 .stack { display: flex; flex-direction: column; gap: var(--s-3); }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
@@ -838,7 +839,6 @@ th[aria-sort="descending"]::after { content: " ↓"; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 
-/* 21. Home pane switching (TS-824): >=960px shows chat + aside (icon rail below 1280px); below 960px the tab bar picks one pane */
 .skeleton-bar {
   display: block; height: var(--s-3); margin-top: var(--s-2);
   border-radius: var(--r-1);
@@ -846,13 +846,3 @@ th[aria-sort="descending"]::after { content: " ↓"; }
 }
 .skeleton-bar + .skeleton-bar { width: 75%; }
 .skeleton-bar:last-child { width: 50%; }
-/* Makes the chat column the container J's §14 @container rule queries; height is untouched (inline axis only) */
-.cos-chat-main { container-type: inline-size; }
-/* auto-fit gives 4+2 in an 830px chat column; a fixed 3 columns gives 3x2 from 40rem up */
-@container (min-width: 40rem) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.cos-chat-main > .kpis { padding: var(--s-3) var(--s-4) 0; }
-/* Phones: one row of tiles that scrolls sideways, so the chat keeps its height */
-@media (max-width: 959px) {
-  .kpis { display: flex; overflow-x: auto; flex: none; }
-  .kpis .kpi { flex: 0 0 9rem; }
-}

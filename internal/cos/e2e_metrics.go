@@ -12,31 +12,31 @@ import (
 	"time"
 )
 
-// checkHomeKPIs uses the run's session on base and checks the chat-first home renders the KPI tiles.
-func checkHomeKPIs(ctx context.Context, e *E2EEnv, base string) (string, error) {
+// checkMetricsKPIs uses the run's session on base and checks the Metrics page renders the KPI tiles.
+func checkMetricsKPIs(ctx context.Context, e *E2EEnv, base string) (string, error) {
 	cookie, err := e.session(ctx, base)
 	if err != nil {
 		return "", err
 	}
-	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/", cookie, nil)
+	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/metrics", cookie, nil)
 	if err != nil {
 		return "", err
 	}
 	if status != http.StatusOK || !strings.Contains(body, `id="kpis"`) || strings.Count(body, `class="kpi"`) != 6 {
-		return "", fmt.Errorf("GET %s/: HTTP %d without six KPI tiles", base, status)
+		return "", fmt.Errorf("GET %s/metrics: HTTP %d without six KPI tiles", base, status)
 	}
-	return "home on " + base + " renders six KPI tiles", nil
+	return "Metrics page on " + base + " renders six KPI tiles", nil
 }
 
-// checkKPIsLive publishes a kpi.probe and checks that base's open /chat/events stream repaints #kpis with it within 2 s.
-func checkKPIsLive(ctx context.Context, e *E2EEnv, host, base string) (string, error) {
+// checkMetricsKPIsLive publishes a kpi.probe and checks that base's open /metrics/events stream repaints #kpis with it within 2 s.
+func checkMetricsKPIsLive(ctx context.Context, e *E2EEnv, host, base string) (string, error) {
 	cookie, err := e.session(ctx, base)
 	if err != nil {
 		return "", err
 	}
 	stream, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(stream, "GET", base+"/chat/events", nil)
+	req, err := http.NewRequestWithContext(stream, "GET", base+"/metrics/events", nil)
 	if err != nil {
 		return "", err
 	}
@@ -44,15 +44,15 @@ func checkKPIsLive(ctx context.Context, e *E2EEnv, host, base string) (string, e
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("GET %s/chat/events: %w", base, err)
+		return "", fmt.Errorf("GET %s/metrics/events: %w", base, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s/chat/events: HTTP %d", base, res.StatusCode)
+		return "", fmt.Errorf("GET %s/metrics/events: HTTP %d", base, res.StatusCode)
 	}
 	sc := newSSEScanner(res.Body)
 	if !scanFor(sc, `id="kpis"`) {
-		return "", fmt.Errorf("no initial #kpis repaint on %s/chat/events%s", base, scanErr(sc))
+		return "", fmt.Errorf("no initial #kpis repaint on %s/metrics/events%s", base, scanErr(sc))
 	}
 	bus, err := ConnectBus(ctx, e.cfg)
 	if err != nil {

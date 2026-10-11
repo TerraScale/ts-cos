@@ -344,11 +344,11 @@ func e2eChecks() []E2ECheck {
 			E2ECheck{ID: "deploy.restarts." + h, Stream: "TS-810", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkRestarts(ctx, e, h) }},
 			E2ECheck{ID: "deploy.logs." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkLogs(ctx, e, h) }},
 			E2ECheck{ID: "deploy.watchdog." + h, Stream: "TS-818", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkWatchdog(ctx, e, h) }},
-			E2ECheck{ID: "home.kpis." + h, Stream: "TS-824", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
-				return checkHomeKPIs(ctx, e, urls[slices.Index(e2eHosts, h)])
+			E2ECheck{ID: "metrics.kpis." + h, Stream: "TS-824", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
+				return checkMetricsKPIs(ctx, e, urls[slices.Index(e2eHosts, h)])
 			})},
-			E2ECheck{ID: "home.kpis.live." + h, Stream: "TS-824", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
-				return checkKPIsLive(ctx, e, h, urls[slices.Index(e2eHosts, h)])
+			E2ECheck{ID: "metrics.kpis.live." + h, Stream: "TS-824", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
+				return checkMetricsKPIsLive(ctx, e, h, urls[slices.Index(e2eHosts, h)])
 			})},
 			E2ECheck{ID: "tokens.savings." + h, Stream: "TS-828", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
 				return checkTokensSavings(ctx, e, h, urls[slices.Index(e2eHosts, h)])

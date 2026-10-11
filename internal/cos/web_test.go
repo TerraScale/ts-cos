@@ -56,15 +56,6 @@ func TestChatSSEHeaderFollowsState(t *testing.T) {
 	if !strings.Contains(header, "event: datastar-patch-elements\n") || !strings.Contains(header, `<header id="chat-head"`) || !strings.Contains(header, "0 running") {
 		t.Fatal(header)
 	}
-	if tiles := readEvent(); !strings.Contains(tiles, `id="kpis"`) {
-		t.Fatal(tiles)
-	}
-	if nodes := readEvent(); !strings.Contains(nodes, `id="pane-nodes"`) {
-		t.Fatal(nodes)
-	}
-	if work := readEvent(); !strings.Contains(work, `id="pane-work"`) {
-		t.Fatal(work)
-	}
 	if inboxPane := readEvent(); !strings.Contains(inboxPane, `id="inbox"`) {
 		t.Fatal(inboxPane)
 	}
@@ -111,22 +102,27 @@ func TestChatRoutes(t *testing.T) {
 	}
 	r := serve("GET", "/", false, "")
 	body := r.Body.String()
-	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `data-init="@get(&#39;/release&#39;`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", `id="kpis"`, cssPath} {
+	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `data-init="@get(&#39;/release&#39;`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", cssPath} {
 		if r.Code != http.StatusOK || !strings.Contains(body, want) {
 			t.Fatal(r.Code, "missing", want)
 		}
 	}
-	if n := strings.Count(body, `class="kpi"`); n != 6 {
-		t.Fatalf("home renders %d KPI tiles, want 6", n)
+	metrics := serve("GET", "/metrics", false, "")
+	mbody := metrics.Body.String()
+	if metrics.Code != http.StatusOK || !strings.Contains(mbody, `aria-current="page">Metrics`) {
+		t.Fatal(metrics.Code, "metrics page missing the current link")
 	}
-	for _, want := range []string{`id="main"`, `id="pane-inbox"`, `id="pane-nodes"`, `id="pane-work"`, `class="cos-inbox-col"`} {
-		if !strings.Contains(body, want) {
-			t.Fatal("home missing", want)
+	if n := strings.Count(mbody, `class="kpi"`); n != 6 {
+		t.Fatalf("metrics page renders %d KPI tiles, want 6", n)
+	}
+	for _, want := range []string{`id="pane-nodes"`, `id="pane-work"`} {
+		if !strings.Contains(mbody, want) {
+			t.Fatal("metrics page missing", want)
 		}
 	}
 	// No bus: every expected host is listed as unknown, so its figures show dashes.
-	if !strings.Contains(body, `<a class="btn" href="/nodes">Open nodes</a>`) || !strings.Contains(body, `href="/nodes#`+expectedHosts[0]+`"`) || !strings.Contains(body, "CPU –") {
-		t.Fatal("home missing the Nodes summary")
+	if !strings.Contains(mbody, `<a class="btn" href="/nodes">Open nodes</a>`) || !strings.Contains(mbody, `href="/nodes#`+expectedHosts[0]+`"`) || !strings.Contains(mbody, "CPU –") {
+		t.Fatal("metrics page missing the Nodes summary")
 	}
 	inboxPage := serve("GET", "/inbox", false, "")
 	for _, want := range []string{`data-init="@get('/inbox/events'`, `data-init="@get(&#39;/release&#39;`, `id="inbox"`, `href="/inbox" aria-current="page">Inbox <span class="ts-nav-count">0</span>`, "Nothing needs you"} {
@@ -228,7 +224,7 @@ func TestPartialHostFailuresKeepCachedWork(t *testing.T) {
 	}
 }
 
-func TestHomeRendersKPIProbe(t *testing.T) {
+func TestMetricsRendersKPIProbe(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -237,10 +233,10 @@ func TestHomeRendersKPIProbe(t *testing.T) {
 	w := NewWeb(store, nil)
 	w.KPI.k.fold(Event{ID: "cos:kpi-probe:mariogk:1", Kind: KindKPIProbe})
 	r := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/metrics", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	w.routes().ServeHTTP(r, req)
 	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `data-probe="cos:kpi-probe:mariogk:1"`) {
-		t.Fatalf("GET / = %d without the probe on #kpis", r.Code)
+		t.Fatalf("GET /metrics = %d without the probe on #kpis", r.Code)
 	}
 }
