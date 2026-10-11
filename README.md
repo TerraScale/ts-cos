@@ -200,6 +200,32 @@ Legacy credential locations below are implementation debt; OCI Vault must delive
 | Local T3 | `~/.config/cos/tokens/<local hostname>` |
 | Forgejo | `~/.local/share/forgejo-cli/keys.json`, host `git.terrascale.tech` |
 
+## Event stream
+
+Every source publishes normalized events (Go type `Event` in `internal/cos/events.go`)
+to the replicated JetStream stream `COS_EVENTS` on `cos.events.<source>.<kind>`. The
+stream has 3 replicas, keeps 7 days, and drops duplicates by event ID for 24 hours.
+The rules engine and the Inbox consume it.
+
+| Source | Kinds |
+|---|---|
+| `t3` | turn.completed, turn.failed, turn.interrupted, request.pending, context.high, worker.needs_user |
+| `forgejo` | pr.opened, pr.synchronized, pr.mergeable, pr.conflict, pr.merged, pr.closed, ci.status, review.submitted, push.main |
+| `user` | chat.message, user.answer |
+| `inbox` | inbox.item_added, inbox.item_closed |
+
+Each node ingests only its local T3 shell stream. The `forgejo` source covers only PRs
+authored by mariogk, CI, and pushes on main.
+
+Forgejo webhooks reach the stream in two steps. The cluster leader registers the
+TerraScale org hook and the `Tools/ku` repository hook to
+`https://cos.terrascale.tech/hooks/forgejo`, signed with a secret every node derives
+from the Vault master. Deliveries land on `COS_INGEST` (`cos.ingest.forgejo`, work
+queue), and one durable consumer normalizes each once on whichever node pulls it.
+Mergeability is read from the API 15 seconds after a PR update or a push to main.
+
+`cos events [<subject filter>] [<count>]` prints recent events as JSON from any node.
+
 ## Commands
 
 Output is JSON by default. Errors are JSON on stderr and return a nonzero exit
