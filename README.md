@@ -351,13 +351,14 @@ event is classified with zero tokens:
 | ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed or interrupted run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
 | ACT | the same failure after a new push | model escalation (Haiku 5.5 → Opus 5.5 high → xhigh) plus ESCALATE |
 | ACT | a thread on Haiku 4.5 | switch to Haiku 5.5 |
-| RECORD | paused tickets (Ku Todo/Backlog), progress, Ku/main changes | feed only |
+| RECORD | paused tickets, progress, main changes | feed only |
 | ESCALATE | worker question or pending request, orphan PR, same failure twice | `cos.autopilot.log.escalate` for the COS inbox |
 
 Wake texts are behavior files (`behavior/templates/wake_<rule>.tmpl`): a change
 merged to main reaches every node over NATS without a rebuild, and a bundle missing
-one or rendering more than one line is rejected. FOCUS/PAUSED come from Ku: In
-Progress runs, Todo/Backlog is paused. Wake
+one or rendering more than one line is rejected. Every keyed thread runs unless
+its ticket is paused: `cos pause TS-<n>` / `cos resume TS-<n>` edit the replicated
+paused set; rules record events of paused tickets and never wake them. Wake
 memory lives in KV, so a new leader does not repeat a wake. Every decision is
 published with its reason to the 3-replica `COS_AUTOPILOT_LOG` stream
 (`cos.autopilot.log.<class>`); each node mirrors the stream and the KV state into

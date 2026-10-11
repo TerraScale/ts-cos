@@ -18,12 +18,11 @@ const (
 	rulesCISig = "ci:ts-cos#7 CI failed: build"
 )
 
+// rulesPaused is the replicated paused set the engine reads from KV.
+var rulesPaused = map[string]bool{"TS-2": true}
+
 func rulesLive() Live {
 	return Live{
-		Issues: []Issue{
-			{Identifier: "TS-1", Status: "In Progress", StatusType: "started"},
-			{Identifier: "TS-2", Status: "Todo", StatusType: "unstarted"},
-		},
 		Fleet: []HostFleet{{Host: "beta", Threads: []FleetThread{
 			{ThreadID: "t1", Title: "TS-1 · ts-cos: x", Branch: "cos/ts-1-x", Model: "claude-haiku-5-5", PRs: []ThreadPR{{URL: rulesPRURL}}},
 			{ThreadID: "t2", Title: "TS-2 · ts-cos: y", Branch: "cos/ts-2-y", Model: "claude-opus-5-5"},
@@ -247,14 +246,14 @@ func TestClassify(t *testing.T) {
 			want:  nil,
 		},
 		{
-			name:  "Ku issue update records state",
-			event: Event{ID: "ku:1", Source: SourceKu, Kind: KindIssueUpdated, Summary: "TS-1 updated", Ticket: "TS-1"},
+			name:  "push to main records state",
+			event: Event{ID: "forgejo:push-1", Source: SourceForgejo, Kind: KindPushMain, Summary: "main moved to abc"},
 			want:  []Decision{{Class: ClassRecord, Rule: "state"}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Classify(tt.event, rulesLive(), tt.pr, tt.memory)
+			got := Classify(tt.event, rulesLive(), tt.pr, tt.memory, rulesPaused)
 			assertRules(t, got, tt.want)
 			if tt.check != nil {
 				tt.check(t, got)
@@ -271,13 +270,13 @@ func TestRulesTicketRunning(t *testing.T) {
 		reason  string
 	}{
 		{name: "empty ticket is not COS work", ticket: "", running: false, reason: "no ticket key"},
-		{name: "started issue runs", ticket: "TS-1", running: true},
-		{name: "todo issue is paused", ticket: "TS-2", running: false, reason: "paused"},
-		{name: "unknown issue is not ours", ticket: "TS-9", running: false, reason: "not an open Ku issue"},
+		{name: "unpaused ticket runs", ticket: "TS-1", running: true},
+		{name: "paused ticket is paused", ticket: "TS-2", running: false, reason: "paused"},
+		{name: "unknown ticket runs now", ticket: "TS-9", running: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			running, reason := ticketRunning(rulesLive(), tt.ticket)
+			running, reason := ticketRunning(rulesPaused, tt.ticket)
 			if running != tt.running {
 				t.Errorf("running = %t, want %t", running, tt.running)
 			}
@@ -303,7 +302,8 @@ type fakeEntry struct {
 	value []byte
 }
 
-func (e fakeEntry) Value() []byte { return e.value }
+func (e fakeEntry) Value() []byte    { return e.value }
+func (e fakeEntry) Revision() uint64 { return 1 }
 
 type fakeKV struct {
 	jetstream.KeyValue
@@ -415,6 +415,21 @@ func TestRulesEngineHandle(t *testing.T) {
 	}
 	if len(rec.published) != 1 || rec.published[0].Kind != "record" {
 		t.Fatalf("published = %+v, want one record entry", rec.published)
+	}
+}
+
+func TestRulesEngineHandlePausedRecordsOnly(t *testing.T) {
+	rec := &rulesRecorder{sha: "aaa"}
+	r := newRulesEngine(t, rec)
+	r.memory.(*fakeKV).data[pausedKey] = []byte(`["TS-1"]`)
+	if err := r.Handle(context.Background(), rulesCIEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("calls = %+v, want none for a paused ticket", rec.calls)
+	}
+	if len(rec.published) != 1 || rec.published[0].Kind != ClassRecord || rec.published[0].Action != "paused" {
+		t.Fatalf("published = %+v, want one paused record", rec.published)
 	}
 }
 

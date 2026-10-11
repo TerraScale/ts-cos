@@ -50,6 +50,7 @@ type AutopilotState struct {
 	Leader   string           `json:"leader"`
 	LastBeat string           `json:"lastBeat"`
 	Error    string           `json:"error,omitempty"`
+	Paused   []string         `json:"paused,omitempty"`
 	Log      []AutopilotEntry `json:"log"`
 }
 
@@ -124,7 +125,7 @@ func Reconcile(cfg Config, bus *Bus, store *Store) func(context.Context) []Autop
 			threads += len(h.Threads)
 		}
 		out := []AutopilotEntry{{Kind: "record", Action: "Reconciled live state",
-			Reason: fmt.Sprintf("%d threads, %d PRs, %d Ku issues", threads, len(live.PRs), len(live.Issues))}}
+			Reason: fmt.Sprintf("%d threads, %d PRs", threads, len(live.PRs))}}
 		for _, source := range sortedKeysAny(live.Errors) {
 			out = append(out, AutopilotEntry{Kind: "error", Target: source, Action: "Source refresh failed", Reason: live.Errors[source]})
 		}
@@ -333,6 +334,10 @@ func (a *Autopilot) follow(ctx context.Context) {
 			}
 		case "lastBeat":
 			s.LastBeat = value
+		case pausedKey:
+			var keys []string
+			_ = json.Unmarshal([]byte(value), &keys) // a deleted key clears the set
+			s.Paused = keys
 		}
 	})
 	go a.watch(ctx, func() (jetstream.KeyValue, error) { return leaseKV(ctx, a.js, false) }, func(s *AutopilotState, _, value string) { s.Leader = value })
@@ -466,7 +471,7 @@ func (s *Store) updateAutopilot(ctx context.Context, apply func(*AutopilotState)
 	}
 	next := old
 	apply(&next)
-	if next.Interval == old.Interval && next.Leader == old.Leader && next.LastBeat == old.LastBeat && next.Error == old.Error {
+	if next.Interval == old.Interval && next.Leader == old.Leader && next.LastBeat == old.LastBeat && next.Error == old.Error && slices.Equal(next.Paused, old.Paused) {
 		return nil // lock renewals rewrite the same leader every tick
 	}
 	next.Log = nil

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -151,6 +152,19 @@ func TestAutopilotLeaderOnlyAndReplicated(t *testing.T) {
 				}
 			}
 			if n != 1 {
+				return false
+			}
+		}
+		return true
+	})
+
+	// A pause written on a follower mirrors into every node's autopilot state.
+	if _, err := setPaused(ctx, pilots[follower].settings, "ts-2", true); err != nil {
+		t.Fatal(err)
+	}
+	slow("pause mirrored to every node", func() bool {
+		for i := range stores {
+			if !slices.Equal(state(i).Paused, []string{"TS-2"}) {
 				return false
 			}
 		}

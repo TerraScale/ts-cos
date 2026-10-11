@@ -94,7 +94,7 @@ type WakeMemory struct {
 
 // Classify is pure: the event, the latest live snapshot, the fresh PR (if any)
 // and the owning thread's last wake decide everything.
-func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory) []Decision {
+func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[string]bool) []Decision {
 	host, thread := e.Host, e.Thread
 	var owner *FleetThread
 	if pr != nil {
@@ -122,12 +122,12 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory) []Decision {
 	switch e.Kind {
 	case KindRequestPending, KindNeedsUser:
 		return []Decision{d(ClassEscalate, "worker-question", "a worker needs a decision: "+e.Summary)}
-	case KindIssueCreated, KindIssueUpdated, KindIssueComment, KindPushMain, KindContextHigh, KindPROpened, KindPRClosed:
+	case KindPushMain, KindContextHigh, KindPROpened, KindPRClosed:
 		if e.Kind != KindPROpened {
 			return []Decision{d(ClassRecord, "state", e.Summary)}
 		}
 	}
-	if running, why := ticketRunning(live, ticket); !running {
+	if running, why := ticketRunning(paused, ticket); !running {
 		return []Decision{d(ClassRecord, "paused", why)}
 	}
 	out := []Decision{}
@@ -193,20 +193,15 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory) []Decision {
 	return append(out, d(ClassRecord, "progress", e.Summary))
 }
 
-// ticketRunning: FOCUS/PAUSED come from Ku. In Progress runs; Todo/Backlog is paused.
-func ticketRunning(live Live, ticket string) (bool, string) {
+// ticketRunning: every keyed thread runs unless its ticket is in the paused set.
+func ticketRunning(paused map[string]bool, ticket string) (bool, string) {
 	if ticket == "" {
 		return false, "no ticket key; not COS work"
 	}
-	for _, i := range live.Issues {
-		if strings.EqualFold(i.Identifier, ticket) {
-			if i.StatusType == "started" {
-				return true, ""
-			}
-			return false, ticket + " is paused (Ku " + i.Status + ")"
-		}
+	if paused[ticket] {
+		return false, ticket + " is paused (cos resume " + ticket + ")"
 	}
-	return false, ticket + " is not an open Ku issue assigned to mariogk"
+	return true, ""
 }
 
 func findThread(live Live, host, id string) *FleetThread {
@@ -331,6 +326,10 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 	if err != nil {
 		return err
 	}
+	paused, err := pausedSet(ctx, r.memory)
+	if err != nil {
+		return err // retried: a pause must never be missed
+	}
 	var pr *PRFacts
 	if e.PR > 0 && e.Repo != "" {
 		_, name, _ := strings.Cut(e.Repo, "/")
@@ -357,7 +356,7 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 			}
 		}
 	}
-	for _, d := range Classify(e, live, pr, memory) {
+	for _, d := range Classify(e, live, pr, memory, paused) {
 		entry := AutopilotEntry{Kind: d.Class, Event: e.ID, Ticket: d.Ticket, Target: decisionTarget(d), Action: d.Rule, Reason: d.Reason}
 		switch {
 		case d.Merge != nil:
