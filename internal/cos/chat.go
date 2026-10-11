@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/yuin/goldmark"
@@ -23,11 +24,19 @@ import (
 )
 
 const (
-	chatBucket    = "COS_CHAT"
-	contextBucket = "COS_CONTEXT"
-	chatShown     = 200
-	chatMaxText   = 20000
+	chatBucket      = "COS_CHAT"
+	contextBucket   = "COS_CONTEXT"
+	chatShown       = 200
+	chatMaxText     = 20000
+	chatMainTab     = "cos"
+	chatMaxTabs     = 12
+	chatTabPrefix   = "tab."
+	chatTabNameMax  = 40
+	chatTabFocusMax = 2000
 )
+
+// mainTab is the default chat tab, the one the main COS agent drives.
+var mainTab = ChatTab{ID: chatMainTab, Name: "COS"}
 
 // ChatEntry is one chat bubble. COS replies are rewritten in place while they stream.
 type ChatEntry struct {
@@ -38,7 +47,19 @@ type ChatEntry struct {
 	Tools     []string  `json:"tools,omitempty"`
 	Streaming bool      `json:"streaming,omitempty"`
 	Ask       *ChatAsk  `json:"ask,omitempty"`
-	rev       uint64
+	// Tab is the chat tab the entry belongs to; entries written before tabs existed are the main tab.
+	Tab string `json:"tab,omitempty"`
+	rev uint64
+}
+
+// ChatTab is one chat tab; the leader runs a COS thread per open tab.
+type ChatTab struct {
+	ID      string    `json:"id"`
+	Name    string    `json:"name"`
+	Focus   string    `json:"focus,omitempty"`
+	Created time.Time `json:"created"`
+	Closed  bool      `json:"closed,omitempty"`
+	rev     uint64
 }
 
 // ChatAsk is a pending T3 question from the COS thread; any node can answer it over NATS.
@@ -103,6 +124,7 @@ type Chat struct {
 	bus     *Bus
 	mu      sync.Mutex
 	entries map[string]ChatEntry
+	tabs    map[string]ChatTab
 	ready   bool
 	subs    map[*chatSub]struct{}
 	// recheck is how often follow verifies the bucket's identity; tests shorten it.
@@ -116,7 +138,7 @@ type chatSub struct {
 }
 
 func NewChat() *Chat {
-	return &Chat{entries: map[string]ChatEntry{}, subs: map[*chatSub]struct{}{}, recheck: 5 * time.Second}
+	return &Chat{entries: map[string]ChatEntry{}, tabs: map[string]ChatTab{}, subs: map[*chatSub]struct{}{}, recheck: 5 * time.Second}
 }
 
 // Run creates the chat and context buckets (retrying until JetStream has quorum) and follows every change until ctx ends.
@@ -151,6 +173,7 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 				c.mu.Lock()
 				c.kv, c.savings, c.ready = nil, nil, false
 				clear(c.entries)
+				clear(c.tabs)
 				c.notify("")
 				c.mu.Unlock()
 				err = errors.New("chat watcher stopped")
@@ -220,15 +243,32 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 		c.notify("")
 		return
 	}
-	if u.Operation() != jetstream.KeyValuePut {
+	switch {
+	case strings.HasPrefix(u.Key(), chatTabPrefix):
+		id := strings.TrimPrefix(u.Key(), chatTabPrefix)
+		if u.Operation() != jetstream.KeyValuePut {
+			delete(c.tabs, id)
+			break
+		}
+		var t ChatTab
+		if err := json.Unmarshal(u.Value(), &t); err != nil {
+			slog.Error("invalid chat tab", "key", u.Key())
+			return
+		}
+		t.ID, t.rev = id, u.Revision()
+		c.tabs[id] = t
+	case u.Operation() != jetstream.KeyValuePut:
 		delete(c.entries, u.Key())
-	} else {
+	default:
 		var e ChatEntry
 		if err := json.Unmarshal(u.Value(), &e); err != nil {
 			slog.Error("invalid chat entry", "key", u.Key())
 			return
 		}
 		e.ID, e.rev = u.Key(), u.Revision()
+		if e.Tab == "" {
+			e.Tab = chatMainTab
+		}
 		c.entries[e.ID] = e
 	}
 	if c.ready {
@@ -273,19 +313,143 @@ func sortedKeysBool(m map[string]bool) []string {
 	return keys
 }
 
-// Entries returns the newest chatShown entries, oldest first.
-func (c *Chat) Entries() []ChatEntry {
+// Entries returns the newest chatShown entries of tab, oldest first.
+func (c *Chat) Entries(tab string) []ChatEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]ChatEntry, 0, len(c.entries))
 	for _, e := range c.entries {
-		out = append(out, e)
+		if e.Tab == tab {
+			out = append(out, e)
+		}
 	}
 	slices.SortFunc(out, func(a, b ChatEntry) int { return strings.Compare(a.ID, b.ID) })
 	if len(out) > chatShown {
 		out = out[len(out)-chatShown:]
 	}
 	return out
+}
+
+// Tabs returns every stored tab, closed ones included, sorted by ID.
+func (c *Chat) Tabs() []ChatTab {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]ChatTab, 0, len(c.tabs))
+	for _, t := range c.tabs {
+		out = append(out, t)
+	}
+	slices.SortFunc(out, func(a, b ChatTab) int { return strings.Compare(a.ID, b.ID) })
+	return out
+}
+
+func (c *Chat) Tab(id string) (ChatTab, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t, ok := c.tabs[id]
+	return t, ok
+}
+
+// CreateTab adds a tab; at most chatMaxTabs open tabs exist at once.
+func (c *Chat) CreateTab(ctx context.Context, name, focus string) (ChatTab, error) {
+	t := ChatTab{Name: strings.TrimSpace(name), Focus: strings.TrimSpace(focus)}
+	if err := validTab(t); err != nil {
+		return t, err
+	}
+	c.mu.Lock()
+	kv, ready := c.kv, c.ready
+	open := 0
+	for _, o := range c.tabs {
+		if !o.Closed {
+			open++
+		}
+	}
+	c.mu.Unlock()
+	if kv == nil || !ready {
+		return t, errors.New("chat store is starting; try again in a few seconds")
+	}
+	// shortcut: two concurrent creates can exceed chatMaxTabs by one; the cap is a soft guard, upgrade to a CAS count if it matters.
+	if open >= chatMaxTabs {
+		return t, fmt.Errorf("at most %d chat tabs; close one first", chatMaxTabs)
+	}
+	t.Created = time.Now().UTC()
+	t.ID = chatID(t.Created)
+	data, err := json.Marshal(t)
+	if err != nil {
+		return t, err
+	}
+	if t.rev, err = kv.Create(ctx, chatTabPrefix+t.ID, data); err != nil {
+		return t, err
+	}
+	return t, nil
+}
+
+// UpdateTab writes t only if it has not changed since it was read, so a rename never resurrects a closed tab.
+func (c *Chat) UpdateTab(ctx context.Context, t ChatTab) error {
+	if t.ID == "" || t.ID == chatMainTab {
+		return fmt.Errorf("tab %q cannot be updated", t.ID)
+	}
+	// rev 0 would make kv.Update create the key, so a tab that was never read (or was deleted) must not be written.
+	if t.rev == 0 {
+		return errors.New("tab was never read or was deleted; reload it before updating")
+	}
+	if err := validTab(t); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	kv := c.kv
+	c.mu.Unlock()
+	if kv == nil {
+		return errors.New("chat store is starting; try again in a few seconds")
+	}
+	data, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	rev, err := kv.Update(ctx, chatTabPrefix+t.ID, data, t.rev)
+	if err != nil {
+		return err
+	}
+	t.rev = rev
+	c.mu.Lock()
+	c.tabs[t.ID] = t
+	c.mu.Unlock()
+	return nil
+}
+
+// DeleteTab removes the tab's cached entries, then its key.
+func (c *Chat) DeleteTab(ctx context.Context, id string) error {
+	if id == "" || id == chatMainTab {
+		return fmt.Errorf("tab %q cannot be deleted", id)
+	}
+	c.mu.Lock()
+	kv := c.kv
+	ids := []string{}
+	for _, e := range c.entries {
+		if e.Tab == id {
+			ids = append(ids, e.ID)
+		}
+	}
+	c.mu.Unlock()
+	if kv == nil {
+		return errors.New("chat store is starting; try again in a few seconds")
+	}
+	for _, e := range ids {
+		if err := kv.Delete(ctx, e); err != nil {
+			return err
+		}
+	}
+	return kv.Delete(ctx, chatTabPrefix+id)
+}
+
+// validTab checks a tab's name and focus; the name is one line, the focus may span lines.
+func validTab(t ChatTab) error {
+	if n := utf8.RuneCountInString(t.Name); n == 0 || n > chatTabNameMax || strings.IndexFunc(t.Name, notGraphic) >= 0 {
+		return fmt.Errorf("tab name must be one line of 1 to %d characters", chatTabNameMax)
+	}
+	if utf8.RuneCountInString(t.Focus) > chatTabFocusMax {
+		return fmt.Errorf("tab focus must be at most %d characters", chatTabFocusMax)
+	}
+	return nil
 }
 
 func (c *Chat) Entry(id string) (ChatEntry, bool) {

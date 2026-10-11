@@ -26,6 +26,7 @@ const (
 	agentMemoryTokens = 4000
 	agentRecentBytes  = 6 << 10
 	agentWorkspace    = ".local/share/cos/agent"
+	agentTabWorkspace = ".local/share/cos/tabs"
 )
 
 // AgentState is the replicated record of the one COS thread, so a new leader can take over.
@@ -77,8 +78,10 @@ type agentT3 interface {
 }
 
 // Agent drives the COS thread on the cluster leader. Every other node only reads its chat output.
+// One Agent runs per chat tab; Tab says which conversation it drives.
 type Agent struct {
 	Host, Home, Exe string
+	Tab             ChatTab
 	Chat            *Chat
 	Store           *Store
 	KV, Context     jetstream.KeyValue
@@ -113,7 +116,7 @@ func init() {
 
 func NewAgent(cfg Config, chat *Chat, store *Store, bus *Bus) *Agent {
 	exe, _ := os.Executable()
-	return &Agent{Host: cfg.LocalHost, Home: cfg.Home, Exe: exe, Chat: chat, Store: store,
+	return &Agent{Host: cfg.LocalHost, Home: cfg.Home, Exe: exe, Chat: chat, Store: store, Tab: mainTab,
 		T3:     func(ctx context.Context) (agentT3, error) { return OpenT3(ctx, cfg, cfg.LocalHost) },
 		Remote: bus.Call}
 }
@@ -133,6 +136,29 @@ func openAgentKV(ctx context.Context, bus *Bus) (jetstream.KeyValue, error) {
 		return nil, err
 	}
 	return openKV(ctx, bus, agentBucket) // re-bind: the first handle still uses direct gets
+}
+
+// forTab makes the agent for another chat tab, sharing this agent's dependencies.
+func (a *Agent) forTab(t ChatTab) *Agent {
+	return &Agent{Host: a.Host, Home: a.Home, Exe: a.Exe, Tab: t, Chat: a.Chat, Store: a.Store, KV: a.KV, Context: a.Context,
+		Memory: a.Memory, Savings: a.Savings, T3: a.T3, Remote: a.Remote, js: a.js}
+}
+
+// key names this agent's KV key; the main tab keeps the bare name.
+func (a *Agent) key(name string) string {
+	if a.Tab.ID == chatMainTab {
+		return name
+	}
+	return name + "." + a.Tab.ID
+}
+
+// entries returns this agent's tab of the chat, oldest first.
+func (a *Agent) entries() []ChatEntry { return a.Chat.Entries(a.Tab.ID) }
+
+// put writes e to the chat under this agent's tab.
+func (a *Agent) put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
+	e.Tab = a.Tab.ID
+	return a.Chat.Put(ctx, e)
 }
 
 // Run drives COS while this node holds the cluster lease (Bus.Lead) and idles otherwise.
@@ -162,11 +188,13 @@ func (a *Agent) Run(ctx context.Context, bus *Bus) {
 		}
 	}
 	bus.Lead(ctx, func(ctx context.Context) {
+		tabs := map[string]*Agent{}
 		for {
 			if a.Chat.Ready() {
 				if err := a.Step(ctx); err != nil && ctx.Err() == nil {
 					logErr(ctx, slog.LevelWarn, "COS agent step", err)
 				}
+				a.stepTabs(ctx, tabs)
 			}
 			select {
 			case <-ctx.Done():
@@ -177,9 +205,84 @@ func (a *Agent) Run(ctx context.Context, bus *Bus) {
 	})
 }
 
+// stepTabs drives one COS thread per open chat tab and settles the thread of each closed tab.
+func (a *Agent) stepTabs(ctx context.Context, agents map[string]*Agent) {
+	live := map[string]bool{}
+	for _, t := range a.Chat.Tabs() {
+		live[t.ID] = true
+		ta, ok := agents[t.ID]
+		if !ok {
+			ta = a.forTab(t)
+			agents[t.ID] = ta
+		}
+		ta.Tab = t
+		if t.Closed {
+			if err := ta.close(ctx); err != nil && ctx.Err() == nil {
+				logErr(ctx, slog.LevelWarn, "COS tab close", err)
+			} else if err == nil {
+				delete(agents, t.ID)
+			}
+			continue
+		}
+		if err := ta.Step(ctx); err != nil && ctx.Err() == nil {
+			logErr(ctx, slog.LevelWarn, "COS tab step", err)
+		}
+	}
+	for id := range agents {
+		if !live[id] {
+			delete(agents, id)
+		}
+	}
+}
+
+// close settles a closed tab's COS thread, then removes its state, entries and tab. A thread still
+// running is retried on the next loop.
+func (a *Agent) close(ctx context.Context) error {
+	st, _, err := a.load(ctx)
+	if err != nil {
+		return err
+	}
+	if st.ThreadID != "" {
+		if st.Host == a.Host {
+			c, err := a.T3(ctx)
+			if err != nil {
+				return fmt.Errorf("open T3: %w", err)
+			}
+			res, err := c.CloseTree(ctx, st.ThreadID, false)
+			if err != nil {
+				return fmt.Errorf("settle COS thread %s: %w", st.ThreadID, err)
+			}
+			if len(res.Skipped) > 0 {
+				return fmt.Errorf("settle COS thread %s: still running", st.ThreadID)
+			}
+		} else {
+			var out TreeResult
+			if err := a.Remote(ctx, st.Host, "close", []string{st.ThreadID}, &out); err != nil {
+				return fmt.Errorf("settle COS thread %s on %s: %w", st.ThreadID, st.Host, err)
+			}
+			if len(out.Skipped) > 0 {
+				return fmt.Errorf("settle COS thread %s on %s: still running", st.ThreadID, st.Host)
+			}
+		}
+	}
+	for _, o := range st.Orphans {
+		var out TreeResult
+		if err := a.Remote(ctx, o.Host, "delete", []string{o.ThreadID}, &out); err != nil {
+			return fmt.Errorf("delete COS orphan %s on %s: %w", o.ThreadID, o.Host, err)
+		}
+		if len(out.Skipped) > 0 {
+			return fmt.Errorf("delete COS orphan %s on %s: still running", o.ThreadID, o.Host)
+		}
+	}
+	if err := a.KV.Delete(ctx, a.key("state")); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return err
+	}
+	return a.Chat.DeleteTab(ctx, a.Tab.ID)
+}
+
 func (a *Agent) load(ctx context.Context) (AgentState, uint64, error) {
 	var st AgentState
-	e, err := a.KV.Get(ctx, "state")
+	e, err := a.KV.Get(ctx, a.key("state"))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return st, 0, nil
 	}
@@ -196,9 +299,9 @@ func (a *Agent) save(ctx context.Context, st AgentState, rev uint64) error {
 		return err
 	}
 	if rev == 0 {
-		_, err = a.KV.Create(ctx, "state", data)
+		_, err = a.KV.Create(ctx, a.key("state"), data)
 	} else {
-		_, err = a.KV.Update(ctx, "state", data, rev)
+		_, err = a.KV.Update(ctx, a.key("state"), data, rev)
 	}
 	return err
 }
@@ -216,7 +319,7 @@ func (a *Agent) Step(ctx context.Context) error {
 			if e, ok := a.Chat.Entry(st.Reply); ok && e.Streaming {
 				e.Streaming = false
 				e.Text += "\n\n_Interrupted: the COS host failed over._"
-				if _, err := a.Chat.Put(ctx, e); err != nil {
+				if _, err := a.put(ctx, e); err != nil {
 					return err
 				}
 			}
@@ -246,46 +349,49 @@ func (a *Agent) Step(ctx context.Context) error {
 		}
 		st.Behavior = b.Hash
 	}
-	if e, err := a.KV.Get(ctx, "restart"); err == nil {
+	if e, err := a.KV.Get(ctx, a.key("restart")); err == nil {
 		st.addReason("COS asked: " + string(e.Value()))
 		// Fenced: a newer request written meanwhile survives for the next step.
-		if err := a.KV.Delete(ctx, "restart", jetstream.LastRevision(e.Revision())); err != nil {
+		if err := a.KV.Delete(ctx, a.key("restart"), jetstream.LastRevision(e.Revision())); err != nil {
 			return err
 		}
 	}
 	wake := []string{}
 	reasons := []string{}
-	if failover && unanswered(a.Chat.Entries()) {
+	if failover && unanswered(a.entries()) {
 		wake = append(wake, "The previous COS host failed over. The last user message in Recent chat has no reply yet: answer it.")
 		reasons = append(reasons, "failover")
 	}
-	focusText := ""
-	if e, err := a.Context.Get(ctx, "focus"); err == nil {
-		focusText = string(e.Value())
-	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
-		return err
-	}
-	if focus := focusOf(focusText, v); focus != st.Focus {
-		if st.ThreadID != "" {
-			st.addReason("focus changed")
-			wake = append(wake, "Focus changed: "+focusText+". Re-plan around it.")
-			reasons = append(reasons, "focus")
+	// Focus and finished PRs describe the whole COS, so only the main tab watches them.
+	if a.Tab.ID == chatMainTab {
+		focusText := ""
+		if e, err := a.Context.Get(ctx, "focus"); err == nil {
+			focusText = string(e.Value())
+		} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+			return err
 		}
-		st.Focus = focus
-	}
-	// A unit of work finishes when one of the user's PRs leaves the open set (merged or closed).
-	if v.Live.Errors["prs"] == "" && v.Live.At != "" {
-		open := openPRs(v)
-		if done := missingFrom(st.OpenPRs, open); st.OpenPRs != nil && len(done) > 0 {
-			st.addReason("finished " + strings.Join(done, ", "))
+		if focus := focusOf(focusText, v); focus != st.Focus {
+			if st.ThreadID != "" {
+				st.addReason("focus changed")
+				wake = append(wake, "Focus changed: "+focusText+". Re-plan around it.")
+				reasons = append(reasons, "focus")
+			}
+			st.Focus = focus
 		}
-		st.OpenPRs = open
+		// A unit of work finishes when one of the user's PRs leaves the open set (merged or closed).
+		if v.Live.Errors["prs"] == "" && v.Live.At != "" {
+			open := openPRs(v)
+			if done := missingFrom(st.OpenPRs, open); st.OpenPRs != nil && len(done) > 0 {
+				st.addReason("finished " + strings.Join(done, ", "))
+			}
+			st.OpenPRs = open
+		}
 	}
 	if !st.LastWake.IsZero() && now.Sub(st.LastWake) > agentIdleRestart && st.Restart == "" {
 		st.addReason("idle for 4 hours")
 	}
 	messages := []ChatEntry{}
-	for _, e := range a.Chat.Entries() {
+	for _, e := range a.entries() {
 		if e.Role == "user" && e.ID > st.Delivered {
 			messages = append(messages, e)
 		}
@@ -393,12 +499,17 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 	if reason == "" {
 		reason = "first start"
 	}
+	title := "COS"
+	if a.Tab.ID != chatMainTab {
+		title = "COS · " + a.Tab.Name
+		wake = tabPreamble(a.Tab) + "\n\n" + wake
+	}
 	brief, r, err := a.brief(ctx, v, reason, wake)
 	if err != nil {
 		return err
 	}
 	pol := CurrentBehavior().Models
-	out, err := c.Launch(ctx, map[string]any{"projectId": project, "title": "COS", "modelSelection": pol.Advisor(pol.Leader, false), "message": brief})
+	out, err := c.Launch(ctx, map[string]any{"projectId": project, "title": title, "modelSelection": pol.Advisor(pol.Leader, false), "message": brief})
 	var missing *T3Error
 	if errors.As(err, &missing) && missing.NotFound() {
 		a.project = "" // the project was deleted (T3 reset): find or recreate it next time
@@ -433,15 +544,28 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 		}
 	}
 	// The launch already happened: a failed notice must not make the next step launch again.
-	if _, err := a.Chat.Put(ctx, ChatEntry{Role: "system", Text: "COS started a fresh thread on " + a.Host + ": " + reason + "."}); err != nil {
+	if _, err := a.put(ctx, ChatEntry{Role: "system", Text: "COS started a fresh thread on " + a.Host + ": " + reason + "."}); err != nil {
 		slog.Warn("post COS restart notice", "error", err)
 	}
 	return nil
 }
 
+// tabPreamble opens a chat tab's brief: which conversation this COS serves and what it covers.
+func tabPreamble(t ChatTab) string {
+	focus := t.Focus
+	if focus == "" {
+		focus = "whatever the user asks in this tab"
+	}
+	return "You are the COS of the chat tab \"" + t.Name + "\". Focus: " + focus + ". Work only on this tab's requests; the main COS tab handles everything else."
+}
+
 // ensureProject keeps the COS workspace: rules as CLAUDE.md and a ./cos wrapper bound to this node.
 func (a *Agent) ensureProject(ctx context.Context, c agentT3) (string, error) {
-	dir := filepath.Join(a.Home, agentWorkspace)
+	workspace, title := agentWorkspace, "cos-agent"
+	if a.Tab.ID != chatMainTab {
+		workspace, title = filepath.Join(agentTabWorkspace, a.Tab.ID), "cos-tab-"+a.Tab.ID
+	}
+	dir := filepath.Join(a.Home, workspace)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
@@ -467,7 +591,7 @@ func (a *Agent) ensureProject(ctx context.Context, c agentT3) (string, error) {
 	}
 	id := uuid()
 	var out any
-	if err := c.HTTP(ctx, "POST", "/api/projects/mutate", map[string]any{"type": "project.create", "commandId": uuid(), "projectId": id, "title": "cos-agent", "workspaceRoot": dir, "createWorkspaceRootIfMissing": true}, &out); err != nil {
+	if err := c.HTTP(ctx, "POST", "/api/projects/mutate", map[string]any{"type": "project.create", "commandId": uuid(), "projectId": id, "title": title, "workspaceRoot": dir, "createWorkspaceRootIfMissing": true}, &out); err != nil {
 		return "", err
 	}
 	a.project = id
@@ -497,7 +621,7 @@ func (a *Agent) brief(ctx context.Context, v Dashboard, reason, wake string) (st
 	data := AgentBriefData{At: time.Now().UTC(), Reason: reason, Now: wake, Live: Brief(v), Memory: r.Text(),
 		MemoryTokens: r.Tokens, MemoryFull: r.FullTokens, MemoryOmitted: r.Omitted, Recent: []string{}}
 	size := 0
-	for _, e := range slices.Backward(a.Chat.Entries()) {
+	for _, e := range slices.Backward(a.entries()) {
 		if e.Role != "user" && e.Role != "cos" {
 			continue
 		}

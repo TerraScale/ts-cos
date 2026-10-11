@@ -183,11 +183,11 @@ func (e *agentTestEnv) reset(t *testing.T) {
 	e.t = t
 	// A delete can be lost to a JetStream leader change, so re-issue it until the cache empties.
 	deadline := time.Now().Add(2 * time.Minute)
-	for len(e.chat.Entries()) > 0 {
+	for len(e.chat.Entries(chatMainTab)) > 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("timeout waiting for chat cleared")
 		}
-		for _, old := range e.chat.Entries() {
+		for _, old := range e.chat.Entries(chatMainTab) {
 			if err := e.chatKV.Delete(e.ctx, old.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -208,7 +208,7 @@ func (e *agentTestEnv) reset(t *testing.T) {
 	e.fake = &agentTestT3{projection: `{}`}
 	e.remote = nil
 	e.skipTree = false
-	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV, js: e.js,
+	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Tab: mainTab, Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV, js: e.js,
 		T3: func(context.Context) (agentT3, error) { return e.fake, nil },
 		Remote: func(_ context.Context, host, command string, args []string, out any) error {
 			e.remote = append(e.remote, agentTestRemote{host, command, args})
@@ -239,8 +239,14 @@ func (e *agentTestEnv) say(text string) string {
 // step retries only a lost KV revision race, as production does every second; other errors fail at once.
 func (e *agentTestEnv) step() {
 	e.t.Helper()
+	e.stepAgent(e.a)
+}
+
+// stepAgent steps one agent, the main COS or a chat tab's.
+func (e *agentTestEnv) stepAgent(a *Agent) {
+	e.t.Helper()
 	for attempt := 1; ; attempt++ {
-		err := e.a.Step(e.ctx)
+		err := a.Step(e.ctx)
 		var apiErr *jetstream.APIError
 		if err == nil {
 			return
@@ -314,7 +320,7 @@ func (e *agentTestEnv) setState(st AgentState) {
 // cosEntries returns the COS bubbles, oldest first.
 func (e *agentTestEnv) cosEntries() []ChatEntry {
 	out := []ChatEntry{}
-	for _, entry := range e.chat.Entries() {
+	for _, entry := range e.chat.Entries(chatMainTab) {
 		if entry.Role == "cos" {
 			out = append(out, entry)
 		}
@@ -327,7 +333,7 @@ func (e *agentTestEnv) waitAsk() ChatEntry {
 	e.t.Helper()
 	var ask ChatEntry
 	chatTestWait(e.t, "ask in chat", func() bool {
-		for _, entry := range e.chat.Entries() {
+		for _, entry := range e.chat.Entries(chatMainTab) {
 			if entry.Ask != nil {
 				ask, _ = e.chat.Entry(entry.ID)
 				return true
@@ -400,7 +406,7 @@ func TestAgent(t *testing.T) {
 			t.Fatalf("state = %+v", st)
 		}
 		chatTestWait(t, "fresh thread notice", func() bool {
-			for _, entry := range e.chat.Entries() {
+			for _, entry := range e.chat.Entries(chatMainTab) {
 				if entry.Role == "system" && strings.Contains(entry.Text, "fresh thread") {
 					return true
 				}
@@ -465,7 +471,7 @@ func TestAgent(t *testing.T) {
 		var askID string
 		var ask *ChatAsk
 		chatTestWait(t, "pending question", func() bool {
-			for _, entry := range e.chat.Entries() {
+			for _, entry := range e.chat.Entries(chatMainTab) {
 				if entry.Ask != nil {
 					askID, ask = entry.ID, entry.Ask
 					return true
@@ -497,7 +503,7 @@ func TestAgent(t *testing.T) {
 		e.step()
 		asks := func() int {
 			n := 0
-			for _, entry := range e.chat.Entries() {
+			for _, entry := range e.chat.Entries(chatMainTab) {
 				if entry.Ask != nil {
 					n++
 				}

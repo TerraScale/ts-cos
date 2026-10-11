@@ -179,7 +179,7 @@ func (p *Push) chatReplies(ctx context.Context) {
 	sub, unsubscribe := p.chat.Subscribe()
 	defer unsubscribe()
 	seen := map[string]bool{}
-	for _, e := range p.chat.Entries() {
+	for _, e := range p.chat.Entries(chatMainTab) {
 		if !e.Streaming {
 			seen[e.ID] = true
 		}
@@ -192,7 +192,7 @@ func (p *Push) chatReplies(ctx context.Context) {
 		}
 		for _, key := range p.chat.Changed(sub) {
 			e, ok := p.chat.Entry(key)
-			if !ok || e.Role != "cos" || e.Streaming || seen[key] || time.Since(e.At) > pushReplyWindow {
+			if !ok || e.Tab != chatMainTab || e.Role != "cos" || e.Streaming || seen[key] || time.Since(e.At) > pushReplyWindow {
 				continue
 			}
 			seen[key] = true
