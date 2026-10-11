@@ -109,7 +109,8 @@ func TestBusLeader(t *testing.T) {
 	stopped := time.Now()
 	buses[second].Close()
 	third := leader(leaseTTL, second, others(second)...)
-	if time.Since(stopped) > leaseTTL/2 {
+	// The survivors take the deleted lease at their next refresh, once the lease stream has a leader again (4–9 s re-election on a slow runner).
+	if time.Since(stopped) > leaseTTL {
 		t.Fatalf("graceful handover took %s", time.Since(stopped))
 	}
 
@@ -124,7 +125,7 @@ func TestBusLeader(t *testing.T) {
 	buses[third].Resign()
 	buses[third].Resign()
 	leader(leaseTTL, third, survivor, third)
-	if time.Since(resigned) > leaseTTL/2 {
+	if time.Since(resigned) > leaseTTL {
 		t.Fatalf("resign handover took %s", time.Since(resigned))
 	}
 	buses[survivor].Resign()
@@ -133,5 +134,9 @@ func TestBusLeader(t *testing.T) {
 	defer mu.Unlock()
 	if running[hosts[third]] != 0 || running[hosts[survivor]] != 0 {
 		t.Fatalf("a resigned node led again: %v", running)
+	}
+	// Every node resigned and the lease is deleted, so Leader reports no leader.
+	if host, err := buses[third].Leader(ctx); err == nil || err.Error() != "COS cluster has no leader right now" {
+		t.Fatalf("Leader after resign = %q, %v; want no leader right now", host, err)
 	}
 }

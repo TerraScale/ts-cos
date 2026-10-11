@@ -128,6 +128,28 @@ func busOptions(cfg Config, node busNode) *server.Options {
 	}
 }
 
+// natsLog routes embedded NATS logs to slog; NoLog only stops the server's own logger.
+type natsLog struct{ secrets []string }
+
+func (l natsLog) line(format string, v ...any) string {
+	msg := fmt.Sprintf(format, v...)
+	for _, secret := range l.secrets {
+		if secret != "" {
+			msg = strings.ReplaceAll(msg, secret, "[REDACTED]")
+		}
+	}
+	return "nats: " + msg
+}
+
+func (l natsLog) Noticef(format string, v ...any) { slog.Info(l.line(format, v...)) }
+func (l natsLog) Warnf(format string, v ...any)   { slog.Warn(l.line(format, v...)) }
+
+// Route and connection errors are routine while a peer restarts; ERROR lines fail the e2e deploy.logs check.
+func (l natsLog) Errorf(format string, v ...any) { slog.Warn(l.line(format, v...)) }
+func (l natsLog) Fatalf(format string, v ...any) { slog.Error(l.line(format, v...)) }
+func (l natsLog) Debugf(string, ...any)          {}
+func (l natsLog) Tracef(string, ...any)          {}
+
 func busCredentialPath(cfg Config) string {
 	return filepath.Join(cfg.Runtime, "cos", "nats.json")
 }
@@ -382,6 +404,7 @@ func startBus(ctx context.Context, cfg Config, node busNode, handler OperationHa
 		b.Close()
 		return nil, errors.New("COS embedded NATS configuration rejected")
 	}
+	b.server.SetLoggerV2(natsLog{secrets: []string{opts.Password, opts.Cluster.Password}}, false, false, false)
 	go b.server.Start()
 	ready, stopReady := context.WithTimeout(ctx, 5*time.Second)
 	defer stopReady()

@@ -1,11 +1,13 @@
 package cos
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"slices"
@@ -673,6 +675,37 @@ func TestBusAdmission(t *testing.T) {
 			t.Fatalf("public credential accepted or leaked: %v", err)
 		}
 	})
+}
+
+func TestNATSLogRedactsAndMapsLevels(t *testing.T) {
+	var out bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&out, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	log := natsLog{secrets: []string{"s3cret-route"}}
+	log.Debugf("debug %s", "s3cret-route")
+	log.Tracef("trace %s", "s3cret-route")
+	if out.Len() != 0 {
+		t.Fatalf("debug and trace were logged: %s", out.String())
+	}
+	log.Noticef("notice %s", "s3cret-route")
+	log.Warnf("warn %s", "s3cret-route")
+	log.Errorf("error %s", "s3cret-route")
+	log.Fatalf("fatal %s", "s3cret-route")
+	got := out.String()
+	if strings.Contains(got, "s3cret-route") {
+		t.Fatalf("secret was logged: %s", got)
+	}
+	for _, want := range []string{
+		`level=INFO msg="nats: notice [REDACTED]"`,
+		`level=WARN msg="nats: warn [REDACTED]"`,
+		`level=WARN msg="nats: error [REDACTED]"`,
+		`level=ERROR msg="nats: fatal [REDACTED]"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s in %s", want, got)
+		}
+	}
 }
 
 func TestTailnetPeers(t *testing.T) {

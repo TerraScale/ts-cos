@@ -3,8 +3,10 @@ package cos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -123,19 +125,27 @@ func (b *Bus) Lead(ctx context.Context, work func(context.Context)) {
 	}
 }
 
-// Leader returns the host holding the cluster lease.
+// Leader returns the host holding the cluster lease. A direct get is answered by
+// any stream replica, so it works while the JetStream meta group has no leader.
 func (b *Bus) Leader(ctx context.Context) (string, error) {
-	js, err := jetstream.New(b.conn)
+	// Like the JetStream API default: a direct get routed to a vanished replica gets no reply.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	msg, err := b.conn.RequestMsgWithContext(ctx, nats.NewMsg("$JS.API.DIRECT.GET.KV_"+leaseBucket+".$KV."+leaseBucket+"."+leaseKey))
 	if err != nil {
-		return "", err
+		if errors.Is(err, nats.ErrNoResponders) {
+			return "", errors.New("COS cluster has not elected a leader yet")
+		}
+		return "", errors.New("COS cluster leader unavailable: " + err.Error())
 	}
-	kv, err := leaseKV(ctx, js, false)
-	if err != nil {
-		return "", errors.New("COS cluster has not elected a leader yet")
+	if status := msg.Header.Get("Status"); status == "404" {
+		return "", errors.New("COS cluster has no leader right now")
+	} else if status != "" {
+		return "", fmt.Errorf("COS cluster leader read failed: %s %s", status, msg.Header.Get("Description"))
 	}
-	entry, err := kv.Get(ctx, leaseKey)
-	if err != nil {
+	// Deletes and TTL expiries keep a tombstone with an empty body; a live lease always holds a host name.
+	if len(msg.Data) == 0 {
 		return "", errors.New("COS cluster has no leader right now")
 	}
-	return string(entry.Value()), nil
+	return string(msg.Data), nil
 }
