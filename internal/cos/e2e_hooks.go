@@ -63,6 +63,25 @@ func ingestAdded(before, after uint64) int64 {
 	return int64(after) - int64(before)
 }
 
+// errHookTraffic marks a sequence delta larger than the probe explains: a real delivery landed in the window.
+var errHookTraffic = errors.New("concurrent Forgejo delivery in the probe window")
+
+// withHookRetry reruns a probe with a fresh delivery while real Forgejo traffic overlaps it.
+func withHookRetry(probe func() (string, error)) (string, error) {
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var out string
+		out, err = probe()
+		if !errors.Is(err, errHookTraffic) {
+			if err == nil && attempt > 1 {
+				out += fmt.Sprintf(" (attempt %d; earlier probes overlapped real deliveries)", attempt)
+			}
+			return out, err
+		}
+	}
+	return "", err
+}
+
 func probeHex(n int) string {
 	raw := make([]byte, n)
 	rand.Read(raw)
@@ -186,6 +205,9 @@ func forgejoEventsMentioning(ctx context.Context, js jetstream.JetStream, from t
 	defer cancel()
 	var hits []string
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("COS_EVENTS scan incomplete: %w", err)
+		}
 		batch, err := cons.Fetch(100, jetstream.FetchMaxWait(time.Second))
 		if err != nil {
 			return nil, fmt.Errorf("COS_EVENTS scan incomplete: %w", err)
@@ -213,26 +235,30 @@ func checkForgejoValid(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
-	p := newForgejoProbe(time.Now())
-	before, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	status, err := postForgejoHook(ctx, t.urls[0], p, signHookBody(t.secret, p.body))
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusAccepted {
-		return "", fmt.Errorf("hooks.go answered %d for a valid delivery, want 202", status)
-	}
-	after, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	if added := ingestAdded(before, after); added != 1 {
-		return "", fmt.Errorf("COS_INGEST gained %d messages for one delivery, want 1", added)
-	}
-	return fmt.Sprintf("%s: 202, stored at COS_INGEST seq %d", p.delivery, after), nil
+	return withHookRetry(func() (string, error) {
+		p := newForgejoProbe(time.Now())
+		before, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		status, err := postForgejoHook(ctx, t.urls[0], p, signHookBody(t.secret, p.body))
+		if err != nil {
+			return "", err
+		}
+		if status != http.StatusAccepted {
+			return "", fmt.Errorf("hooks.go answered %d for a valid delivery, want 202", status)
+		}
+		after, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		if added := ingestAdded(before, after); added > 1 {
+			return "", fmt.Errorf("COS_INGEST gained %d messages for one delivery, want 1: %w", added, errHookTraffic)
+		} else if added < 1 {
+			return "", fmt.Errorf("COS_INGEST gained %d messages for one delivery, want 1", added)
+		}
+		return fmt.Sprintf("%s: 202, stored at COS_INGEST seq %d", p.delivery, after), nil
+	})
 }
 
 func checkForgejoBadSignature(ctx context.Context, e *E2EEnv) (string, error) {
@@ -241,27 +267,31 @@ func checkForgejoBadSignature(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
-	p := newForgejoProbe(time.Now())
-	before, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	// Signed with a different key, so the HMAC cannot match the one hooks.go holds.
-	status, err := postForgejoHook(ctx, t.urls[0], p, signHookBody("not-"+t.secret, p.body))
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusUnauthorized {
-		return "", fmt.Errorf("hooks.go answered %d for a bad signature, want 401", status)
-	}
-	after, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	if added := ingestAdded(before, after); added != 0 {
-		return "", fmt.Errorf("COS_INGEST gained %d messages for a rejected delivery, want 0", added)
-	}
-	return fmt.Sprintf("%s: 401, nothing stored", p.delivery), nil
+	return withHookRetry(func() (string, error) {
+		p := newForgejoProbe(time.Now())
+		before, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		// Signed with a different key, so the HMAC cannot match the one hooks.go holds.
+		status, err := postForgejoHook(ctx, t.urls[0], p, signHookBody("not-"+t.secret, p.body))
+		if err != nil {
+			return "", err
+		}
+		if status != http.StatusUnauthorized {
+			return "", fmt.Errorf("hooks.go answered %d for a bad signature, want 401", status)
+		}
+		after, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		if added := ingestAdded(before, after); added > 0 {
+			return "", fmt.Errorf("COS_INGEST gained %d messages for a rejected delivery, want 0: %w", added, errHookTraffic)
+		} else if added < 0 {
+			return "", fmt.Errorf("COS_INGEST gained %d messages for a rejected delivery, want 0", added)
+		}
+		return fmt.Sprintf("%s: 401, nothing stored", p.delivery), nil
+	})
 }
 
 func checkForgejoReplay(ctx context.Context, e *E2EEnv) (string, error) {
@@ -273,42 +303,48 @@ func checkForgejoReplay(ctx context.Context, e *E2EEnv) (string, error) {
 	if len(t.urls) < 2 {
 		return "", fmt.Errorf("replay needs two nodes, have %d", len(t.urls))
 	}
-	p := newForgejoProbe(time.Now())
-	sig := signHookBody(t.secret, p.body)
-	before, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	status, err := postForgejoHook(ctx, t.urls[0], p, sig)
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusAccepted {
-		return "", fmt.Errorf("hooks.go answered %d for the first delivery, want 202", status)
-	}
-	mid, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	if added := ingestAdded(before, mid); added != 1 {
-		return "", fmt.Errorf("first delivery stored %d times, want 1", added)
-	}
-	// Same delivery ID, body and signature, sent to another node.
-	status, err = postForgejoHook(ctx, t.urls[1], p, sig)
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusAccepted {
-		return "", fmt.Errorf("hooks.go answered %d for the replay, want 202", status)
-	}
-	after, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	if added := ingestAdded(mid, after); added != 0 {
-		return "", fmt.Errorf("replay stored %d more messages, want 0", added)
-	}
-	return fmt.Sprintf("%s: 202 on two nodes, stored once", p.delivery), nil
+	return withHookRetry(func() (string, error) {
+		p := newForgejoProbe(time.Now())
+		sig := signHookBody(t.secret, p.body)
+		before, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		status, err := postForgejoHook(ctx, t.urls[0], p, sig)
+		if err != nil {
+			return "", err
+		}
+		if status != http.StatusAccepted {
+			return "", fmt.Errorf("hooks.go answered %d for the first delivery, want 202", status)
+		}
+		mid, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		if added := ingestAdded(before, mid); added > 1 {
+			return "", fmt.Errorf("first delivery stored %d times, want 1: %w", added, errHookTraffic)
+		} else if added < 1 {
+			return "", fmt.Errorf("first delivery stored %d times, want 1", added)
+		}
+		// Same delivery ID, body and signature, sent to another node.
+		status, err = postForgejoHook(ctx, t.urls[1], p, sig)
+		if err != nil {
+			return "", err
+		}
+		if status != http.StatusAccepted {
+			return "", fmt.Errorf("hooks.go answered %d for the replay, want 202", status)
+		}
+		after, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		if added := ingestAdded(mid, after); added > 0 {
+			return "", fmt.Errorf("replay stored %d more messages, want 0: %w", added, errHookTraffic)
+		} else if added < 0 {
+			return "", fmt.Errorf("replay stored %d more messages, want 0", added)
+		}
+		return fmt.Sprintf("%s: 202 on two nodes, stored once", p.delivery), nil
+	})
 }
 
 func checkForgejoForeignAuthor(ctx context.Context, e *E2EEnv) (string, error) {
@@ -317,36 +353,40 @@ func checkForgejoForeignAuthor(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
-	// One second of slack before the POST covers clock skew between this host and the stream.
-	from := time.Now().Add(-time.Second)
-	p := newForgejoProbe(time.Now())
-	before, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	status, err := postForgejoHook(ctx, t.urls[0], p, signHookBody(t.secret, p.body))
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusAccepted {
-		return "", fmt.Errorf("hooks.go answered %d for a valid delivery, want 202", status)
-	}
-	after, err := ingestSeq(ctx, t.js)
-	if err != nil {
-		return "", err
-	}
-	if added := ingestAdded(before, after); added != 1 {
-		return "", fmt.Errorf("COS_INGEST gained %d messages for one delivery, want 1", added)
-	}
-	if err := awaitIngestAck(ctx, t.js, after); err != nil {
-		return "", fmt.Errorf("probe was not consumed: %w", err)
-	}
-	hits, err := forgejoEventsMentioning(ctx, t.js, from, p.delivery, e2eProbeRepo)
-	if err != nil {
-		return "", err
-	}
-	if len(hits) > 0 {
-		return "", fmt.Errorf("COS_EVENTS has %d forgejo events for a foreign-author probe: %v", len(hits), hits)
-	}
-	return fmt.Sprintf("%s consumed at seq %d; no cos.events.forgejo.* event names it or %s", p.delivery, after, e2eProbeRepo), nil
+	return withHookRetry(func() (string, error) {
+		// One second of slack before the POST covers clock skew between this host and the stream.
+		from := time.Now().Add(-time.Second)
+		p := newForgejoProbe(time.Now())
+		before, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		status, err := postForgejoHook(ctx, t.urls[0], p, signHookBody(t.secret, p.body))
+		if err != nil {
+			return "", err
+		}
+		if status != http.StatusAccepted {
+			return "", fmt.Errorf("hooks.go answered %d for a valid delivery, want 202", status)
+		}
+		after, err := ingestSeq(ctx, t.js)
+		if err != nil {
+			return "", err
+		}
+		if added := ingestAdded(before, after); added > 1 {
+			return "", fmt.Errorf("COS_INGEST gained %d messages for one delivery, want 1: %w", added, errHookTraffic)
+		} else if added < 1 {
+			return "", fmt.Errorf("COS_INGEST gained %d messages for one delivery, want 1", added)
+		}
+		if err := awaitIngestAck(ctx, t.js, after); err != nil {
+			return "", fmt.Errorf("probe was not consumed: %w", err)
+		}
+		hits, err := forgejoEventsMentioning(ctx, t.js, from, p.delivery, e2eProbeRepo)
+		if err != nil {
+			return "", err
+		}
+		if len(hits) > 0 {
+			return "", fmt.Errorf("COS_EVENTS has %d forgejo events for a foreign-author probe: %v", len(hits), hits)
+		}
+		return fmt.Sprintf("%s consumed at seq %d; no cos.events.forgejo.* event names it or %s", p.delivery, after, e2eProbeRepo), nil
+	})
 }

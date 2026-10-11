@@ -2,6 +2,7 @@ package cos
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -40,6 +41,48 @@ func TestForgejoProbeFreshDelivery(t *testing.T) {
 	}
 	if a.delivery == b.delivery {
 		t.Fatal("two probes share a delivery ID")
+	}
+}
+
+func TestWithHookRetry(t *testing.T) {
+	plain := errors.New("status 401")
+	for _, tc := range []struct {
+		name    string
+		errs    []error
+		want    string
+		wantErr error
+		calls   int
+	}{
+		{"traffic twice then ok", []error{errHookTraffic, errHookTraffic, nil}, "ok (attempt 3", nil, 3},
+		{"traffic every time", []error{errHookTraffic, errHookTraffic, errHookTraffic}, "", errHookTraffic, 3},
+		{"plain error stops at once", []error{plain}, "", plain, 1},
+		{"ok first has no suffix", []error{nil}, "ok", nil, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			got, err := withHookRetry(func() (string, error) {
+				calls++
+				if calls > len(tc.errs) {
+					t.Fatalf("probe called %d times, want %d", calls, tc.calls)
+				}
+				if tc.errs[calls-1] != nil {
+					return "", tc.errs[calls-1]
+				}
+				return "ok", nil
+			})
+			if calls != tc.calls {
+				t.Errorf("probe called %d times, want %d", calls, tc.calls)
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantErr == nil && !strings.HasPrefix(got, tc.want) {
+				t.Errorf("output %q, want prefix %q", got, tc.want)
+			}
+			if tc.want == "ok" && got != "ok" {
+				t.Errorf("output %q gained an attempt suffix on the first try", got)
+			}
+		})
 	}
 }
 
