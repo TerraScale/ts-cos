@@ -56,10 +56,10 @@ func replayID(p PR) string {
 	return NewEventID(SourceForgejo, "reconcile", reconcileKeyOf(p), reconcileShort(reconcileFingerprint(p)))
 }
 
-// findReplay returns the feed entry logged for event id, the reconciler's event for one PR's current state.
-func findReplay(feed []AutopilotEntry, id string) (AutopilotEntry, bool) {
+// findReplay returns the feed entry logged for event id after sequence after, the reconciler's event for one PR's current state.
+func findReplay(feed []AutopilotEntry, id string, after uint64) (AutopilotEntry, bool) {
 	for _, e := range feed {
-		if e.Event == id {
+		if e.Event == id && e.Seq > after {
 			return e, true
 		}
 	}
@@ -226,25 +226,25 @@ func reconcilerDroppedEvent(ctx context.Context, e *E2EEnv, urls []string, u *e2
 			err = errors.Join(err, fmt.Errorf("restore reconciler state: %w", perr))
 		}
 	}()
+	js, err := bus.JetStream()
+	if err != nil {
+		return "", err
+	}
+	logStream, err := js.Stream(ctx, autopilotLogStream)
+	if err != nil {
+		return "", err
+	}
+	logInfo, err := logStream.Info(ctx)
+	if err != nil {
+		return "", err
+	}
+	// Only entries past this sequence are this run's replay; an earlier run or reconcile logged the same id.
+	after := logInfo.State.LastSeq
 	if _, err := settings.Put(ctx, reconcileKey, data); err != nil {
 		return "", err
 	}
-	// A beat already running may have passed the reconcile step before the drop, so wait for it and start another.
-	var holder string
-	var runErr error
-	busyUntil := time.Now().Add(45 * time.Second)
-	for {
-		call, cancel := context.WithTimeout(ctx, 5*time.Second)
-		holder, runErr = autopilotRunNow(call, bus.conn)
-		cancel()
-		if !errors.Is(runErr, errAutopilotBusy) || time.Now().After(busyUntil) || ctx.Err() != nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(2 * time.Second):
-		}
-	}
+	// A beat already running, or a leader handover, may have passed the reconcile step before the drop, so wait for it and start another.
+	holder, runErr := runNowUntil(ctx, func(c context.Context) (string, error) { return autopilotRunNow(c, bus.conn) }, 45*time.Second, 2*time.Second)
 	if errors.Is(runErr, errAutopilotBusy) {
 		return "", e2eSkip("a heartbeat stayed busy for 45 s; no replay this run")
 	}
@@ -257,7 +257,7 @@ func reconcilerDroppedEvent(ctx context.Context, e *E2EEnv, urls []string, u *e2
 		if err != nil {
 			return false
 		}
-		entry, ok := findReplay(state.Log, id)
+		entry, ok := findReplay(state.Log, id, after)
 		if ok {
 			logged[s.host] = entry
 		}
@@ -267,6 +267,23 @@ func reconcilerDroppedEvent(ctx context.Context, e *E2EEnv, urls []string, u *e2
 		return "", fmt.Errorf("replayed event for %s is not in the feed of %s within %s", ref, strings.Join(waiting, ", "), e2eReplayWindow)
 	}
 	return replayEvidence(logged[holder], holder, ref, id, e2eHosts)
+}
+
+// runNowUntil calls run until it succeeds or wait elapses, so a busy beat or a leader handover clears before the check fails.
+func runNowUntil(ctx context.Context, run func(context.Context) (string, error), wait, pause time.Duration) (string, error) {
+	until := time.Now().Add(wait)
+	for {
+		call, cancel := context.WithTimeout(ctx, 5*time.Second)
+		holder, err := run(call)
+		cancel()
+		if err == nil || time.Now().After(until) || ctx.Err() != nil {
+			return holder, err
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(pause):
+		}
+	}
 }
 
 // replayEvidence judges the leader's feed entry for a dropped fingerprint. A "Replay dropped" entry is the

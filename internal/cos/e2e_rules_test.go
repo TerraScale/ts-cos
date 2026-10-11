@@ -1,6 +1,8 @@
 package cos
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -73,15 +75,49 @@ func TestFindReplay(t *testing.T) {
 	id := replayID(pr)
 	other := replayID(PR{Repo: "ts-cos", Number: 12, Cos: true, SHA: "abc", CI: "success", Mergeable: true})
 	stale := replayID(PR{Repo: "ts-cos", Number: 1, Cos: true, SHA: "old", CI: "pending", Mergeable: true})
-	feed := []AutopilotEntry{{Event: other, Action: "progress"}, {Event: id, Action: "progress"}}
-	if e, ok := findReplay(feed, id); !ok || e.Event != id {
+	feed := []AutopilotEntry{{Event: other, Action: "progress", Seq: 1}, {Event: id, Action: "progress", Seq: 2}}
+	if e, ok := findReplay(feed, id, 0); !ok || e.Event != id {
 		t.Errorf("findReplay(%s) = %v, %t; want the matching entry", id, e, ok)
 	}
-	if _, ok := findReplay(feed[:1], id); ok {
+	if _, ok := findReplay(feed[:1], id, 0); ok {
 		t.Error("#1 matched the #12 entry")
 	}
-	if _, ok := findReplay([]AutopilotEntry{{Event: stale}}, id); ok {
+	if _, ok := findReplay([]AutopilotEntry{{Event: stale, Seq: 1}}, id, 0); ok {
 		t.Error("an older state of the same PR matched the current replay")
+	}
+}
+
+func TestFindReplayIgnoresEntriesBeforeTheDrop(t *testing.T) {
+	id := replayID(PR{Repo: "ts-cos", Number: 1, Cos: true, SHA: "abc", CI: "success", Mergeable: true})
+	feed := []AutopilotEntry{{Event: id, Action: "progress", Seq: 5}}
+	if _, ok := findReplay(feed, id, 5); ok {
+		t.Error("an entry at the drop's sequence matched; only later entries are this run's replay")
+	}
+	if e, ok := findReplay(feed, id, 4); !ok || e.Seq != 5 {
+		t.Errorf("findReplay after 4 = %v, %t; want the seq 5 entry", e, ok)
+	}
+}
+
+func TestRunNowUntilRetriesTransientErrors(t *testing.T) {
+	calls := 0
+	run := func(context.Context) (string, error) {
+		calls++
+		if calls < 3 {
+			return "", errors.New("no autopilot leader answered")
+		}
+		return "delta", nil
+	}
+	holder, err := runNowUntil(context.Background(), run, time.Second, time.Millisecond)
+	if holder != "delta" || err != nil || calls != 3 {
+		t.Errorf("runNowUntil = %q, %v after %d calls; want delta, nil after 3", holder, err, calls)
+	}
+}
+
+func TestRunNowUntilStopsAtTheDeadline(t *testing.T) {
+	run := func(context.Context) (string, error) { return "delta", errAutopilotBusy }
+	holder, err := runNowUntil(context.Background(), run, 20*time.Millisecond, time.Millisecond)
+	if !errors.Is(err, errAutopilotBusy) || holder != "delta" {
+		t.Errorf("runNowUntil = %q, %v; want delta and errAutopilotBusy at the deadline", holder, err)
 	}
 }
 
