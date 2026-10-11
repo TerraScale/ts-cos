@@ -146,6 +146,8 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos dispatch <host> '<command json>'` | Send another T3 orchestration command |
 | `cos ku <tool> ['<arguments json>']` | Call a Ku MCP tool |
 | `cos merge <repo> <number>` | Squash a ready COS PR at the checked head SHA |
+| `cos version` | Git revision the running binary was built from |
+| `cos e2e [--smoke] [prefix...]` | Live checks against the deployed cluster (see below) |
 
 Merge requires a mariogk-authored open PR, a `cos/` or `cos-hold/` branch,
 mergeability, successful checks, reviewer approval, and no requested changes.
@@ -153,6 +155,34 @@ Reviewer and deployment checks always apply. Bypass environment variables
 and marker-file instructions are retired; their existing product-code paths are
 inventoried for a separate removal change. Forgejo's server-side branch
 protections still apply.
+
+## Live e2e
+
+`cos e2e` checks the deployed cluster from any COS host and prints one JSON report:
+every check has `status` (`pass`, `fail`, or `skip` while its feature is not on main),
+`evidence` (redacted, clipped) and its owning `stream`. Any failure exits nonzero.
+It finishes within 5 minutes, cleans up after itself and never touches real work.
+
+- `deploy.*`: `cos.service` active, running `cos version` equals origin/main
+  (15-minute deploy window), at most 2 automatic restarts in 25 minutes, no error
+  or panic lines since the process started (at most 17 minutes, which leaves out
+  the previous run's own chaos).
+- `cluster.*`: all three hosts answer micro PING; every JetStream stream is R3 with
+  a leader and current replicas; every node's `cos cluster` names the same leader.
+  A non-leader is restarted and must catch up within 60 s. The leader (or another
+  non-runner host) is partitioned: iptables on every peer address except ssh, with
+  a root timer that heals it after 120 s even if the runner dies. The majority
+  must elect a new leader within 30 s, and after healing all nodes agree on one
+  leader. Finally, the leader is SIGKILLed and the survivors must agree on a new
+  one within 30 s.
+- `rules.heartbeat-leader`: the autopilot heartbeat runs on the cluster leader.
+- `--smoke` runs the fast health-gate subset (under 25 s). The rollout gate calls
+  `E2ESmoke(ctx, cfg, host, revision)`: smoke checks for that host plus cluster-wide
+  ones, with `deploy.version` expecting the rolled-out revision.
+- `access.*`, `deploy.*` and `gate.*` are protected: a self-change may never break
+  or remove them (`protected: true` in the report).
+- Per-request acceptance checks register with `RegisterE2E` from an
+  `e2e_accept_*.go` init function, IDs `accept.<slug>.<name>`.
 
 ## Behavior files
 
