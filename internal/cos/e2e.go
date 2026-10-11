@@ -334,6 +334,8 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "inbox.dedup", Stream: "TS-815", Run: inboxCheck(checkInboxDedup)},
 		// Last, so the 100 s wait only starts after the rest of the suite has run.
 		E2ECheck{ID: "nodes.collector-missing", Stream: "TS-825", Run: checkNodeCollectorMissing},
+		// Runs only when named, because it spends an Opus probe run.
+		E2ECheck{ID: "inbox.needs-user-forward", Stream: "TS-815", OnDemand: true, Run: inboxCheck(checkInboxNeedsUserForward)},
 	)
 	return append(append(checks, e2ePending...), e2eRegistered...)
 }

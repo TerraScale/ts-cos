@@ -857,10 +857,10 @@ func TestAdvisorProblems(t *testing.T) {
 	}
 }
 
-// TestInboxE2EChecksRegistered: the four Inbox checks run live once, never in smoke or chaos runs,
-// and are no longer pending. inbox.needs-user-forward stays pending.
+// TestInboxE2EChecksRegistered: the Inbox checks run live once, never in smoke or chaos runs, and are no
+// longer pending. inbox.needs-user-forward is on demand only, since it spends an Opus probe run.
 func TestInboxE2EChecksRegistered(t *testing.T) {
-	live := []string{"inbox.add-visible", "inbox.answer-closes", "inbox.concurrent-answer", "inbox.dedup"}
+	live := []string{"inbox.add-visible", "inbox.answer-closes", "inbox.concurrent-answer", "inbox.dedup", "inbox.needs-user-forward"}
 	count := map[string]int{}
 	for _, c := range e2eChecks() {
 		if !slices.Contains(live, c.ID) {
@@ -869,6 +869,9 @@ func TestInboxE2EChecksRegistered(t *testing.T) {
 		count[c.ID]++
 		if c.Smoke || c.Chaos || c.Stream != "TS-815" {
 			t.Errorf("%s: Smoke=%t Chaos=%t Stream=%q, want a plain TS-815 check", c.ID, c.Smoke, c.Chaos, c.Stream)
+		}
+		if onDemand := c.ID == "inbox.needs-user-forward"; c.OnDemand != onDemand {
+			t.Errorf("%s: OnDemand=%t, want %t", c.ID, c.OnDemand, onDemand)
 		}
 	}
 	for _, id := range live {
@@ -884,8 +887,5 @@ func TestInboxE2EChecksRegistered(t *testing.T) {
 		if pendingIDs[id] != 0 {
 			t.Errorf("%s is still pending", id)
 		}
-	}
-	if pendingIDs["inbox.needs-user-forward"] != 1 {
-		t.Errorf("inbox.needs-user-forward pending %d times, want 1", pendingIDs["inbox.needs-user-forward"])
 	}
 }

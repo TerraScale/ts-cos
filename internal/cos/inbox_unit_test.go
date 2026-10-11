@@ -120,6 +120,20 @@ func TestInboxUnitE2ESourceIsSilent(t *testing.T) {
 	if !panics(cosItem) {
 		t.Fatal("control: publish of a cos item did not reach the nil JetStream")
 	}
+	probeWorker, err := InboxInput{Title: "[e2e] x", Source: "worker"}.item(inboxTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if panics(probeWorker) {
+		t.Fatal("worker item titled [e2e] reached publish")
+	}
+	worker, err := InboxInput{Title: "x", Source: "worker"}.item(inboxTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !panics(worker) {
+		t.Fatal("control: publish of a worker item titled x did not reach the nil JetStream")
+	}
 }
 
 func TestInboxUnitDedupKey(t *testing.T) {

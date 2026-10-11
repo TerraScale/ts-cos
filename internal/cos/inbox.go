@@ -262,8 +262,8 @@ func (in *Inbox) update(ctx context.Context, id string, fn func(item *InboxItem,
 }
 
 func (in *Inbox) publish(ctx context.Context, item InboxItem) {
-	// e2e probes must not wake COS or push to the user's phone.
-	if item.Source == "e2e" {
+	// e2e probes (source e2e, or a probe worker's "[e2e] " question) must not wake COS or push to the user's phone.
+	if item.Source == "e2e" || strings.HasPrefix(item.Title, "[e2e] ") {
 		return
 	}
 	if _, err := PublishEvent(ctx, in.js, itemEvent(item)); err != nil {

@@ -20,7 +20,6 @@ var e2ePending = func() []E2ECheck {
 		{"rules.ready-merge-once", "TS-813", "rules engine merge"},
 		{"rules.heartbeat-presets", "TS-813", "heartbeat presets"},
 		{"rules.reconciler-dropped-event", "TS-813", "reconciler"},
-		{"inbox.needs-user-forward", "TS-815", "NEEDS-USER to Inbox"},
 		{"failure.t3-down", "TS-812", "T3 client host failure handling"},
 		{"failure.forgejo-5xx", "TS-812", "Forgejo client failure handling"},
 		{"failure.t3-schema-change", "TS-812", "T3 contract check"},
