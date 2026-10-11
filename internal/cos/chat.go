@@ -264,6 +264,11 @@ func (c *Chat) Put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
 	if kv == nil {
 		return e, errors.New("chat store is starting; try again in a few seconds")
 	}
+	return putChatEntry(ctx, kv, e)
+}
+
+// putChatEntry fills ID and time and writes e to the chat bucket.
+func putChatEntry(ctx context.Context, kv jetstream.KeyValue, e ChatEntry) (ChatEntry, error) {
 	if e.At.IsZero() {
 		e.At = time.Now().UTC()
 	}
@@ -276,6 +281,16 @@ func (c *Chat) Put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
 	}
 	_, err = kv.Put(ctx, e.ID, data)
 	return e, err
+}
+
+// PutChat posts an entry from any component (e.g. a leader worker) without the dashboard's Chat;
+// every node's Chat.Run watcher shows it.
+func PutChat(ctx context.Context, b *Bus, e ChatEntry) (ChatEntry, error) {
+	kv, err := openKV(ctx, b, chatBucket)
+	if err != nil {
+		return e, err
+	}
+	return putChatEntry(ctx, kv, e)
 }
 
 var markdown = goldmark.New(goldmark.WithExtensions(extension.GFM),

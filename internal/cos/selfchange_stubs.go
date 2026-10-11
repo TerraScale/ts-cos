@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -18,27 +17,15 @@ import (
 // Minimal versions of other streams' pieces the self-change loop needs before they
 // are on main. Replace each with the real API when its stream merges.
 
-// selfChatPost writes a COS line into TS-811's replicated chat bucket.
-// shortcut: copies ChatEntry's JSON shape and key format; use Chat.Put once TS-811 merges.
+// selfChatPost posts a COS line in the replicated chat (TS-811).
 func selfChatPost(ctx context.Context, bus *Bus, text string) {
 	slog.Info("self-change", "chat", text)
-	js, err := bus.JetStream()
-	if err != nil {
-		return
-	}
-	kv, err := js.KeyValue(ctx, "COS_CHAT")
-	if err != nil {
-		return // chat not deployed yet; the line is in the log
-	}
-	at := time.Now().UTC()
-	id := fmt.Sprintf("%016x-%s", at.UnixNano(), uuid()[:8])
-	data, _ := json.Marshal(map[string]any{"id": id, "at": at, "role": "cos", "text": text})
-	if _, err := kv.Put(ctx, id, data); err != nil {
+	if _, err := PutChat(ctx, bus, ChatEntry{Role: "cos", Text: text}); err != nil {
 		slog.Warn("self-change chat post failed", "error", err)
 	}
 }
 
-// TS-818 rollout events (contract from stream I): data.to is the revision now on all 3
+// TS-818 rollout events (cos-hold/ts-818-rollout, not on main yet): data.to is the revision on all 3
 // nodes; data.reason explains a rollback.
 const (
 	selfDeployCompleted  = "cos.events.deploy.deploy.completed"
@@ -67,29 +54,28 @@ func (d *selfDriver) rolloutDone(ctx context.Context, r selfRecord) (bool, strin
 	if err != nil {
 		return false, "", err
 	}
-	last := func(subject string) (Event, map[string]string, bool) {
+	last := func(subject string) (to, reason string, ok bool) {
 		m, err := stream.GetLastMsgForSubject(ctx, subject)
 		var e Event
-		var data map[string]string
 		if err != nil || json.Unmarshal(m.Data, &e) != nil || e.Time.Before(r.MergedAt) {
-			return e, nil, false
+			return "", "", false
 		}
-		_ = json.Unmarshal(e.Data, &data)
-		return e, data, true
+		to, reason = selfDeployData(e.Data)
+		return to, reason, true
 	}
-	if _, data, ok := last(selfDeployRolledBack); ok {
-		return false, cmp.Or(data["reason"], "rollout rolled back"), nil
+	if _, reason, ok := last(selfDeployRolledBack); ok {
+		return false, cmp.Or(reason, "rollout rolled back"), nil
 	}
-	_, data, ok := last(selfDeployCompleted)
+	to, _, ok := last(selfDeployCompleted)
 	if !ok {
 		return false, "", nil
 	}
-	if data["to"] == r.SHA {
+	if to == r.SHA {
 		return true, "", nil
 	}
 	// A later main commit rolled out; it includes r when r is among its recent ancestors.
 	var commits []struct{ SHA string }
-	if _, err := d.f.request(ctx, http.MethodGet, selfPath("/commits?sha="+data["to"]+"&limit=50&stat=false&files=false&verification=false"), nil, &commits); err != nil {
+	if _, err := d.f.request(ctx, http.MethodGet, selfPath("/commits?sha="+to+"&limit=50&stat=false&files=false&verification=false"), nil, &commits); err != nil {
 		return false, "", err
 	}
 	for _, c := range commits {
@@ -98,6 +84,17 @@ func (d *selfDriver) rolloutDone(ctx context.Context, r selfRecord) (bool, strin
 		}
 	}
 	return false, "", nil
+}
+
+// selfDeployData reads a TS-818 deploy payload. Its hosts (array) and from (object) fields are
+// ignored: decoding them into strings would fail the whole event.
+func selfDeployData(raw json.RawMessage) (to, reason string) {
+	var data struct {
+		To     string `json:"to"`
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(raw, &data)
+	return data.To, data.Reason
 }
 
 // selfBehaviorLive: the bundle published after the merge is loaded on every node.
