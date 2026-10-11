@@ -20,30 +20,34 @@ const (
 	agentBucket = "COS_AGENT"
 	// Fresh brief when idle past this context size; compact instead while a run is active.
 	agentRestartTokens = 120_000
+	agentFreshMin      = 40_000
 	agentIdleRestart   = 4 * time.Hour
-	agentContextBytes  = 48 << 10
-	agentRecentBytes   = 6 << 10
-	agentWorkspace     = ".local/share/cos/agent"
+	// hard cap on the memory section of a fresh brief (the old context dump allowed 48 KiB, about 12k tokens)
+	agentMemoryTokens = 4000
+	agentRecentBytes  = 6 << 10
+	agentWorkspace    = ".local/share/cos/agent"
 )
 
 var agentModel = modelOpusHigh
 
 // AgentState is the replicated record of the one COS thread, so a new leader can take over.
 type AgentState struct {
-	Host      string        `json:"host"`
-	ThreadID  string        `json:"threadId"`
-	Started   time.Time     `json:"started"`
-	Reason    string        `json:"reason"`
-	Behavior  string        `json:"behavior"`
-	Focus     string        `json:"focus"`
-	OpenPRs   []string      `json:"openPRs"`
-	LastWake  time.Time     `json:"lastWake"`
-	Delivered string        `json:"delivered"`
-	Restart   string        `json:"restart,omitempty"`
-	Run       string        `json:"run,omitempty"`
-	Reply     string        `json:"reply,omitempty"`
-	Compacted string        `json:"compacted,omitempty"`
-	Orphans   []AgentThread `json:"orphans,omitempty"`
+	Host          string        `json:"host"`
+	ThreadID      string        `json:"threadId"`
+	Started       time.Time     `json:"started"`
+	Reason        string        `json:"reason"`
+	Behavior      string        `json:"behavior"`
+	Focus         string        `json:"focus"`
+	OpenPRs       []string      `json:"openPRs"`
+	LastWake      time.Time     `json:"lastWake"`
+	Delivered     string        `json:"delivered"`
+	Restart       string        `json:"restart,omitempty"`
+	Run           string        `json:"run,omitempty"`
+	Reply         string        `json:"reply,omitempty"`
+	Compacted     string        `json:"compacted,omitempty"`
+	BriefTokens   int           `json:"briefTokens,omitempty"`
+	CarriedTokens int           `json:"carriedTokens,omitempty"`
+	Orphans       []AgentThread `json:"orphans,omitempty"`
 }
 
 // addReason keeps every pending restart reason, so a failover is never hidden by a later trigger.
@@ -74,6 +78,8 @@ type Agent struct {
 	Chat            *Chat
 	Store           *Store
 	KV, Context     jetstream.KeyValue
+	Memory          jetstream.KeyValue
+	Savings         jetstream.KeyValue
 	T3              func(context.Context) (agentT3, error)
 	Remote          func(ctx context.Context, host, command string, args []string, out any) error
 	project         string
@@ -111,6 +117,12 @@ func (a *Agent) Run(ctx context.Context, bus *Bus) {
 		kv, err := openKV(ctx, bus, agentBucket)
 		if err == nil {
 			a.Context, err = openKV(ctx, bus, contextBucket)
+		}
+		if err == nil {
+			a.Memory, err = openKV(ctx, bus, memoryBucket)
+		}
+		if err == nil {
+			a.Savings, err = openKV(ctx, bus, savingsBucket)
 		}
 		if err == nil {
 			a.KV = kv
@@ -272,7 +284,8 @@ func (a *Agent) Step(ctx context.Context) error {
 		if busy {
 			a.hot = now.Add(2 * time.Minute)
 		}
-		if used := p.usedTokens(); used > agentRestartTokens {
+		used := p.usedTokens()
+		if used > agentRestartTokens {
 			if busy && st.Compacted != run {
 				compact := "/compact Keep only: the user's open requests, decisions made, threads and PRs you are driving and their state, and the exact next step. Drop tool output and resolved discussion."
 				if _, err := c.Send(ctx, st.ThreadID, compact, SendQueue); err != nil {
@@ -282,6 +295,11 @@ func (a *Agent) Step(ctx context.Context) error {
 			} else if !busy && !strings.Contains(st.Restart, "context reached") {
 				st.addReason(fmt.Sprintf("context reached %d tokens", used))
 			}
+		}
+		// Every turn re-sends the carried context; restart once a fresh brief costs under half of it.
+		if !busy && st.BriefTokens > 0 && used > agentFreshMin && used > 2*st.BriefTokens && st.Restart == "" {
+			st.CarriedTokens = used
+			st.addReason(fmt.Sprintf("context %d tokens vs a %d-token fresh brief", used, st.BriefTokens))
 		}
 	}
 	if len(wake) > 0 {
@@ -319,7 +337,7 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 	if reason == "" {
 		reason = "first start"
 	}
-	brief, err := a.brief(ctx, v, reason, wake)
+	brief, r, err := a.brief(ctx, v, reason, wake)
 	if err != nil {
 		return err
 	}
@@ -341,7 +359,22 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 			st.Orphans = append(st.Orphans, AgentThread{a.Host, st.ThreadID})
 		}
 	}
+	carried, oldBrief, replaced := st.CarriedTokens, st.BriefTokens, st.ThreadID != ""
 	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans}
+	st.BriefTokens = len(brief) / 4
+	if a.Savings != nil {
+		// Savings are best effort: a failed write must never fail the restart that already launched.
+		if r.FullTokens > r.Tokens {
+			if err := RecordSaving(ctx, a.Savings, SavingRetrieval, r.FullTokens-r.Tokens, 0, now); err != nil {
+				slog.Warn("record saving", "error", err)
+			}
+		}
+		if replaced && carried > 0 {
+			if err := RecordSaving(ctx, a.Savings, SavingFreshBrief, carried-oldBrief, 0, now); err != nil {
+				slog.Warn("record saving", "error", err)
+			}
+		}
+	}
 	// The launch already happened: a failed notice must not make the next step launch again.
 	if _, err := a.Chat.Put(ctx, ChatEntry{Role: "system", Text: "COS started a fresh thread on " + a.Host + ": " + reason + "."}); err != nil {
 		slog.Warn("post COS restart notice", "error", err)
@@ -388,33 +421,24 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 
 // AgentBriefData feeds behavior/templates/brief.tmpl, the first message of every COS thread.
 type AgentBriefData struct {
-	At            time.Time
-	Reason, Now   string
-	Context       []ContextFile
-	Omitted, Live string
-	Recent        []string
+	At          time.Time
+	Reason, Now string
+	// Context and Omitted stay for behavior bundles rendered by older templates during a rollout.
+	Context                                 []ContextFile
+	Omitted, Live                           string
+	Recent                                  []string
+	Memory                                  string
+	MemoryTokens, MemoryFull, MemoryOmitted int
 }
 
-// brief renders the first message of every COS thread: shared context, recent chat and live state.
-func (a *Agent) brief(ctx context.Context, v Dashboard, reason, wake string) (string, error) {
-	files, err := contextFiles(ctx, a.Context, true)
+// brief renders the first message of every COS thread: pinned and relevant memory, recent chat and live state.
+func (a *Agent) brief(ctx context.Context, v Dashboard, reason, wake string) (string, MemoryRecall, error) {
+	r, err := Recall(ctx, a.Memory, a.Context, reason+"\n"+wake, memoryRecallK, agentMemoryTokens)
 	if err != nil {
-		return "", err
+		return "", MemoryRecall{}, err
 	}
-	// The focus file leads, so a size cap never drops it.
-	slices.SortStableFunc(files, func(x, y ContextFile) int {
-		return cmpBool(y.Name == "focus", x.Name == "focus")
-	})
-	data := AgentBriefData{At: time.Now().UTC(), Reason: reason, Now: wake, Live: Brief(v), Context: []ContextFile{}, Recent: []string{}}
-	used := 0
-	for _, f := range files {
-		if used+len(f.Text) > agentContextBytes {
-			data.Omitted = f.Name
-			break
-		}
-		used += len(f.Text)
-		data.Context = append(data.Context, f)
-	}
+	data := AgentBriefData{At: time.Now().UTC(), Reason: reason, Now: wake, Live: Brief(v), Memory: r.Text(),
+		MemoryTokens: r.Tokens, MemoryFull: r.FullTokens, MemoryOmitted: r.Omitted, Recent: []string{}}
 	size := 0
 	for _, e := range slices.Backward(a.Chat.Entries()) {
 		if e.Role != "user" && e.Role != "cos" {
@@ -427,7 +451,8 @@ func (a *Agent) brief(ctx context.Context, v Dashboard, reason, wake string) (st
 		data.Recent = append(data.Recent, line)
 	}
 	slices.Reverse(data.Recent)
-	return CurrentBehavior().Render("brief", data)
+	text, err := CurrentBehavior().Render("brief", data)
+	return text, r, err
 }
 
 func init() {
@@ -477,14 +502,4 @@ func unanswered(entries []ChatEntry) bool {
 		}
 	}
 	return false
-}
-
-func cmpBool(a, b bool) int {
-	switch {
-	case a == b:
-		return 0
-	case a:
-		return 1
-	}
-	return -1
 }

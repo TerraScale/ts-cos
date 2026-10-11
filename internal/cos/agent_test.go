@@ -102,6 +102,8 @@ type agentTestEnv struct {
 	chatKV    jetstream.KeyValue
 	agentKV   jetstream.KeyValue
 	contextKV jetstream.KeyValue
+	memoryKV  jetstream.KeyValue
+	savingsKV jetstream.KeyValue
 	store     *Store
 	fake      *agentTestT3
 	remote    []agentTestRemote
@@ -138,6 +140,8 @@ func newAgentTestEnv(t *testing.T, ctx context.Context) *agentTestEnv {
 	e.chatKV = agentTestOpen(t, ctx, nodes, chatBucket)
 	e.agentKV = agentTestOpen(t, ctx, nodes, agentBucket)
 	e.contextKV = agentTestOpen(t, ctx, nodes, contextBucket)
+	e.memoryKV = agentTestOpen(t, ctx, nodes, memoryBucket)
+	e.savingsKV = agentTestOpen(t, ctx, nodes, savingsBucket)
 	return e
 }
 
@@ -165,7 +169,7 @@ func (e *agentTestEnv) reset(t *testing.T) {
 	e.fake = &agentTestT3{projection: `{}`}
 	e.remote = nil
 	e.skipTree = false
-	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV,
+	e.a = &Agent{Host: "delta", Home: t.TempDir(), Exe: "/bin/cos", Chat: e.chat, Store: store, KV: e.agentKV, Context: e.contextKV, Memory: e.memoryKV, Savings: e.savingsKV,
 		T3: func(context.Context) (agentT3, error) { return e.fake, nil },
 		Remote: func(_ context.Context, host, command string, args []string, out any) error {
 			e.remote = append(e.remote, agentTestRemote{host, command, args})
@@ -223,6 +227,16 @@ func (e *agentTestEnv) expectBrief(want ...string) {
 			e.t.Fatalf("brief missing %q:\n%s", w, brief)
 		}
 	}
+}
+
+// savingTokens is today's tokens saved for kind; tests diff it because the ledger is shared by the subtests.
+func (e *agentTestEnv) savingTokens(kind string) int {
+	e.t.Helper()
+	days, err := SavingsReport(e.ctx, e.savingsKV, 1, time.Now())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return days[0].Kinds[kind].Tokens
 }
 
 func (e *agentTestEnv) state() AgentState {
@@ -285,7 +299,7 @@ func TestAgent(t *testing.T) {
 		id := e.say("hello cos")
 		e.step()
 		e.expectLaunches(1)
-		e.expectBrief("Fresh thread because: first start", "## Shared context", "Prefer Haiku 5.5", "## Live state", "User: hello cos")
+		e.expectBrief("Fresh thread because: first start", "## Memory", "Prefer Haiku 5.5", "## Live state", "User: hello cos")
 		launch := e.fake.launches[0]
 		if launch["title"] != "COS" {
 			t.Fatal(launch["title"])
@@ -424,6 +438,96 @@ func TestAgent(t *testing.T) {
 			t.Fatalf("/compact sent %d times: %+v", compacts, e.fake.sends)
 		}
 		e.expectLaunches(1)
+	})
+
+	t.Run("brief carries pinned and relevant memory under the cap", func(t *testing.T) {
+		e.reset(t)
+		if _, err := e.contextKV.Put(ctx, "focus", []byte("Ship the chat")); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = e.contextKV.Purge(ctx, "focus") })
+		// Ten ~470-token entries overflow the cap; the unrelated fact never matches the wake, so it stays out.
+		base := time.Now().UTC().Add(-time.Hour)
+		for i := range 10 {
+			id := fmt.Sprintf("agent-mem-%02d", i)
+			text := fmt.Sprintf("canary deploy %d: %s", i, strings.Repeat("hold each rollout at a health gate before widening. ", 36))
+			if err := memoryPut(ctx, e.memoryKV, MemoryEntry{ID: id, Kind: "decision", Text: text, At: base.Add(time.Duration(i) * time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = e.memoryKV.Delete(ctx, id) })
+		}
+		if err := memoryPut(ctx, e.memoryKV, MemoryEntry{ID: "agent-mem-unrelated", Kind: "fact", Text: "NetBird admits nodes automatically", At: base}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = e.memoryKV.Delete(ctx, "agent-mem-unrelated") })
+		retrieved := e.savingTokens(SavingRetrieval)
+		e.start()
+		if got := e.savingTokens(SavingRetrieval) - retrieved; got <= 0 {
+			t.Fatalf("retrieval saving = %d after a restart with memory over the cap", got)
+		}
+		brief, r, err := e.a.brief(ctx, Dashboard{}, "first start", "User: how do canary deploys roll back")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("memory tokens %d of %d, %d entries omitted", r.Tokens, r.FullTokens, r.Omitted)
+		if r.Tokens > agentMemoryTokens || r.FullTokens <= agentMemoryTokens || r.Omitted == 0 {
+			t.Fatalf("memory tokens %d of %d, omitted %d", r.Tokens, r.FullTokens, r.Omitted)
+		}
+		for _, want := range []string{"Ship the chat", "canary deploy 9:", fmt.Sprintf("%d more relevant entries left out to stay under %d of %d tokens", r.Omitted, r.Tokens, r.FullTokens)} {
+			if !strings.Contains(brief, want) {
+				t.Fatalf("brief missing %q:\n%s", want, brief)
+			}
+		}
+		if strings.Contains(brief, "NetBird") {
+			t.Fatalf("unrelated memory in brief:\n%s", brief)
+		}
+	})
+
+	t.Run("idle thread restarts when a fresh brief is cheaper than its context", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		st := e.state()
+		st.BriefTokens = 10_000
+		e.setState(st)
+		e.fake.projection = agentTestThread("completed", 50000, "[]")
+		e.say("next")
+		saved := e.savingTokens(SavingFreshBrief)
+		e.step()
+		e.expectLaunches(2)
+		e.expectBrief("Fresh thread because: context 50000 tokens vs a 10000-token fresh brief")
+		if got := e.savingTokens(SavingFreshBrief) - saved; got != 50000-10000 {
+			t.Fatalf("fresh-brief saving = %d, want %d", got, 50000-10000)
+		}
+	})
+
+	t.Run("idle thread keeps its context when a fresh brief is not under half", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		st := e.state()
+		st.BriefTokens = 10_000
+		e.setState(st)
+		e.fake.projection = agentTestThread("completed", 15000, "[]")
+		e.say("next")
+		e.step()
+		e.expectLaunches(1)
+		if got := e.state().Restart; got != "" {
+			t.Fatalf("restart = %q", got)
+		}
+	})
+
+	t.Run("busy thread is not restarted for a fresh brief", func(t *testing.T) {
+		e.reset(t)
+		e.start()
+		st := e.state()
+		st.BriefTokens = 10_000
+		e.setState(st)
+		e.fake.projection = agentTestThread("running", 50000, "[]")
+		e.say("next")
+		e.step()
+		e.expectLaunches(1)
+		if got := e.state().Restart; got != "" {
+			t.Fatalf("restart = %q", got)
+		}
 	})
 
 	t.Run("COS asked for a restart", func(t *testing.T) {
