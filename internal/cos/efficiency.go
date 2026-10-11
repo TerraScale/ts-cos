@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -83,6 +84,7 @@ func EfficiencyOf(rng string, rows, allRows []UsageRow, merged []Event, saved in
 	for _, r := range allRows {
 		outputs[r.Branch] += r.Output
 	}
+	seen := map[string]bool{}
 	for _, ev := range merged {
 		var d struct {
 			Branch string `json:"branch"`
@@ -90,6 +92,12 @@ func EfficiencyOf(rng string, rows, allRows []UsageRow, merged []Event, saved in
 		if json.Unmarshal(ev.Data, &d) != nil || d.Branch == "" {
 			continue
 		}
+		// A re-delivered webhook stores the same merge again under a new seq.
+		key := ev.Repo + "#" + strconv.Itoa(ev.PR)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		e.Merged = append(e.Merged, MergedPR{Repo: ev.Repo, PR: ev.PR, Ticket: ev.Ticket, Branch: d.Branch, Output: outputs[d.Branch], Time: ev.Time})
 	}
 	slices.SortFunc(e.Merged, func(a, b MergedPR) int { return b.Time.Compare(a.Time) })

@@ -68,6 +68,21 @@ func TestEfficiencyOfMergedPRsMedian(t *testing.T) {
 	}
 }
 
+func TestEfficiencyOfDuplicateMergeCountsOnce(t *testing.T) {
+	inRange := effRow("a", effWorker, "TS-826", "cos/ts-826-x", 1000)
+	started := effRow("a", effWorker, "TS-820", "cos/ts-820-x", 9000)
+	merge := Event{Kind: KindPRMerged, Repo: "terrascale/ts-cos", PR: 10, Ticket: "TS-820", Time: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), Data: json.RawMessage(`{"branch":"cos/ts-820-x"}`)}
+	other := Event{Kind: KindPRMerged, Repo: "terrascale/ts-cos", PR: 11, Ticket: "TS-826", Time: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), Data: json.RawMessage(`{"branch":"cos/ts-826-x"}`)}
+	merged := []Event{merge, other, merge}
+	e := EfficiencyOf("today", []UsageRow{inRange}, []UsageRow{inRange, started}, merged, 0)
+	if len(e.Merged) != 2 || e.Merged[0].PR != 11 || e.Merged[1].PR != 10 {
+		t.Fatalf("Merged = %+v, want PR 11 then PR 10 once each", e.Merged)
+	}
+	if e.OutputPerPR != 1000 {
+		t.Fatalf("OutputPerPR %d, want 1000; a duplicate PR 10 would give 9000", e.OutputPerPR)
+	}
+}
+
 func TestEfficiencyOfTopSinks(t *testing.T) {
 	adv := effRow("a", effAdvisor, "TS-826", "", 400)
 	adv.CacheWrite5m = 200
