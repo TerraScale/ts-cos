@@ -28,9 +28,9 @@ func checkNoHaikuThreads(ctx context.Context, e *E2EEnv) (string, error) {
 		total += len(f.Threads)
 	}
 	if bad := haikuThreads(fleets); len(bad) > 0 {
-		return "", fmt.Errorf("%d thread(s) run on a Haiku model (Haiku is allowed only as delegate_task subagents): %s", len(bad), strings.Join(bad, "; "))
+		return "", fmt.Errorf("%d thread(s) run on a worker model (workers are allowed only as delegate_task subagents): %s", len(bad), strings.Join(bad, "; "))
 	}
-	evidence := fmt.Sprintf("no Haiku threads among %d open threads on %d hosts", total, len(fleets))
+	evidence := fmt.Sprintf("no worker-model threads among %d open threads on %d hosts", total, len(fleets))
 	for _, h := range unreachable {
 		evidence += fmt.Sprintf("; host %s unreachable", h)
 	}
@@ -42,7 +42,7 @@ func haikuThreads(fleets []HostFleet) []string {
 	var bad []string
 	for _, f := range fleets {
 		for _, t := range f.Threads {
-			if !strings.Contains(strings.ToLower(t.Model), "haiku") {
+			if !CurrentBehavior().Models.WorkerOnlyModel(t.Model) {
 				continue
 			}
 			if t.Lineage != nil && t.Lineage.Relation == "subagent" {

@@ -2,11 +2,28 @@ package cos
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
 	"git.terrascale.tech/TerraScale/ts-cos/behavior"
 )
+
+func TestBriefSectionNamesEveryPair(t *testing.T) {
+	p := CurrentBehavior().Models
+	got := p.BriefSection()
+	if !strings.HasPrefix(got, "## Model policy (behavior/models.json)") || !strings.Contains(got, "ADVISOR decides, WORKERS execute") {
+		t.Fatalf("BriefSection missing its heading or principle:\n%s", got)
+	}
+	for _, k := range slices.Sorted(maps.Keys(p.Pairs)) {
+		for _, m := range []string{p.Pairs[k].Advisor.Model, p.Pairs[k].Worker.Model} {
+			if !strings.Contains(got, m) {
+				t.Errorf("BriefSection has no %s for pair %s:\n%s", m, k, got)
+			}
+		}
+	}
+}
 
 // freshPolicy parses the embedded models.json anew, so a test can break its own copy.
 func freshPolicy(t *testing.T) ModelPolicy {

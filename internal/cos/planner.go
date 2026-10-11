@@ -251,13 +251,14 @@ func planBrief(in PlanInput, it PlanItem, wave int) string {
 	if it.Checks != "" {
 		checks = it.Checks
 	}
-	return fmt.Sprintf("You are a Haiku 5.5 worker under an Opus 5.5 advisor (COS). Task: %s\n"+
+	worker, _ := planTarget()["model"].(string)
+	return fmt.Sprintf("You are a %s worker under the advisor (COS). Task: %s\n"+
 		"Your part (%s, wave %d): %s\n"+
 		"Repo: %s\n"+
 		"You own only: %s. Do not edit anything else; other workers run in parallel.\n"+
 		"Done when: %s.\n"+
 		"Report: what changed (files, lines), check output, anything you could not do. No commits or pushes unless the goal says so.",
-		in.Task, it.ID, wave, it.Goal, repo, files, checks)
+		worker, in.Task, it.ID, wave, it.Goal, repo, files, checks)
 }
 
 // planClash reports whether item i owns a file that an item already in cur also owns.

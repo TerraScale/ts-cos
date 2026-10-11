@@ -50,6 +50,7 @@ var behaviorTemplates = map[string]any{
 		CheckFile: "checks/TS-900.json", Check: `{"summary": "Header reads Fleet", "path": "/", "contains": ["Fleet"]}`},
 	"compact_focus": nil,
 	"fresh_brief":   freshBrief{LastReply: "Pushed PR #90"},
+	"advise_split":  adviseData{Advisor: "claude-opus-5-5", Worker: "claude-haiku-5-5", Target: `{"providerInstanceId":"claudeAgent","model":"claude-haiku-5-5"}`},
 }
 
 // Templates that become chat status lines: one short line each.
@@ -97,7 +98,9 @@ type Behavior struct {
 }
 
 // AgentBrief is the brief and rules text COS starts every thread with.
-func (b *Behavior) AgentBrief() string { return b.Brief + "\n" + b.Rules }
+func (b *Behavior) AgentBrief() string {
+	return b.Brief + "\n" + b.Models.BriefSection() + "\n" + b.Rules
+}
 
 // behaviorRenderMax bounds one rendered template; a bundle cannot exhaust a node's memory.
 const behaviorRenderMax = 64 << 10
