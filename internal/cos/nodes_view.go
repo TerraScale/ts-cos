@@ -20,11 +20,11 @@ const (
 
 // NodeCard is one host's current state for the overview, K's home panel and the detail header.
 type NodeCard struct {
-	Host          string
-	State         string     // up (< 30 s), degraded (30–60 s), down (> 60 s), unknown (no sample)
-	Sample        NodeSample // newest raw sample (zero when unknown)
-	Age           time.Duration
-	CPU, Mem, Net []float64 // last hour from the 1m stream, for sparklines (Net = rx+tx bytes/s)
+	Host   string
+	State  string     // up (< 30 s), degraded (30–60 s), down (> 60 s), unknown (no sample)
+	Sample NodeSample // newest raw sample (zero when unknown)
+	Age    time.Duration
+	CPU    []float64 // last hour of CPU from the 1m stream, for the tile's sparkline
 }
 
 // nodeCardCache shares one read of every card across all open dashboards.
@@ -134,8 +134,6 @@ func readNodeCard(ctx context.Context, js jetstream.JetStream, host string, now 
 	}
 	for _, m := range hour {
 		c.CPU = append(c.CPU, m.CPU)
-		c.Mem = append(c.Mem, m.Mem.UsedPercent())
-		c.Net = append(c.Net, netBps(m))
 	}
 	return c
 }
@@ -160,14 +158,6 @@ func netBps(s NodeSample) float64 {
 	return total
 }
 
-// SwapPercent is the share of swap in use.
-func (m NodeMem) SwapPercent() float64 {
-	if m.SwapTotal == 0 {
-		return 0
-	}
-	return 100 * float64(m.SwapTotal-m.SwapFree) / float64(m.SwapTotal)
-}
-
 // known reports whether the card has a sample; an unknown node shows dashes, never zeros.
 func (c NodeCard) known() bool { return c.State != "unknown" }
 
@@ -187,55 +177,49 @@ func (c NodeCard) unit(u string) string {
 	return u
 }
 
-func (c NodeCard) cpuTone() string {
-	if c.known() && c.Sample.CPU >= 90 {
-		return "warn"
+// fullestDisk is the mount closest to full, or the zero NodeDisk when the node reports none.
+func (c NodeCard) fullestDisk() NodeDisk {
+	var top NodeDisk
+	for _, d := range c.Sample.Disks {
+		if top.Total == 0 || d.UsedPercent() > top.UsedPercent() {
+			top = d
+		}
 	}
-	return ""
-}
-
-func (c NodeCard) memTone() string {
-	switch used := c.Sample.Mem.UsedPercent(); {
-	case !c.known():
-		return ""
-	case used > 90:
-		return "danger"
-	case used > 80:
-		return "warn"
-	}
-	return ""
-}
-
-func (c NodeCard) t3Tone() string {
-	if c.known() && !c.Sample.T3.OK {
-		return "danger"
-	}
-	return ""
-}
-
-// t3Label names the T3 KPI, with the thread count when the node has one.
-func (c NodeCard) t3Label() string {
-	if !c.known() {
-		return "T3"
-	}
-	return "T3 · " + integer(c.Sample.T3.Threads) + " threads"
+	return top
 }
 
 // hasTemps reports whether the node has any temperature sensor.
 func (c NodeCard) hasTemps() bool { return len(c.Sample.Temps) > 0 }
 
-// hottest names the hottest sensor, for the one-line temperature summary.
-func (c NodeCard) hottest() string {
-	var top NodeTemp
+// hottest is the warmest sensor's reading in °C; it is only meaningful when hasTemps.
+func (c NodeCard) hottest() float64 {
+	var top float64
 	for i, t := range c.Sample.Temps {
-		if i == 0 || t.Celsius > top.Celsius {
-			top = t
+		if i == 0 || t.Celsius > top {
+			top = t.Celsius
 		}
 	}
-	return "Hottest " + top.Name + " " + formatTemp(top.Celsius)
+	return top
 }
 
-// nodeMeta is the muted line under a node's name: build, build time and uptime, plus the age of the last sample when the node is quiet.
+// summary is the card's one muted line: load, network, T3 and hottest sensor. Unknown parts are left out.
+func (c NodeCard) summary() string {
+	if !c.known() {
+		return ""
+	}
+	parts := []string{"load " + formatFixed(c.Sample.Load[0], 2), "net " + formatRate(netBps(c.Sample))}
+	if c.Sample.T3.OK {
+		parts = append(parts, "T3 "+integer(c.Sample.T3.Running)+"/"+integer(c.Sample.T3.Threads))
+	} else {
+		parts = append(parts, "T3 down")
+	}
+	if c.hasTemps() {
+		parts = append(parts, formatTemp(c.hottest()))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// nodeMeta is the muted text beside a node's name: uptime and the short build revision.
 func nodeMeta(c NodeCard) string {
 	if !c.known() {
 		return "no samples yet"
@@ -244,15 +228,7 @@ func nodeMeta(c NodeCard) string {
 	if revision == "" {
 		revision = "unknown"
 	}
-	parts := []string{"build " + revision}
-	if c.Sample.Build.Time != "" {
-		parts = append(parts, formatBuildTime(c.Sample.Build.Time))
-	}
-	parts = append(parts, "up "+formatUptime(c.Sample.Uptime))
-	if c.State == "degraded" || c.State == "down" {
-		parts = append(parts, "last sample "+formatUptime(c.Age.Seconds())+" ago")
-	}
-	return strings.Join(parts, " · ")
+	return "up " + formatUptime(c.Sample.Uptime) + " · " + revision
 }
 
 // sparkLine and sparkArea are the two paths of a KPI's sparkline, scaled to ymax (≤ 0 means the series max).

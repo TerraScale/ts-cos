@@ -99,6 +99,14 @@ func (m NodeMem) UsedPercent() float64 {
 	return 100 * float64(m.Total-m.Available) / float64(m.Total)
 }
 
+// SwapPercent is the share of swap in use; zero when the host has no swap.
+func (m NodeMem) SwapPercent() float64 {
+	if m.SwapTotal == 0 {
+		return 0
+	}
+	return 100 * float64(m.SwapTotal-m.SwapFree) / float64(m.SwapTotal)
+}
+
 func (d NodeDisk) UsedPercent() float64 {
 	if d.Total == 0 {
 		return 0

@@ -1,5 +1,7 @@
 package cos
 
+import "strings"
+
 // nodeDetailPage is one node: header, range control, the ten charts and the newest cores.
 templ nodeDetailPage(c NodeCard, window string, charts []nodeChart) {
 	<!DOCTYPE html>
@@ -13,7 +15,10 @@ templ nodeDetailPage(c NodeCard, window string, charts []nodeChart) {
 						<h1 id="node-heading" class="row"><span class="dot" data-state={ c.State }></span>{ c.Host }</h1>
 					</header>
 					<div class="stack">
-						<p class="muted">{ nodeMeta(c) }</p>
+						<p class="muted">{ nodeDetailMeta(c) }</p>
+						if c.known() && !c.Sample.T3.OK && strings.TrimSpace(c.Sample.T3.Error) != "" {
+							<p class="muted">T3 down: { c.Sample.T3.Error }</p>
+						}
 						<form class="segmented" method="get" action={ templ.SafeURL("/nodes/" + c.Host) } aria-label="Time range">
 							for _, name := range nodeWindowNames {
 								<button type="submit" name="range" value={ name } aria-pressed={ boolText(name == window) }>{ name }</button>

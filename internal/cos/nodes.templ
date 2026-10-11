@@ -30,63 +30,39 @@ templ nodesTopbar() {
 }
 
 // nodesGrid is the patch target: every card redraws when /nodes/events sends it.
+// Desktop is 2×2; the NATS cluster tile fills the empty fourth cell in the next PR.
 templ nodesGrid(cards []NodeCard) {
-	<div id="nodes-grid" class="stack">
+	<div id="nodes-grid" class="grid-2">
 		if len(cards) == 0 {
 			<p class="empty">No nodes have reported yet.</p>
 		}
 		for _, c := range cards {
-			@nodeCard(c)
+			<div>
+				@nodeCard(c)
+			</div>
 		}
 	</div>
 }
 
+// nodeCard is one node at a glance: state, CPU trend, three meters and one muted line. Details live on /nodes/<host>.
 templ nodeCard(c NodeCard) {
-	<section class="card" id={ c.Host }>
-		<header class="card-head">
+	<section class="card card-compact" id={ c.Host }>
+		<div class="row">
 			<span class="dot" data-state={ c.State }></span>
-			<h2>{ c.Host }</h2>
+			<strong><a href={ "/nodes/" + c.Host }>{ c.Host }</a></strong>
 			<span class="muted">{ nodeMeta(c) }</span>
-			<a class="btn btn-ghost" href={ templ.SafeURL("/nodes/" + c.Host) }>Details</a>
-		</header>
-		<div class="stack">
-			<div class="kpis">
-				<article class="kpi" data-tone={ c.cpuTone() }>
-					<h3 class="kpi-label">CPU</h3>
-					<p class="kpi-value">{ c.text(formatFixed(c.Sample.CPU, 0)) }<span class="kpi-unit">{ c.unit("%") }</span></p>
-					@sparkline(c.CPU, 1, 100)
-				</article>
-				<article class="kpi" data-tone={ c.memTone() }>
-					<h3 class="kpi-label">Memory</h3>
-					<p class="kpi-value">{ c.text(formatFixed(c.Sample.Mem.UsedPercent(), 0)) }<span class="kpi-unit">{ c.unit("%") }</span></p>
-					@sparkline(c.Mem, 2, 100)
-				</article>
-				<article class="kpi">
-					<h3 class="kpi-label">Load</h3>
-					<p class="kpi-value">{ c.text(formatFixed(c.Sample.Load[0], 2)) }<span class="kpi-unit">{ c.unit("1m") }</span></p>
-				</article>
-				<article class="kpi">
-					<h3 class="kpi-label">Network</h3>
-					<p class="kpi-value">{ c.text(formatRate(netBps(c.Sample))) }</p>
-					@sparkline(c.Net, 3, 0)
-				</article>
-				<article class="kpi" data-tone={ c.t3Tone() } title={ c.Sample.T3.Error }>
-					<h3 class="kpi-label">{ c.t3Label() }</h3>
-					<p class="kpi-value">{ c.text(integer(c.Sample.T3.Running)) }<span class="kpi-unit">{ c.unit("running") }</span></p>
-				</article>
-			</div>
-			<div class="stack">
-				for _, d := range c.Sample.Disks {
-					@meterRow(d.Mount, d.UsedPercent())
-				}
-				if c.Sample.Mem.SwapTotal > 0 {
-					@meterRow("swap", c.Sample.Mem.SwapPercent())
-				}
-			</div>
-			if c.hasTemps() {
-				<p class="muted">{ c.hottest() }</p>
-			}
 		</div>
+		@sparkline(c.CPU, 1, 100)
+		if c.known() {
+			@meterRow("CPU", c.Sample.CPU)
+			@meterRow("Memory", c.Sample.Mem.UsedPercent())
+			if d := c.fullestDisk(); d.Total > 0 {
+				@meterRow("Disk "+d.Mount, d.UsedPercent())
+			}
+		}
+		if s := c.summary(); s != "" {
+			<p class="muted">{ s }</p>
+		}
 	</section>
 }
 

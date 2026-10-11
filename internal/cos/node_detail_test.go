@@ -197,3 +197,28 @@ func TestNodeDetailRoutesWithoutBus(t *testing.T) {
 		t.Fatalf("invalid host = %d, want 404", rec.Code)
 	}
 }
+
+func TestNodeDetailMeta(t *testing.T) {
+	card := nodeFixtureCards(time.Now())[0]
+	card.Sample.Build.Time = "2026-10-10T09:00:00Z"
+	if got := nodeDetailMeta(card); !strings.Contains(got, "built Oct 10 09:00 UTC") {
+		t.Errorf("known card meta = %q, want build time", got)
+	}
+	if got := nodeDetailMeta(NodeCard{Host: "beta", State: "unknown"}); got != "no samples yet" {
+		t.Errorf("unknown card meta = %q, want no samples yet", got)
+	}
+}
+
+func TestNodeDetailShowsT3Error(t *testing.T) {
+	now := time.Now()
+	sample := nodeFixture("mariogk-dev", now, 0.4)
+	sample.T3 = NodeT3{OK: false, Error: "connection refused"}
+	card := NodeCard{Host: "mariogk-dev", State: "down", Sample: sample}
+	var buf bytes.Buffer
+	if err := nodeDetailPage(card, "1h", nil).Render(context.Background(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "T3 down: connection refused") {
+		t.Error("detail page does not show the T3 error")
+	}
+}

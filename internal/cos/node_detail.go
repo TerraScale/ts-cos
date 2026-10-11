@@ -349,3 +349,11 @@ func xTicks(start, end time.Time, layout string) []string {
 	}
 	return out
 }
+
+// nodeDetailMeta is the tile's meta line plus the build time; the detail page has room for it.
+func nodeDetailMeta(c NodeCard) string {
+	if !c.known() || c.Sample.Build.Time == "" {
+		return nodeMeta(c)
+	}
+	return nodeMeta(c) + " · built " + formatBuildTime(c.Sample.Build.Time)
+}

@@ -58,9 +58,9 @@ func TestNodeStateThresholds(t *testing.T) {
 	}
 }
 
-func TestNodeMetaShowsBuildTime(t *testing.T) {
+func TestNodeMetaShowsUptimeAndBuild(t *testing.T) {
 	card := NodeCard{Host: "delta", State: "up", Sample: nodeFixture("delta", time.Now(), 1)}
-	if got := nodeMeta(card); got != "build 0123456789ab · Oct 10 09:00 UTC · up 3d 4h" {
+	if got := nodeMeta(card); got != "up 3d 4h · 0123456789ab" {
 		t.Fatalf("nodeMeta = %q", got)
 	}
 }
@@ -71,8 +71,8 @@ func nodeFixtureCards(now time.Time) []NodeCard {
 	down := nodeFixture("mariogk-dev", now.Add(-75*time.Second), 0.4)
 	down.T3 = NodeT3{OK: false, Error: "connection refused"}
 	return []NodeCard{
-		{Host: "delta", State: "up", Sample: up, Age: 5 * time.Second, CPU: []float64{10, 90, 42}, Mem: []float64{50, 60}, Net: []float64{1, 2}},
-		{Host: "mariogk-dev", State: "down", Sample: down, Age: 75 * time.Second},
+		{Host: "delta", State: "up", Sample: up, Age: 5 * time.Second, CPU: []float64{10, 90, 42}},
+		{Host: "mariogk-dev", State: "down", Sample: down, Age: 75 * time.Second, CPU: []float64{5, 8}},
 	}
 }
 
@@ -97,10 +97,20 @@ func TestNodesPageRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := buf.String()
-	for _, want := range []string{`id="delta"`, `data-state="down"`, `id="nodes-grid"`, `aria-current="page"`} {
+	for _, want := range []string{
+		`id="delta"`, `id="mariogk-dev"`, `id="nodes-grid" class="grid-2"`, `href="/nodes/delta"`, `data-state="down"`, `aria-current="page"`,
+		"load 1.20 · net ", "T3 2/7", "T3 down", "62°C",
+	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page missing %s", want)
 		}
+	}
+	// Each node is one sparkline and three meters: CPU, memory and its fullest disk.
+	if n := strings.Count(html, `class="spark"`); n != 2 {
+		t.Errorf("sparklines = %d, want 2", n)
+	}
+	if n := strings.Count(html, `class="meter-row"`); n != 6 {
+		t.Errorf("meter rows = %d, want 6", n)
 	}
 	assertCleanMarkup(t, html)
 }
