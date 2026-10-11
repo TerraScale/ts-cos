@@ -49,7 +49,7 @@ type limitWake struct{ Model string }
 
 func init() {
 	for _, rule := range wakeRules {
-		behaviorTemplates["wake_"+rule] = wakeData{PR: "https://git.terrascale.tech/TerraScale/ts-cos/pulls/9", Checks: "test", Summary: "exit 1", Lines: 2000}
+		behaviorTemplates["wake_"+rule] = wakeData{PR: "https://github.com/TerraScale/ts-cos/pulls/9", Checks: "test", Summary: "exit 1", Lines: 2000}
 		behaviorLines = append(behaviorLines, "wake_"+rule)
 	}
 	behaviorTemplates["wake_limit"] = limitWake{Model: "claude-opus-5-5"}

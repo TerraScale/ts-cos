@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"git.terrascale.tech/TerraScale/ts-cos/internal/cos"
+	"github.com/TerraScale/ts-cos/internal/cos"
 )
 
 func main() {
