@@ -387,6 +387,11 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
 		E2ECheck{ID: "memory.recall", Stream: "TS-828", Run: checkMemoryRecall},
 		E2ECheck{ID: "chat.non-leader-message", Stream: "TS-811", Run: checkChatNonLeader},
+		E2ECheck{ID: "chat.reply-all-nodes", Stream: "TS-811", Run: checkChatReplyAll},
+		E2ECheck{ID: "chat.spawn-thread", Stream: "TS-811", Run: checkChatSpawnThread},
+		E2ECheck{ID: "chat.focus-restart", Stream: "TS-811", Run: checkChatFocusRestart},
+		E2ECheck{ID: "chat.wake-budget-digest", Stream: "TS-811", Run: checkChatWakeBudget},
+		E2ECheck{ID: "chat.context-compaction", Stream: "TS-811", Run: checkChatContext},
 		// These change auth state (failures, lockout, logout, password), so each gets its own throwaway user.
 		E2ECheck{ID: "access.wrong-password", Stream: "TS-810", Run: accessCheck(checkWrongPassword)},
 		E2ECheck{ID: "access.lockout", Stream: "TS-810", Run: accessCheck(checkLockout)},
