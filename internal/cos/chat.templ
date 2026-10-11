@@ -1,11 +1,11 @@
 package cos
 
 // The home is the app shell: Chat in the center, Inbox, Nodes and Work beside it. Phones pick one pane with the tab bar.
-templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b workBoard, ok bool, nodes []NodeCard, nodesOK bool) {
+templ chatPage(h chatHeader, k kpiView, v Dashboard, tabs []ChatTab, tab ChatTab, entries []ChatEntry, b workBoard, ok bool, nodes []NodeCard, nodesOK bool, notice string) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("COS · TerraScale")
-		<body class="app chat" data-init="@get('/chat/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})" data-signals="{tab:'chat'}" data-attr:data-tab="$tab">
+		<body class="app chat" data-init={ chatEventsAction(tab.ID) } data-signals="{tab:'chat'}" data-attr:data-tab="$tab">
 			@releaseWatch()
 			@chatHead(h)
 			<div class="app-body">
@@ -18,15 +18,16 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 					<a class="side-link" href="/settings" title="Settings">@icon("settings")<span>Settings</span></a>
 				</nav>
 				<main class="app-main" id="pane-chat">
+					@chatTabs(tabs, tab)
 					@kpiTiles(k)
 					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)
 					</div>
-					<form id="composer" class="composer" data-on:submit__prevent="@post('/chat')">
-						<textarea data-bind:msg rows="2" maxlength="20000" placeholder="Message COS" aria-label="Message COS" data-on:keydown="evt.key === 'Enter' && (evt.ctrlKey || evt.metaKey) && el.form.requestSubmit()"></textarea>
+					<form id="composer" class="composer" data-on:submit__prevent={ chatPostAction(tab.ID) }>
+						<textarea data-bind:msg rows="2" maxlength="20000" placeholder={ composerPlaceholder(tab) } aria-label={ composerPlaceholder(tab) } data-on:keydown="evt.key === 'Enter' && (evt.ctrlKey || evt.metaKey) && el.form.requestSubmit()"></textarea>
 						<button class="btn-primary" type="submit">Send</button>
 					</form>
-					<p id="chat-notice" class="toast" role="status"></p>
+					@tabNotice(notice)
 				</main>
 				<aside class="app-aside" aria-label="Inbox, nodes and work">
 					<section id="pane-inbox" class="pane">@inbox(v)</section>

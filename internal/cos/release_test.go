@@ -383,7 +383,7 @@ func TestDashboardProbe(t *testing.T) {
 	for path, want := range map[string]string{
 		"/login":       "login page answers HTTP 503",
 		"/":            "dashboard answers HTTP 503",
-		"/chat/events": "dashboard SSE /chat/events answers HTTP 503 without events",
+		"/chat/events": "dashboard SSE /chat/events?tab=cos answers HTTP 503 without events",
 	} {
 		broken = path
 		if got := strings.Join(dashboardProbe(ctx, port, auth), "; "); got != want {

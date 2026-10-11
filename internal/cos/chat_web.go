@@ -203,12 +203,17 @@ func (w *Web) homeNodes(ctx context.Context) ([]NodeCard, bool) {
 }
 
 func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
+	tab, open := w.openTab(r)
+	if !open {
+		tabRedirect(rw, r, "", "")
+		return
+	}
 	v := w.state(r.Context())
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	h := headerOf(v)
 	b, ok := w.homeBoard(r.Context())
 	nodes, nodesOK := w.homeNodes(r.Context())
-	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(chatMainTab), b, ok, nodes, nodesOK).Render(r.Context(), rw); err != nil {
+	if err := chatPage(h, w.kpis(h), v, openTabs(w.Chat.Tabs()), tab, w.Chat.Entries(tab.ID), b, ok, nodes, nodesOK, r.URL.Query().Get("notice")).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render chat", err)
 	}
 }
@@ -240,6 +245,7 @@ func patchElements(ctx context.Context, rw io.Writer, c templ.Component, fields 
 func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	controller := http.NewResponseController(rw)
+	tab, _ := w.openTab(r)
 	sub, stop := w.Chat.Subscribe()
 	defer stop()
 	kpiWake, stopKPI := w.KPI.Subscribe()
@@ -283,8 +289,23 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		}
 		return patchElements(ctx, rw, inbox(v))
 	}
+	// tabStrip repaints the tab strip; the current tab's name may have changed meanwhile.
+	tabStrip := func() error {
+		cur := tab
+		if t, ok := w.Chat.Tab(tab.ID); ok {
+			cur = t
+		}
+		return patchElements(ctx, rw, chatTabs(openTabs(w.Chat.Tabs()), cur))
+	}
+	// closedNotice tells the reader when the tab on screen was closed or deleted.
+	closedNotice := func() error {
+		if _, live := w.openTab(r); live {
+			return nil
+		}
+		return patchElements(ctx, rw, tabClosedNotice())
+	}
 	repaint := func() error {
-		entries := w.Chat.Entries(chatMainTab)
+		entries := w.Chat.Entries(tab.ID)
 		clear(sent)
 		for _, e := range entries {
 			sent[e.ID] = true
@@ -297,7 +318,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	// window is the IDs the log shows now; the cache keeps trimmed entries, so an edit must not re-append them.
 	window := func() map[string]bool {
 		ids := map[string]bool{}
-		for _, e := range w.Chat.Entries(chatMainTab) {
+		for _, e := range w.Chat.Entries(tab.ID) {
 			ids[e.ID] = true
 		}
 		return ids
@@ -305,7 +326,19 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	update := func(keys []string) error {
 		shown := window()
 		for _, key := range keys {
+			if strings.HasPrefix(key, chatTabPrefix) {
+				if err := tabStrip(); err != nil {
+					return err
+				}
+				if err := closedNotice(); err != nil {
+					return err
+				}
+				continue
+			}
 			e, ok := w.Chat.Entry(key)
+			if ok && e.Tab != tab.ID {
+				continue
+			}
 			switch {
 			case key == "" || (ok && len(sent) == 0):
 				return repaint()
@@ -353,6 +386,9 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	}
 	_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if !flush(repaint()) {
+		return
+	}
+	if !flush(closedNotice()) {
 		return
 	}
 	keepalive := time.NewTicker(15 * time.Second)
@@ -408,12 +444,17 @@ func (w *Web) chatPost(rw http.ResponseWriter, r *http.Request) {
 		chatNotice(rw, "Invalid request")
 		return
 	}
+	tab, open := w.openTab(r)
+	if !open {
+		http.Error(rw, "This chat tab is closed or unknown", http.StatusNotFound)
+		return
+	}
 	text := strings.TrimSpace(in.Msg)
 	if text == "" || len([]rune(text)) > chatMaxText {
 		chatNotice(rw, fmt.Sprintf("Message must be 1 to %d characters", chatMaxText))
 		return
 	}
-	if _, err := w.Chat.Put(r.Context(), ChatEntry{Role: "user", Text: text}); err != nil {
+	if _, err := w.Chat.Put(r.Context(), ChatEntry{Role: "user", Text: text, Tab: tab.ID}); err != nil {
 		logErr(r.Context(), slog.LevelError, "store chat message", err)
 		chatNotice(rw, "Chat is unavailable; try again in a few seconds")
 		return
