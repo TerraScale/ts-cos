@@ -189,9 +189,9 @@ func releaseSignal(stream string) (rev string, unknown bool, err error) {
 	return "", false, errors.New("datastar-patch-signals event has no data line")
 }
 
-// checkReconnect signs in on every node and checks the release endpoints a browser reconnects to.
+// checkReconnect uses the run's session on every node and checks the release endpoints a browser reconnects to.
 // Until GET /version is served (not on main yet), the check skips.
-func checkReconnect(ctx context.Context, urls []string, u *e2eUser) (string, error) {
+func checkReconnect(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
 	type node struct {
 		host, base, cookie string
 		version            versionReply
@@ -199,9 +199,9 @@ func checkReconnect(ctx context.Context, urls []string, u *e2eUser) (string, err
 	var nodes []node
 	for i, base := range urls {
 		host := e2eHosts[i]
-		cookie, status, _, err := signIn(ctx, base, u.name, u.password)
-		if err != nil || status != http.StatusSeeOther {
-			return "", fmt.Errorf("login on %s: HTTP %d %v", host, status, err)
+		cookie, err := e.session(ctx, base)
+		if err != nil {
+			return "", err
 		}
 		status, _, _, body, err := e2eRequest(ctx, "GET", base+"/version", cookie, nil)
 		if err != nil {

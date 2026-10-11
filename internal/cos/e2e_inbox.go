@@ -20,7 +20,7 @@ import (
 // Inbox checks file probe items with source "e2e": publish skips them, so they wake nobody and push
 // nothing, and every check purges what it created so the user's History stays clean.
 
-func inboxCheck(run func(ctx context.Context, in *Inbox, bus *Bus, urls []string, u *e2eUser) (string, error)) func(context.Context, *E2EEnv) (string, error) {
+func inboxCheck(run func(ctx context.Context, in *Inbox, bus *Bus, urls []string, e *E2EEnv) (string, error)) func(context.Context, *E2EEnv) (string, error) {
 	return func(ctx context.Context, e *E2EEnv) (string, error) {
 		bus, err := e.bus(ctx)
 		if err != nil {
@@ -35,12 +35,7 @@ func inboxCheck(run func(ctx context.Context, in *Inbox, bus *Bus, urls []string
 		if err != nil {
 			return "", err
 		}
-		u, cleanup, err := e.tempUser(ctx, bus)
-		if err != nil {
-			return "", err
-		}
-		defer cleanup()
-		return run(ctx, in, bus, urls, u)
+		return run(ctx, in, bus, urls, e)
 	}
 }
 
@@ -79,18 +74,6 @@ func e2eInboxItem(ctx context.Context, in *Inbox, id string) (InboxItem, error) 
 	var item InboxItem
 	err = json.Unmarshal(entry.Value(), &item)
 	return item, err
-}
-
-// e2eSignIn signs the throwaway user in once; sessions work on every node.
-func e2eSignIn(ctx context.Context, base string, u *e2eUser) (string, error) {
-	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusSeeOther || cookie == "" {
-		return "", fmt.Errorf("sign-in on %s: HTTP %d, want 303 with a session", base, status)
-	}
-	return cookie, nil
 }
 
 // KV reads may be served by a replica that has not applied a write from another node yet, so checks wait for the state.
@@ -152,10 +135,10 @@ func pollE2E(ctx context.Context, timeout, every time.Duration, check func(conte
 	}
 }
 
-func checkInboxAddVisible(ctx context.Context, in *Inbox, _ *Bus, urls []string, u *e2eUser) (evidence string, err error) {
+func checkInboxAddVisible(ctx context.Context, in *Inbox, _ *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
 	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
-	cookie, err := e2eSignIn(ctx, urls[0], u)
+	cookie, err := e.session(ctx, urls[0])
 	if err != nil {
 		return "", err
 	}
@@ -174,10 +157,10 @@ func checkInboxAddVisible(ctx context.Context, in *Inbox, _ *Bus, urls []string,
 	return fmt.Sprintf("filed on %s, open on %s in %s", in.host, strings.Join(e2eHosts, ", "), time.Since(start).Round(time.Millisecond)), nil
 }
 
-func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []string, u *e2eUser) (evidence string, err error) {
+func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
 	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
-	cookie, err := e2eSignIn(ctx, urls[0], u)
+	cookie, err := e.session(ctx, urls[0])
 	if err != nil {
 		return "", err
 	}
@@ -214,10 +197,10 @@ func checkInboxAnswerCloses(ctx context.Context, in *Inbox, bus *Bus, urls []str
 	return fmt.Sprintf("leader %s; answered on %s (non-leader), closed there and gone from every /inbox", leader, e2eHosts[idx]), nil
 }
 
-func checkInboxConcurrentAnswer(ctx context.Context, in *Inbox, _ *Bus, urls []string, u *e2eUser) (evidence string, err error) {
+func checkInboxConcurrentAnswer(ctx context.Context, in *Inbox, _ *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	var ids []string
 	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
-	cookie, err := e2eSignIn(ctx, urls[0], u)
+	cookie, err := e.session(ctx, urls[0])
 	if err != nil {
 		return "", err
 	}
@@ -264,7 +247,7 @@ func checkInboxConcurrentAnswer(ctx context.Context, in *Inbox, _ *Bus, urls []s
 	return fmt.Sprintf("winner %s with option %s; statuses %v for %v", e2eHosts[win], options[win], statuses, e2eHosts), nil
 }
 
-func checkInboxDedup(ctx context.Context, in *Inbox, _ *Bus, _ []string, _ *e2eUser) (evidence string, err error) {
+func checkInboxDedup(ctx context.Context, in *Inbox, _ *Bus, _ []string, _ *E2EEnv) (evidence string, err error) {
 	var ids []string
 	defer func() { err = errors.Join(err, purgeE2EInbox(in, ids...)) }()
 	first := e2eInboxInput("dedup", InboxInput{Context: "first"})
@@ -299,7 +282,7 @@ func checkInboxDedup(ctx context.Context, in *Inbox, _ *Bus, _ []string, _ *e2eU
 }
 
 // checkInboxNeedsUserForward has a probe worker ask a NEEDS-USER question, answers it on a non-leader and waits for the reply.
-func checkInboxNeedsUserForward(ctx context.Context, in *Inbox, bus *Bus, urls []string, u *e2eUser) (evidence string, err error) {
+func checkInboxNeedsUserForward(ctx context.Context, in *Inbox, bus *Bus, urls []string, e *E2EEnv) (evidence string, err error) {
 	host := in.host
 	raw := make([]byte, 4)
 	rand.Read(raw)
@@ -373,7 +356,7 @@ func checkInboxNeedsUserForward(ctx context.Context, in *Inbox, bus *Bus, urls [
 		return "", err
 	}
 	idx := slices.IndexFunc(e2eHosts, func(h string) bool { return h != leader })
-	cookie, err := e2eSignIn(ctx, urls[0], u)
+	cookie, err := e.session(ctx, urls[0])
 	if err != nil {
 		return "", err
 	}

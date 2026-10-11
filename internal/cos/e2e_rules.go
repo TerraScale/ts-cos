@@ -78,22 +78,13 @@ func autopilotKV(ctx context.Context, b *Bus) (jetstream.KeyValue, error) {
 // nodeSession is one node's dashboard, signed in as the throwaway e2e user.
 type nodeSession struct{ host, base, cookie string }
 
-// nodeSessions signs the e2e user in on every node once, so the polls below do not repeat the login.
-func nodeSessions(ctx context.Context, urls []string, u *e2eUser) ([]nodeSession, error) {
+// nodeSessions returns the run's shared session on every node, so the polls below do not repeat the login.
+func nodeSessions(ctx context.Context, e *E2EEnv, urls []string) ([]nodeSession, error) {
 	out := make([]nodeSession, 0, len(e2eHosts))
 	for i, h := range e2eHosts {
-		cookie, status, _, err := signIn(ctx, urls[i], u.name, u.password)
-		if status == http.StatusTooManyRequests {
-			// Ten logins a minute per address and node, shared with the access checks: wait the minute out once.
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(time.Minute):
-			}
-			cookie, status, _, err = signIn(ctx, urls[i], u.name, u.password)
-		}
-		if err != nil || status != http.StatusSeeOther {
-			return nil, fmt.Errorf("login on %s: HTTP %d %v", urls[i], status, err)
+		cookie, err := e.session(ctx, urls[i])
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, nodeSession{h, urls[i], cookie})
 	}
@@ -154,15 +145,9 @@ func awaitNodes(ctx context.Context, nodes []nodeSession, window time.Duration, 
 	return hosts
 }
 
-// checkReconcilerDroppedEvent forgets one quiet PR's fingerprint, as if its webhook never arrived, and runs a
+// reconcilerDroppedEvent forgets one quiet PR's fingerprint, as if its webhook never arrived, and runs a
 // heartbeat. The reconciler must replay it and the rules engine must log it on the leader, visible on every node.
-func checkReconcilerDroppedEvent(ctx context.Context, e *E2EEnv) (string, error) {
-	return accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
-		return reconcilerDroppedEvent(ctx, e, urls, u)
-	})(ctx, e)
-}
-
-func reconcilerDroppedEvent(ctx context.Context, e *E2EEnv, urls []string, u *e2eUser) (evidence string, err error) {
+func reconcilerDroppedEvent(ctx context.Context, e *E2EEnv, urls []string) (evidence string, err error) {
 	bus, err := e.bus(ctx)
 	if err != nil {
 		return "", err
@@ -211,7 +196,7 @@ func reconcilerDroppedEvent(ctx context.Context, e *E2EEnv, urls []string, u *e2
 	if err != nil {
 		return "", err
 	}
-	nodes, err := nodeSessions(ctx, urls, u)
+	nodes, err := nodeSessions(ctx, e, urls)
 	if err != nil {
 		return "", err
 	}

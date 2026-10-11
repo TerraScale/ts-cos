@@ -28,9 +28,11 @@ func checkHeartbeatPresets(ctx context.Context, e *E2EEnv) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
-		return presetPage(ctx, urls[0], u, interval)
-	})(ctx, e)
+	urls, err := e.nodeURLs(ctx)
+	if err != nil {
+		return "", err
+	}
+	return presetPage(ctx, e, urls[0], interval)
 }
 
 // storedInterval reads the interval key the autopilot runs on; found is false when no value is stored.
@@ -82,10 +84,10 @@ func presetButtons(body string) map[int]bool {
 }
 
 // presetPage checks GET /settings on base renders every preset.
-func presetPage(ctx context.Context, base string, u *e2eUser, interval int) (string, error) {
-	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
-	if err != nil || status != http.StatusSeeOther {
-		return "", fmt.Errorf("login on %s: HTTP %d %v", base, status, err)
+func presetPage(ctx context.Context, e *E2EEnv, base string, interval int) (string, error) {
+	cookie, err := e.session(ctx, base)
+	if err != nil {
+		return "", err
 	}
 	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/settings", cookie, nil)
 	if err != nil {

@@ -16,11 +16,11 @@ import (
 // savedShare matches the savings card's summary row; the target is checked separately.
 var savedShare = regexp.MustCompile(`Saved (\d+)% of spend`)
 
-// checkTokensSavings signs in on base and checks the Tokens page shows the savings card, and that host's savings ledger has today's row.
-func checkTokensSavings(ctx context.Context, e *E2EEnv, host, base string, u *e2eUser) (string, error) {
-	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
-	if err != nil || status != http.StatusSeeOther {
-		return "", fmt.Errorf("login on %s: HTTP %d %v", base, status, err)
+// checkTokensSavings uses the run's session on base and checks the Tokens page shows the savings card, and that host's savings ledger has today's row.
+func checkTokensSavings(ctx context.Context, e *E2EEnv, host, base string) (string, error) {
+	cookie, err := e.session(ctx, base)
+	if err != nil {
+		return "", err
 	}
 	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/tokens?w=7d", cookie, nil)
 	if err != nil {

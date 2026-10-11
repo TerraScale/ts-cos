@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// checkHomeKPIs signs in on base and checks the chat-first home renders the KPI tiles.
-func checkHomeKPIs(ctx context.Context, base string, u *e2eUser) (string, error) {
-	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
-	if err != nil || status != http.StatusSeeOther {
-		return "", fmt.Errorf("login on %s: HTTP %d %v", base, status, err)
+// checkHomeKPIs uses the run's session on base and checks the chat-first home renders the KPI tiles.
+func checkHomeKPIs(ctx context.Context, e *E2EEnv, base string) (string, error) {
+	cookie, err := e.session(ctx, base)
+	if err != nil {
+		return "", err
 	}
 	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/", cookie, nil)
 	if err != nil {
@@ -29,10 +29,10 @@ func checkHomeKPIs(ctx context.Context, base string, u *e2eUser) (string, error)
 }
 
 // checkKPIsLive publishes a kpi.probe and checks that base's open /chat/events stream repaints #kpis with it within 2 s.
-func checkKPIsLive(ctx context.Context, e *E2EEnv, host, base string, u *e2eUser) (string, error) {
-	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
-	if err != nil || status != http.StatusSeeOther {
-		return "", fmt.Errorf("login on %s: HTTP %d %v", base, status, err)
+func checkKPIsLive(ctx context.Context, e *E2EEnv, host, base string) (string, error) {
+	cookie, err := e.session(ctx, base)
+	if err != nil {
+		return "", err
 	}
 	stream, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

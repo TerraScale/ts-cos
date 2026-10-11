@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -186,7 +187,9 @@ func TestCheckReconnect(t *testing.T) {
 				t.Cleanup(srv.Close)
 				urls[i] = srv.URL
 			}
-			got, err := checkReconnect(t.Context(), urls, &e2eUser{name: "e2e-test", password: "pw"})
+			env := sharedEnv(new(atomic.Int32))
+			t.Cleanup(env.closeSession)
+			got, err := checkReconnect(t.Context(), env, urls)
 			if s := statusOf(err); s != tc.want {
 				t.Fatalf("status = %s (%s), want %s", s, evidenceOf(got, err), tc.want)
 			}

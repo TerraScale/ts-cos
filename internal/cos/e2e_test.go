@@ -699,7 +699,7 @@ func TestSmokeChecksScopedToHost(t *testing.T) {
 	for _, c := range smokeChecks(e2eChecks(), "beta") {
 		ids = append(ids, c.ID)
 	}
-	want := []string{"deploy.unit.beta", "deploy.version.beta", "deploy.logs.beta", "cluster.members", "cluster.jetstream", "cluster.leader", "rules.heartbeat-leader", "access.login.tailnet", "access.login.public"}
+	want := []string{"access.login.tailnet", "access.login.public", "deploy.unit.beta", "deploy.version.beta", "deploy.logs.beta", "cluster.members", "cluster.jetstream", "cluster.leader", "rules.heartbeat-leader"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("smoke checks for beta = %v, want %v", ids, want)
 	}

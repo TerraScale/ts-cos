@@ -119,6 +119,12 @@ type E2EEnv struct {
 	// the rollout wait all chaos checks of this run share (TS-816).
 	waited, rolloutWaited time.Duration
 
+	// newUser creates the run's shared user and returns its cleanup; nil uses the bus. Replaceable in tests.
+	newUser func(ctx context.Context) (*e2eUser, func(), error)
+	// sessMu guards sess: the run's shared user and its session cookie per node URL (see session).
+	sessMu sync.Mutex
+	sess   *e2eSession
+
 	once       sync.Once
 	mainHead   e2eMain
 	mainErr    error
@@ -267,6 +273,7 @@ func runE2E(ctx context.Context, env *E2EEnv, checks []E2ECheck, args []string) 
 	report := E2EReport{StartedAt: time.Now().UTC(), Runner: env.cfg.LocalHost, Version: Version, Summary: map[string]int{"pass": 0, "fail": 0, "skip": 0}, Checks: []E2EResult{}}
 	chaos := &chaosLockRun{env: env, budget: e2eChaosWait, poll: e2eChaosPoll}
 	defer chaos.close()
+	defer env.closeSession()
 	for _, c := range checks {
 		if smoke && (!c.Smoke || c.Chaos) || len(filter) > 0 && !slicesHasPrefix(filter, c.ID) || c.OnDemand && !slices.Contains(filter, c.ID) {
 			continue
@@ -313,6 +320,11 @@ func slicesHasPrefix(prefixes []string, id string) bool {
 func e2eChecks() []E2ECheck {
 	// First, so the leader's 60 s missing window overlaps the rest of the suite.
 	checks := []E2ECheck{{ID: "nodes.collector-stop", Stream: "TS-825", Run: checkNodeCollectorStop}}
+	// The login checks run first: their sign-ins fill the run's shared session, which the checks below reuse.
+	checks = append(checks,
+		E2ECheck{ID: "access.login.tailnet", Stream: "TS-810", Smoke: true, Run: nodesCheck(checkLoginTailnet)},
+		E2ECheck{ID: "access.login.public", Stream: "TS-810", Smoke: true, Run: checkLoginPublic},
+	)
 	for _, h := range e2eHosts {
 		checks = append(checks,
 			E2ECheck{ID: "deploy.unit." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkUnit(ctx, e, h) }},
@@ -320,19 +332,15 @@ func e2eChecks() []E2ECheck {
 			E2ECheck{ID: "deploy.restarts." + h, Stream: "TS-810", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkRestarts(ctx, e, h) }},
 			E2ECheck{ID: "deploy.logs." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkLogs(ctx, e, h) }},
 			E2ECheck{ID: "deploy.watchdog." + h, Stream: "TS-818", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkWatchdog(ctx, e, h) }},
-			E2ECheck{ID: "home.kpis." + h, Stream: "TS-824", Run: accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
-				return checkHomeKPIs(ctx, urls[slices.Index(e2eHosts, h)], u)
+			E2ECheck{ID: "home.kpis." + h, Stream: "TS-824", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
+				return checkHomeKPIs(ctx, e, urls[slices.Index(e2eHosts, h)])
 			})},
-			E2ECheck{ID: "home.kpis.live." + h, Stream: "TS-824", Run: func(ctx context.Context, e *E2EEnv) (string, error) {
-				return accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
-					return checkKPIsLive(ctx, e, h, urls[slices.Index(e2eHosts, h)], u)
-				})(ctx, e)
-			}},
-			E2ECheck{ID: "tokens.savings." + h, Stream: "TS-828", Run: func(ctx context.Context, e *E2EEnv) (string, error) {
-				return accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
-					return checkTokensSavings(ctx, e, h, urls[slices.Index(e2eHosts, h)], u)
-				})(ctx, e)
-			}},
+			E2ECheck{ID: "home.kpis.live." + h, Stream: "TS-824", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
+				return checkKPIsLive(ctx, e, h, urls[slices.Index(e2eHosts, h)])
+			})},
+			E2ECheck{ID: "tokens.savings." + h, Stream: "TS-828", Run: nodesCheck(func(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
+				return checkTokensSavings(ctx, e, h, urls[slices.Index(e2eHosts, h)])
+			})},
 		)
 	}
 	for _, h := range e2eHosts {
@@ -353,7 +361,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "cluster.leader-kill", Stream: "TS-810", Chaos: true, OnDemand: true, Run: checkLeaderKill},
 		E2ECheck{ID: "rules.heartbeat-leader", Stream: "TS-813", Smoke: true, Run: checkHeartbeatLeader},
 		E2ECheck{ID: "rules.heartbeat-presets", Stream: "TS-813", Run: checkHeartbeatPresets},
-		E2ECheck{ID: "rules.reconciler-dropped-event", Stream: "TS-813", Run: checkReconcilerDroppedEvent},
+		E2ECheck{ID: "rules.reconciler-dropped-event", Stream: "TS-813", Run: nodesCheck(reconcilerDroppedEvent)},
 		E2ECheck{ID: "rules.red-ci-wake", Stream: "TS-813", Run: pending("TS-813: needs a sandbox PR with red CI and a throwaway thread; covered by TestClassify/TestRulesEngineHandle and the 2026-10-11 sandbox live check (PR #19)")},
 		E2ECheck{ID: "rules.ready-merge-once", Stream: "TS-813", Run: pending("TS-813: a real merge cannot run inside e2e; covered by TestClassify merge-ready and gate.sh merges")},
 		E2ECheck{ID: "threads.no-haiku", Stream: "TS-812", Run: checkNoHaikuThreads},
@@ -362,14 +370,13 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "failure.t3-down", Stream: "TS-812", Run: checkT3Down},
 		E2ECheck{ID: "behavior.advisor-principle", Stream: "TS-817", Run: checkAdvisorPrinciple},
 		E2ECheck{ID: "memory.recall", Stream: "TS-828", Run: checkMemoryRecall},
-		E2ECheck{ID: "access.login.tailnet", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginTailnet)},
-		E2ECheck{ID: "access.login.public", Stream: "TS-810", Smoke: true, Run: accessCheck(checkLoginPublic)},
+		// These change auth state (failures, lockout, logout, password), so each gets its own throwaway user.
 		E2ECheck{ID: "access.wrong-password", Stream: "TS-810", Run: accessCheck(checkWrongPassword)},
 		E2ECheck{ID: "access.lockout", Stream: "TS-810", Run: accessCheck(checkLockout)},
-		E2ECheck{ID: "access.session-cross-node", Stream: "TS-810", Run: accessCheck(checkSessionCrossNode)},
+		E2ECheck{ID: "access.session-cross-node", Stream: "TS-810", Run: nodesCheck(checkSessionCrossNode)},
 		E2ECheck{ID: "access.logout", Stream: "TS-810", Run: accessCheck(checkLogout)},
 		E2ECheck{ID: "access.password-change", Stream: "TS-810", Run: accessCheck(checkPasswordChange)},
-		E2ECheck{ID: "deploy.reconnect", Stream: "TS-818", Run: accessCheck(checkReconnect)},
+		E2ECheck{ID: "deploy.reconnect", Stream: "TS-818", Run: nodesCheck(checkReconnect)},
 		E2ECheck{ID: "deploy.canary", Stream: "TS-818", Run: checkCanary},
 		E2ECheck{ID: "deploy.rollback", Stream: "TS-818", Run: checkRollback},
 		E2ECheck{ID: "gate.self-change", Stream: "TS-817", Run: checkSelfGate},

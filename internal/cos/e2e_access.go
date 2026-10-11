@@ -209,8 +209,95 @@ func accessCheck(run func(context.Context, []string, *e2eUser) (string, error)) 
 	}
 }
 
-// loginWorks checks the form, a login and the signed-in dashboard on base.
-func loginWorks(ctx context.Context, base string, u *e2eUser) error {
+// e2eSession is the run's shared throwaway user and its session cookie per base URL.
+type e2eSession struct {
+	user    *e2eUser
+	cleanup func()
+	cookies map[string]string
+}
+
+// session returns the run's shared session on base. The shared user signs in once per base, so the
+// dashboard's login limit (10 POSTs a minute per address and node) is not spent by every check.
+func (e *E2EEnv) session(ctx context.Context, base string) (string, error) {
+	e.sessMu.Lock()
+	defer e.sessMu.Unlock()
+	if e.sess == nil {
+		if err := e.openSession(ctx); err != nil {
+			return "", err
+		}
+	}
+	if cookie, ok := e.sess.cookies[base]; ok {
+		return cookie, nil
+	}
+	u := e.sess.user
+	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
+	if status == http.StatusTooManyRequests {
+		// Wait the minute out once; the login limit is per address and node.
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(time.Minute):
+		}
+		cookie, status, _, err = signIn(ctx, base, u.name, u.password)
+	}
+	if err != nil || status != http.StatusSeeOther {
+		return "", fmt.Errorf("login on %s: HTTP %d %v", base, status, err)
+	}
+	e.sess.cookies[base] = cookie
+	return cookie, nil
+}
+
+// openSession creates the run's shared user, unless a test replaced newUser. Callers hold sessMu.
+func (e *E2EEnv) openSession(ctx context.Context) error {
+	newUser := e.newUser
+	if newUser == nil {
+		newUser = e.bindTempUser
+	}
+	u, cleanup, err := newUser(ctx)
+	if err != nil {
+		return err
+	}
+	e.sess = &e2eSession{user: u, cleanup: cleanup, cookies: map[string]string{}}
+	return nil
+}
+
+// bindTempUser creates a throwaway user on its own bus; its cleanup deletes the user before the bus closes.
+func (e *E2EEnv) bindTempUser(ctx context.Context) (*e2eUser, func(), error) {
+	bus, err := e.bus(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	u, cleanup, err := e.tempUser(ctx, bus)
+	if err != nil {
+		bus.Close()
+		return nil, nil, err
+	}
+	return u, func() { cleanup(); bus.Close() }, nil
+}
+
+// closeSession deletes the run's shared user with its sessions; runE2E defers it so a cancelled run still cleans up.
+func (e *E2EEnv) closeSession() {
+	e.sessMu.Lock()
+	defer e.sessMu.Unlock()
+	if e.sess != nil {
+		e.sess.cleanup()
+		e.sess = nil
+	}
+}
+
+// nodesCheck wraps a check that needs every node's dashboard URL.
+func nodesCheck(run func(context.Context, *E2EEnv, []string) (string, error)) func(context.Context, *E2EEnv) (string, error) {
+	return func(ctx context.Context, e *E2EEnv) (string, error) {
+		urls, err := e.nodeURLs(ctx)
+		if err != nil {
+			return "", err
+		}
+		return run(ctx, e, urls)
+	}
+}
+
+// loginWorks checks the form, the run's sign-in and the signed-in dashboard on base.
+func loginWorks(ctx context.Context, e *E2EEnv, base string) error {
 	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/login", "", nil)
 	if err != nil {
 		return err
@@ -218,12 +305,9 @@ func loginWorks(ctx context.Context, base string, u *e2eUser) error {
 	if status != http.StatusOK || !strings.Contains(body, `action="/login"`) {
 		return fmt.Errorf("GET %s/login: HTTP %d without the login form", base, status)
 	}
-	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
+	cookie, err := e.session(ctx, base)
 	if err != nil {
 		return err
-	}
-	if status != http.StatusSeeOther {
-		return fmt.Errorf("login on %s: HTTP %d, want 303", base, status)
 	}
 	if ok, err := signedIn(ctx, base, cookie); err != nil || !ok {
 		return fmt.Errorf("session from %s does not open its dashboard: %v", base, err)
@@ -231,17 +315,17 @@ func loginWorks(ctx context.Context, base string, u *e2eUser) error {
 	return nil
 }
 
-func checkLoginTailnet(ctx context.Context, urls []string, u *e2eUser) (string, error) {
+func checkLoginTailnet(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
 	for _, base := range urls {
-		if err := loginWorks(ctx, base, u); err != nil {
+		if err := loginWorks(ctx, e, base); err != nil {
 			return "", err
 		}
 	}
 	return fmt.Sprintf("login form, sign-in and dashboard work on %v", e2eHosts), nil
 }
 
-func checkLoginPublic(ctx context.Context, _ []string, u *e2eUser) (string, error) {
-	if err := loginWorks(ctx, e2ePublicURL, u); err != nil {
+func checkLoginPublic(ctx context.Context, e *E2EEnv) (string, error) {
+	if err := loginWorks(ctx, e, e2ePublicURL); err != nil {
 		return "", err
 	}
 	return "login form, sign-in and dashboard work on " + e2ePublicURL, nil
@@ -285,10 +369,10 @@ func checkLockout(ctx context.Context, urls []string, u *e2eUser) (string, error
 	return fmt.Sprintf("%d failures across nodes lock the account; the right password on %s is refused with 429", lockAfter, base), nil
 }
 
-func checkSessionCrossNode(ctx context.Context, urls []string, u *e2eUser) (string, error) {
-	cookie, status, _, err := signIn(ctx, urls[1], u.name, u.password)
-	if err != nil || status != http.StatusSeeOther {
-		return "", fmt.Errorf("login on %s: HTTP %d %v", urls[1], status, err)
+func checkSessionCrossNode(ctx context.Context, e *E2EEnv, urls []string) (string, error) {
+	cookie, err := e.session(ctx, urls[1])
+	if err != nil {
+		return "", err
 	}
 	for _, base := range append(urls, e2ePublicURL) {
 		if ok, err := signedIn(ctx, base, cookie); err != nil || !ok {
