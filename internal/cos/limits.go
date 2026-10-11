@@ -249,6 +249,7 @@ func limitCredentials(files []cliproxyAuthFile, now time.Time) []LimitCredential
 		case c.State == "active" && f.Status == "error":
 			c.State, c.Reason = "error", f.StatusMessage
 		}
+		slices.SortFunc(c.Models, func(a, b LimitModel) int { return cmp.Compare(a.Model, b.Model) })
 		if f.Provider == "claude" && f.Quota != nil {
 			c.Windows = limitWindows(f.Quota.Signals)
 		}
@@ -301,6 +302,7 @@ type limitsPoller struct {
 	publish func(context.Context, Event) error
 	file    func(context.Context, InboxInput) error
 	now     func() time.Time
+	timeout time.Duration
 
 	token    string      // management key, read once and dropped on 401
 	last     LimitsState // last published state, for change detection
@@ -312,7 +314,7 @@ type limitsPoller struct {
 // runLimits polls CLIProxyAPI on the leader only, so each change is published once per cluster.
 func runLimits(ctx context.Context, cfg Config, bus *Bus) {
 	p := &limitsPoller{
-		client: &http.Client{}, baseURL: cliproxyURL, key: cliproxyKey, now: time.Now,
+		client: &http.Client{}, baseURL: cliproxyURL, key: cliproxyKey, now: time.Now, timeout: limitsTimeout,
 		store: func(ctx context.Context, s LimitsState) error {
 			kv, err := openLimits(ctx, bus)
 			if err != nil {
@@ -392,7 +394,7 @@ func (p *limitsPoller) poll(ctx context.Context) {
 	if p.failures >= limitsDownAfter && !p.filed {
 		err := p.file(ctx, InboxInput{
 			Kind: "fyi", Title: "CLIProxyAPI unreachable: COS holds messages to every thread until it answers",
-			Context: state.Error, Source: "limits", Key: "limits-unreachable",
+			Context: state.Error, Source: "cos", Key: "limits-unreachable",
 		})
 		if err != nil {
 			logErr(ctx, slog.LevelError, "COS limits inbox", err)
@@ -405,14 +407,16 @@ func (p *limitsPoller) poll(ctx context.Context) {
 // fetch returns the state for one successful read, or the public reason it failed.
 func (p *limitsPoller) fetch(ctx context.Context, now time.Time) (LimitsState, error) {
 	if p.token == "" {
-		key, err := p.key(ctx)
+		keyCtx, cancel := context.WithTimeout(ctx, p.timeout)
+		key, err := p.key(keyCtx)
+		cancel()
 		if err != nil {
 			logErr(ctx, slog.LevelError, "COS CLIProxyAPI key unavailable", err)
 			return LimitsState{}, errors.New("CLIProxyAPI: management key unavailable")
 		}
 		p.token = key
 	}
-	ctx, cancel := context.WithTimeout(ctx, limitsTimeout)
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/v0/management/auth-files", nil)
 	if err != nil {
@@ -456,6 +460,9 @@ func limitsChanged(a, b LimitsState) bool {
 				return true
 			}
 		}
+		if !slices.EqualFunc(x.Windows, y.Windows, func(m, n LimitWindow) bool { return m.Name == n.Name && m.Status == n.Status }) {
+			return true
+		}
 	}
 	return false
 }
@@ -474,11 +481,17 @@ type limitsEventData struct {
 }
 
 type limitsEventCredential struct {
-	Provider string             `json:"provider"`
-	Account  string             `json:"account"`
-	State    string             `json:"state"`
-	Until    time.Time          `json:"until,omitzero"`
-	Models   []limitsEventModel `json:"models,omitempty"`
+	Provider string              `json:"provider"`
+	Account  string              `json:"account"`
+	State    string              `json:"state"`
+	Until    time.Time           `json:"until,omitzero"`
+	Models   []limitsEventModel  `json:"models,omitempty"`
+	Windows  []limitsEventWindow `json:"windows,omitempty"`
+}
+
+type limitsEventWindow struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
 }
 
 type limitsEventModel struct {
@@ -495,6 +508,9 @@ func limitsEvent(s LimitsState) (Event, error) {
 		for _, m := range c.Models {
 			ec.Models = append(ec.Models, limitsEventModel{Model: m.Model, State: m.State, Until: m.Until})
 		}
+		for _, w := range c.Windows {
+			ec.Windows = append(ec.Windows, limitsEventWindow{Name: w.Name, Status: w.Status})
+		}
 		d.Credentials = append(d.Credentials, ec)
 	}
 	data, err := json.Marshal(d)
@@ -503,7 +519,7 @@ func limitsEvent(s LimitsState) (Event, error) {
 	}
 	if len(data) > eventDataMax {
 		for i := range d.Credentials {
-			d.Credentials[i].Models = nil
+			d.Credentials[i].Models, d.Credentials[i].Windows = nil, nil
 		}
 		if data, err = json.Marshal(d); err != nil {
 			return Event{}, err
