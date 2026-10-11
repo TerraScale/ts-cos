@@ -50,6 +50,7 @@ const (
 	SourceInbox   EventSource = "inbox"
 	SourceDeploy  EventSource = "deploy"
 	SourceBudget  EventSource = "budget"
+	SourceCOS     EventSource = "cos"
 )
 
 type EventKind string
@@ -90,6 +91,9 @@ const (
 	// Token budgets, one per crossed mark; Data is budgetData.
 	KindBudgetWarn     EventKind = "budget.warn"
 	KindBudgetExceeded EventKind = "budget.exceeded"
+
+	// Published by a full `cos e2e` run. Data: {"pass":n,"fail":n,"skip":n,"runner":host}.
+	KindE2EReport EventKind = "e2e.report"
 )
 
 var eventKinds = map[EventKind]EventSource{
@@ -103,6 +107,7 @@ var eventKinds = map[EventKind]EventSource{
 	KindDeployStarted: SourceDeploy, KindNodeUpdated: SourceDeploy, KindGateFailed: SourceDeploy,
 	KindDeployRolledBack: SourceDeploy, KindDeployCompleted: SourceDeploy,
 	KindBudgetWarn: SourceBudget, KindBudgetExceeded: SourceBudget,
+	KindE2EReport: SourceCOS,
 }
 
 // Severity is the source's hint; the rules engine makes the final classification.

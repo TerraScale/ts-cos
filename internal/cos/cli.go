@@ -321,7 +321,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		return err
 	}
 	server := &http.Server{Handler: w.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
-	pollDone, chatDone := make(chan struct{}), make(chan struct{})
+	pollDone, chatDone, kpiDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() { defer close(pollDone); w.Poll(ctx, cfg, bus) }()
 	behaviorDone := make(chan struct{})
 	go func() { defer close(behaviorDone); RunBehavior(ctx, cfg, bus, behaviors) }()
@@ -342,7 +342,8 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 		go worker(ctx, cfg, bus)
 	}
 	go func() { defer close(chatDone); w.Chat.Run(ctx, bus) }()
-	defer func() { cancel(); <-pollDone; <-chatDone }()
+	go func() { defer close(kpiDone); w.KPI.Run(ctx, bus) }()
+	defer func() { cancel(); <-pollDone; <-chatDone; <-kpiDone }()
 	go releasesOf(cfg).watchdog(ctx, CurrentBuild(cfg).Revision, trialTimeout,
 		func(ctx context.Context) []string { return bus.health(ctx, probe) }, cancel)
 	slog.Info("COS dashboard listening", "address", l.Addr().String())

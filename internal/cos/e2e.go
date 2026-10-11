@@ -3,12 +3,15 @@ package cos
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +50,14 @@ type E2EReport struct {
 	Version    string         `json:"version"`
 	Summary    map[string]int `json:"summary"`
 	Checks     []E2EResult    `json:"checks"`
+}
+
+// e2eReportData is the e2e.report payload the dashboard KPI tiles fold.
+type e2eReportData struct {
+	Pass   int    `json:"pass"`
+	Fail   int    `json:"fail"`
+	Skip   int    `json:"skip"`
+	Runner string `json:"runner"`
 }
 
 // e2eSkip marks a check whose feature is not deployed yet; it is reported as "skip", never "fail".
@@ -159,6 +170,9 @@ func e2eClip(s string, n int) string {
 func E2E(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	env := &E2EEnv{cfg: cfg, run: cfg.hostRun, main: func(ctx context.Context) (e2eMain, error) { return mainHead(ctx, cfg) }}
 	report := runE2E(ctx, env, e2eChecks(), args)
+	if len(args) == 0 {
+		publishE2EReport(ctx, cfg, report)
+	}
 	if err := output(w, report); err != nil {
 		return err
 	}
@@ -174,6 +188,46 @@ func E2E(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 func E2ESmoke(ctx context.Context, cfg Config, host, revision string) E2EReport {
 	env := &E2EEnv{cfg: cfg, run: cfg.hostRun, main: func(context.Context) (e2eMain, error) { return e2eMain{SHA: revision}, nil }}
 	return runE2E(ctx, env, smokeChecks(e2eChecks(), host), []string{"--smoke"})
+}
+
+// publishE2EReport records a full run on COS_EVENTS for the KPI tiles. Best effort: a failure is
+// logged and never changes the run's result.
+func publishE2EReport(ctx context.Context, cfg Config, report E2EReport) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	bus, err := ConnectBus(ctx, cfg)
+	if err != nil {
+		slog.Warn("publish e2e report", "error", err)
+		return
+	}
+	defer bus.Close()
+	js, err := bus.JetStream()
+	if err != nil {
+		slog.Warn("publish e2e report", "error", err)
+		return
+	}
+	data, err := json.Marshal(e2eReportData{Pass: report.Summary["pass"], Fail: report.Summary["fail"], Skip: report.Summary["skip"], Runner: report.Runner})
+	if err != nil {
+		slog.Warn("publish e2e report", "error", err)
+		return
+	}
+	severity := SeverityInfo
+	if report.Summary["fail"] > 0 {
+		severity = SeverityWarn
+	}
+	e := Event{
+		ID:       NewEventID(SourceCOS, "e2e", report.Runner, strconv.FormatInt(report.StartedAt.UnixNano(), 10)),
+		Source:   SourceCOS,
+		Kind:     KindE2EReport,
+		Time:     report.StartedAt,
+		Severity: severity,
+		Summary:  fmt.Sprintf("e2e %d pass, %d fail, %d skip", report.Summary["pass"], report.Summary["fail"], report.Summary["skip"]),
+		Host:     report.Runner,
+		Data:     data,
+	}
+	if _, err := PublishEvent(ctx, js, e); err != nil {
+		slog.Warn("publish e2e report", "error", err)
+	}
 }
 
 func smokeChecks(checks []E2ECheck, host string) []E2ECheck {
@@ -236,6 +290,9 @@ func e2eChecks() []E2ECheck {
 			E2ECheck{ID: "deploy.restarts." + h, Stream: "TS-810", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkRestarts(ctx, e, h) }},
 			E2ECheck{ID: "deploy.logs." + h, Stream: "TS-810", Smoke: true, Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkLogs(ctx, e, h) }},
 			E2ECheck{ID: "deploy.watchdog." + h, Stream: "TS-818", Run: func(ctx context.Context, e *E2EEnv) (string, error) { return checkWatchdog(ctx, e, h) }},
+			E2ECheck{ID: "home.kpis." + h, Stream: "TS-824", Run: accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
+				return checkHomeKPIs(ctx, urls[slices.Index(e2eHosts, h)], u)
+			})},
 		)
 	}
 	for _, h := range e2eHosts {

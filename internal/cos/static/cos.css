@@ -1010,3 +1010,32 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* 21. Home pane switching (TS-824): >=960px shows chat + aside (icon rail below 1280px); below 960px the tab bar picks one pane */
+.skeleton-bar {
+  display: block; height: var(--s-3); margin-top: var(--s-2);
+  border-radius: var(--r-1);
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--hover) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: skeleton 1.4s linear infinite;
+}
+.skeleton-bar + .skeleton-bar { width: 75%; }
+.skeleton-bar:last-child { width: 50%; }
+@keyframes skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.app-aside .pane + .pane { margin-top: var(--s-5); }
+/* Makes the chat column the container J's §14 @container rule queries; height is untouched (inline axis only) */
+#pane-chat { container-type: inline-size; }
+/* auto-fit gives 4+2 in an 830px chat column; a fixed 3 columns gives 3x2 from 40rem up */
+@container (min-width: 40rem) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.app-main > .kpis { padding: var(--s-3) var(--s-4) 0; }
+@media (max-width: 959px) {
+  .app-aside .pane { display: none; }
+  body[data-tab=inbox] .app-main, body[data-tab=nodes] .app-main, body[data-tab=work] .app-main { display: none; }
+  body[data-tab=inbox] .app-aside, body[data-tab=nodes] .app-aside, body[data-tab=work] .app-aside { display: block; overflow-y: auto; padding: var(--s-4); }
+  body[data-tab=inbox] #pane-inbox, body[data-tab=nodes] #pane-nodes, body[data-tab=work] #pane-work { display: block; }
+}
+/* Phones: one row of tiles that scrolls sideways, so the chat keeps its height */
+@media (max-width: 959px) {
+  .kpis { display: flex; overflow-x: auto; flex: none; }
+  .kpis .kpi { flex: 0 0 9rem; }
+}

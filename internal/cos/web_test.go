@@ -56,6 +56,17 @@ func TestChatSSEHeaderFollowsState(t *testing.T) {
 	if !strings.Contains(header, "event: datastar-patch-elements\n") || !strings.Contains(header, `<header id="chat-head"`) || !strings.Contains(header, "0 running") {
 		t.Fatal(header)
 	}
+	if tiles := readEvent(); !strings.Contains(tiles, `id="kpis"`) {
+		t.Fatal(tiles)
+	}
+	for _, badge := range []string{`id="side-inbox"`, `id="tab-inbox"`} {
+		if event := readEvent(); !strings.Contains(event, badge) {
+			t.Fatal(event)
+		}
+	}
+	if inboxPane := readEvent(); !strings.Contains(inboxPane, `id="inbox"`) {
+		t.Fatal(inboxPane)
+	}
 	if messages := readEvent(); !strings.Contains(messages, `<div id="messages"`) {
 		t.Fatal(messages)
 	}
@@ -99,9 +110,17 @@ func TestChatRoutes(t *testing.T) {
 	}
 	r := serve("GET", "/", false, "")
 	body := r.Body.String()
-	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `data-init="@get(&#39;/release&#39;`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", cssPath} {
+	for _, want := range []string{`data-init="@get('/chat/events', {retry: 'always'`, `data-init="@get(&#39;/release&#39;`, `id="messages"`, `href="/settings"`, `id="inbox-slot"`, `id="heartbeat-slot"`, "0 running", "0 PRs waiting", `id="kpis"`, cssPath} {
 		if r.Code != http.StatusOK || !strings.Contains(body, want) {
 			t.Fatal(r.Code, "missing", want)
+		}
+	}
+	if n := strings.Count(body, `class="kpi"`); n != 6 {
+		t.Fatalf("home renders %d KPI tiles, want 6", n)
+	}
+	for _, want := range []string{`id="pane-chat"`, `id="pane-inbox"`, `id="pane-nodes"`, `id="pane-work"`, `class="tabbar"`, `class="app-aside"`, `id="side-inbox"`, `id="tab-inbox"`} {
+		if !strings.Contains(body, want) {
+			t.Fatal("home missing", want)
 		}
 	}
 	inboxPage := serve("GET", "/inbox", false, "")

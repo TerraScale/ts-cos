@@ -23,10 +23,11 @@ type Web struct {
 	watchDone   chan struct{}
 	inbox       atomic.Pointer[Inbox]
 	Chat        *Chat
+	KPI         *KPIBoard
 }
 
 func NewWeb(s *Store, auth *Auth) *Web {
-	return &Web{Store: s, auth: auth, Chat: NewChat(), clients: map[chan struct{}]struct{}{}}
+	return &Web{Store: s, auth: auth, Chat: NewChat(), KPI: &KPIBoard{}, clients: map[chan struct{}]struct{}{}}
 }
 func (w *Web) Broadcast() {
 	w.mu.Lock()
