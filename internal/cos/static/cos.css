@@ -638,6 +638,7 @@ body.app {
 .icon-lg { width: 20px; height: 20px; }
 @media (min-width: 960px) {
   .app-body { grid-template-columns: var(--sidebar) minmax(0, 1fr); }
+  .app-body:has(> .app-aside) { grid-template-columns: var(--sidebar) minmax(0, 1fr) 20rem; }
   .sidebar {
     display: flex; flex-direction: column; gap: var(--s-4);
     overflow-y: auto;
@@ -645,9 +646,6 @@ body.app {
     border-right: 1px solid var(--border);
     background: var(--surface);
   }
-}
-@media (min-width: 1280px) {
-  .app-body:has(> .app-aside) { grid-template-columns: var(--sidebar) minmax(0, 1fr) 22rem; }
   .app-aside {
     display: block; overflow-y: auto;
     container-type: inline-size;
@@ -655,6 +653,24 @@ body.app {
     padding: var(--s-4);
     background: var(--surface);
   }
+}
+/* Tablets and small laptops: the sidebar is an icon rail so main and the aside sit side by side. */
+@media (min-width: 960px) and (max-width: 1279.98px) {
+  .app-body { --sidebar: 4rem; }
+  .sidebar { padding: var(--s-3) var(--s-2); }
+  .side-section + .side-section { border-top: 1px solid var(--border); padding-top: var(--s-4); }
+  .side-title, .side-link > span:not(.badge) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .side-link { position: relative; justify-content: center; min-height: 40px; padding: 0; }
+  .side-link .badge {
+    position: absolute; top: 2px; right: 2px; margin: 0;
+    min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px;
+  }
+}
+@media (min-width: 1280px) {
+  .app-body:has(> .app-aside) { grid-template-columns: var(--sidebar) minmax(0, 1fr) 22rem; }
 }
 
 /* 13. Mobile bottom tab bar (phones only) */

@@ -42,7 +42,7 @@ func TestCSSServedPublicWithCacheHeaders(t *testing.T) {
 	if rec := get("/static/missing.png"); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing png = %d", rec.Code)
 	}
-	for file, typ := range map[string]string{"icon.svg": "image/svg+xml", "icon-192.png": "image/png"} {
+	for file, typ := range map[string]string{"icon.svg": "image/svg+xml", "icon-192.png": "image/png", "badge.svg": "image/svg+xml", "badge-96.png": "image/png"} {
 		rec := get("/static/" + file)
 		if rec.Code != 200 || rec.Header().Get("Content-Type") != typ || rec.Header().Get("Cache-Control") != "public, max-age=86400" ||
 			rec.Header().Get("X-Content-Type-Options") != "nosniff" {
