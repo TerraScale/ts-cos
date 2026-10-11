@@ -51,18 +51,24 @@ func init() {
 	}
 }
 
-// Model rules (user 2026-10-10): Haiku is always 5.5; the same failure twice escalates.
+// Model rules (user 2026-10-11): threads run Opus 5.5 at high effort; the same failure twice escalates to xhigh, never to Haiku.
 var (
-	modelHaiku     = map[string]any{"instanceId": "claudeAgent", "model": "claude-haiku-5-5"}
 	modelOpusHigh  = map[string]any{"instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": []any{map[string]any{"id": "effort", "value": "high"}}}
 	modelOpusXHigh = map[string]any{"instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": []any{map[string]any{"id": "effort", "value": "xhigh"}}}
 )
 
-func escalatedModel(model string) map[string]any {
-	if strings.Contains(model, "haiku") {
-		return modelOpusHigh
+// wakeText renders a wake with the advisor split line; every wake ends with it.
+func wakeText(name string, data any) (string, error) {
+	b := CurrentBehavior()
+	text, err := b.Render(name, data)
+	if err != nil {
+		return "", err
 	}
-	return modelOpusXHigh
+	split, err := b.Render("advise_split", struct{}{})
+	if err != nil {
+		return "", err
+	}
+	return text + "\n" + split, nil
 }
 
 // Decision is one classified outcome with the reason shown in the feed.
@@ -162,16 +168,16 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 		return []Decision{d(ClassRecord, rule, why)}
 	}
 	out := []Decision{}
-	if owner != nil && strings.Contains(owner.Model, "haiku-4-5") {
-		x := d(ClassAct, "model-haiku-5-5", "Haiku is always 5.5, never 4.5")
-		x.Model = modelHaiku
+	if owner != nil && owner.Lineage == nil && strings.Contains(owner.Model, "haiku") {
+		x := d(ClassAct, "model-opus-thread", "threads run Opus 5.5; Haiku 5.5 only as delegate_task subagents")
+		x.Model = modelOpusHigh
 		out = append(out, x)
 	}
 	wake := func(rule, reason, sha string, data wakeData) []Decision {
 		if owner == nil {
 			return append(out, d(ClassEscalate, "orphan", reason+"; no live thread owns it"))
 		}
-		text, err := CurrentBehavior().Render("wake_"+rule, data)
+		text, err := wakeText("wake_"+rule, data)
 		if err != nil {
 			return append(out, d(ClassRecord, rule, "template failed: "+err.Error()))
 		}
@@ -182,7 +188,7 @@ func Classify(e Event, live Live, pr *PRFacts, memory WakeMemory, paused map[str
 			return append(out, d(ClassRecord, rule, "already woken: "+reason))
 		case memory.Sig == x.Sig && memory.Count >= 1:
 			m := d(ClassAct, "escalate-model", "same failure twice: "+reason)
-			m.Model = escalatedModel(owner.Model)
+			m.Model = modelOpusXHigh
 			// The model switches first, so the escalated model handles this wake.
 			return append(out, m, x, d(ClassEscalate, "same-failure-twice", reason+" (twice; model escalated)"))
 		}

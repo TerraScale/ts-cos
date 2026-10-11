@@ -25,7 +25,7 @@ var rulesPaused = map[string]bool{"TS-2": true}
 func rulesLive() Live {
 	return Live{
 		Fleet: []HostFleet{{Host: "beta", Threads: []FleetThread{
-			{ThreadID: "t1", Title: "TS-1 · ts-cos: x", Branch: "cos/ts-1-x", Model: "claude-haiku-5-5", PRs: []ThreadPR{{URL: rulesPRURL}}},
+			{ThreadID: "t1", Title: "TS-1 · ts-cos: x", Branch: "cos/ts-1-x", Model: "claude-opus-5-5", PRs: []ThreadPR{{URL: rulesPRURL}}},
 			{ThreadID: "t2", Title: "TS-2 · ts-cos: y", Branch: "cos/ts-2-y", Model: "claude-opus-5-5"},
 			{ThreadID: "t3", Title: "TS-1 old", Model: "claude-haiku-4-5"},
 			{ThreadID: "sub", Title: "TS-1 sub", Branch: "cos/ts-1-x", Lineage: &struct {
@@ -305,12 +305,12 @@ func TestClassify(t *testing.T) {
 			},
 		},
 		{
-			name:  "haiku 4.5 owner is moved to 5.5 on completion",
+			name:  "haiku owner is moved to opus 5.5 high on completion",
 			event: Event{ID: "t3:turn-10", Source: SourceT3, Kind: KindTurnCompleted, Summary: "done", Host: "beta", Thread: "t3"},
-			want:  []Decision{{Class: ClassAct, Rule: "model-haiku-5-5"}, {Class: ClassRecord, Rule: "progress"}},
+			want:  []Decision{{Class: ClassAct, Rule: "model-opus-thread"}, {Class: ClassRecord, Rule: "progress"}},
 			check: func(t *testing.T, got []Decision) {
-				if got[0].Model["model"] != "claude-haiku-5-5" {
-					t.Errorf("Model = %v, want claude-haiku-5-5", got[0].Model)
+				if got[0].Model["model"] != "claude-opus-5-5" {
+					t.Errorf("Model = %v, want claude-opus-5-5", got[0].Model)
 				}
 			},
 		},

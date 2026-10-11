@@ -510,8 +510,8 @@ event is classified with zero tokens:
 |---|---|---|
 | ACT | READY `cos/` or `cos-hold/` PR of a running ticket | squash-merge |
 | ACT | CI failure, requested changes, CONFLICT, > 1,500 changed lines, failed or interrupted run, slice merged (`Part of`) | templated wake message queued to the owning thread, once per head commit |
-| ACT | the same failure after a new push | model escalation (Haiku 5.5 → Opus 5.5 high → xhigh) plus ESCALATE |
-| ACT | a thread on Haiku 4.5 | switch to Haiku 5.5 |
+| ACT | the same failure after a new push | model escalation (Opus 5.5 high → xhigh) plus ESCALATE |
+| ACT | a top-level thread on any Haiku model | switch to Opus 5.5 high |
 | RECORD | paused tickets, tickets with no open thread or PR (`not-running`), progress, main changes | feed only |
 | ESCALATE | worker question or pending request, orphan PR, same failure twice | `cos.autopilot.log.escalate` for the COS inbox |
 
@@ -557,6 +557,18 @@ and the other rules still run.
 
 **Action-log writes** retry three times with backoff (1 s, then 3 s), 5 s per attempt.
 A WARN marks the first retry; an ERROR is logged only when every attempt fails.
+
+**Model policy (TS-820).** Every thread is an Opus 5.5 advisor at high effort, and
+xhigh only after the same failure twice. Haiku 5.5 runs only as `delegate_task`
+workers under an Opus advisor: a Haiku worker under a parent that is not on Opus
+escalates the parent (once per two hours). Each beat reads TS-826's usage rows for
+yesterday and today from SQLite; the policy has no usage reader of its own. A thread
+past its first hour gets a nudge at most every two hours when it has at least 20,000
+output tokens and under 50% of them on Haiku 5.5, naming the build, git, read, gitread,
+live and CI calls its advisor ran itself. A thread with advisor output and no Haiku
+worker at all gets the no-workers nudge. A Haiku 4.5 subagent escalates and gets a
+nudge. Every nudge is also a wake text ending with the advisor split line. Nudge
+times live in the `COS_AUTOPILOT` KV bucket.
 
 ## Inbox
 

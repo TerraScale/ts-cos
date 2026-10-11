@@ -43,24 +43,25 @@ var usageBucketConfig = jetstream.KeyValueConfig{Bucket: usageBucket, History: 1
 
 // UsageRow is one day's usage for one session and model on one host.
 type UsageRow struct {
-	Day          string    `json:"day"`
-	Host         string    `json:"host"`
-	Project      string    `json:"project"`
-	Kind         string    `json:"kind"`
-	Worktree     string    `json:"worktree,omitempty"`
-	Branch       string    `json:"branch,omitempty"`
-	Ticket       string    `json:"ticket,omitempty"`
-	Session      string    `json:"session"`
-	Model        string    `json:"model"`
-	Effort       string    `json:"effort,omitempty"`
-	Input        int64     `json:"input"`
-	Output       int64     `json:"output"`
-	CacheWrite5m int64     `json:"cacheWrite5m"`
-	CacheWrite1h int64     `json:"cacheWrite1h"`
-	CacheRead    int64     `json:"cacheRead"`
-	Messages     int       `json:"messages"`
-	First        time.Time `json:"first"`
-	Last         time.Time `json:"last"`
+	Day          string         `json:"day"`
+	Host         string         `json:"host"`
+	Project      string         `json:"project"`
+	Kind         string         `json:"kind"`
+	Worktree     string         `json:"worktree,omitempty"`
+	Branch       string         `json:"branch,omitempty"`
+	Ticket       string         `json:"ticket,omitempty"`
+	Session      string         `json:"session"`
+	Model        string         `json:"model"`
+	Effort       string         `json:"effort,omitempty"`
+	Input        int64          `json:"input"`
+	Output       int64          `json:"output"`
+	CacheWrite5m int64          `json:"cacheWrite5m"`
+	CacheWrite1h int64          `json:"cacheWrite1h"`
+	CacheRead    int64          `json:"cacheRead"`
+	Messages     int            `json:"messages"`
+	Tools        map[string]int `json:"tools,omitempty"` // advisor tool calls by toolCategory
+	First        time.Time      `json:"first"`
+	Last         time.Time      `json:"last"`
 }
 
 type usagePrice struct{ In, Out, Write5m, Write1h, Read float64 }
@@ -117,8 +118,14 @@ type usageEntry struct {
 	GitBranch string    `json:"gitBranch"`
 	Effort    string    `json:"effort"`
 	Message   struct {
-		ID    string `json:"id"`
-		Model string `json:"model"`
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Content []struct {
+			Type  string          `json:"type"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
 		Usage struct {
 			Input      int64 `json:"input_tokens"`
 			Output     int64 `json:"output_tokens"`
@@ -143,6 +150,7 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 	defer f.Close()
 	kind, worktree := usageProject(project)
 	msgs := map[string]*UsageRow{}
+	seenTool := map[string]bool{} // a tool_use block can repeat on later lines
 	r := bufio.NewReader(f)
 	for n := 0; ; n++ {
 		line, err := r.ReadBytes('\n')
@@ -185,6 +193,20 @@ func scanTranscript(path, project, host string, since time.Time) ([]UsageRow, er
 		if ts.After(m.Last) {
 			m.Last = ts
 		}
+		if usageWorker(e.Message.Model) {
+			continue
+		}
+		for _, c := range e.Message.Content {
+			cat := toolCategory(c.Name, c.Input)
+			if c.Type != "tool_use" || cat == "" || seenTool[c.ID] {
+				continue
+			}
+			seenTool[c.ID] = true
+			if m.Tools == nil {
+				m.Tools = map[string]int{}
+			}
+			m.Tools[cat]++
+		}
 	}
 	merged := map[usageGroup]UsageRow{}
 	for _, m := range msgs {
@@ -200,8 +222,15 @@ func usageAdd(m map[usageGroup]UsageRow, r UsageRow) {
 	g := usageGroup{r.Day, r.Host, r.Project, r.Session, r.Model}
 	cur, ok := m[g]
 	if !ok {
+		r.Tools = maps.Clone(r.Tools) // the cached scan rows must not share this map
 		m[g] = r
 		return
+	}
+	for k, n := range r.Tools {
+		if cur.Tools == nil {
+			cur.Tools = map[string]int{}
+		}
+		cur.Tools[k] += n
 	}
 	cur.Input += r.Input
 	cur.Output += r.Output
@@ -577,23 +606,25 @@ func (s *Store) Usage(ctx context.Context, sinceDay string) ([]UsageRow, error) 
 }
 
 type UsageTotal struct {
-	Key           string  `json:"key"`
-	Label         string  `json:"label"`
-	Host          string  `json:"host,omitempty"`
-	Thread        string  `json:"thread,omitempty"`
-	Ticket        string  `json:"ticket,omitempty"`
-	Input         int64   `json:"input"`
-	Output        int64   `json:"output"`
-	CacheWrite    int64   `json:"cacheWrite"`
-	CacheRead     int64   `json:"cacheRead"`
-	Cost          float64 `json:"cost"`
-	AdvisorOutput int64   `json:"advisorOutput"`
-	WorkerOutput  int64   `json:"workerOutput"`
-	AdvisorCost   float64 `json:"advisorCost"`
-	WorkerCost    float64 `json:"workerCost"`
-	Workers       int     `json:"workers"`
-	Parallel      int     `json:"parallel"`
-	HaikuShare    int     `json:"haikuShare"`
+	Key           string         `json:"key"`
+	Label         string         `json:"label"`
+	Host          string         `json:"host,omitempty"`
+	Thread        string         `json:"thread,omitempty"`
+	Ticket        string         `json:"ticket,omitempty"`
+	Input         int64          `json:"input"`
+	Output        int64          `json:"output"`
+	CacheWrite    int64          `json:"cacheWrite"`
+	CacheRead     int64          `json:"cacheRead"`
+	Cost          float64        `json:"cost"`
+	AdvisorOutput int64          `json:"advisorOutput"`
+	WorkerOutput  int64          `json:"workerOutput"`
+	AdvisorCost   float64        `json:"advisorCost"`
+	WorkerCost    float64        `json:"workerCost"`
+	Workers       int            `json:"workers"`
+	Parallel      int            `json:"parallel"`
+	HaikuShare    int            `json:"haikuShare"`
+	Tools         map[string]int `json:"tools,omitempty"`
+	Subagent      bool           `json:"-"` // the group resolved to a subagent only: usage, never a policy target
 }
 
 type usageSpan struct{ first, last time.Time }
@@ -641,10 +672,13 @@ func usageGroupKey(r UsageRow, by string) string {
 // usageTotal sums rows. Workers are the distinct Haiku sessions; Parallel is the most
 // of them running at one instant.
 func usageTotal(key string, rows []UsageRow) UsageTotal {
-	t := UsageTotal{Key: key, Label: key, Ticket: latestUsage(rows).Ticket}
+	t := UsageTotal{Key: key, Label: key, Ticket: latestUsage(rows).Ticket, Tools: map[string]int{}}
 	spans := map[string]usageSpan{}
 	for _, r := range rows {
 		cost := r.Cost()
+		for k, n := range r.Tools {
+			t.Tools[k] += n
+		}
 		t.Input += r.Input
 		t.Output += r.Output
 		t.CacheWrite += r.CacheWrite5m + r.CacheWrite1h
@@ -728,6 +762,7 @@ func usageThread(t *UsageTotal, latest UsageRow, live Live) {
 	}
 	if pick := cmp.Or(top, child); pick != nil {
 		t.Thread, t.Label = pick.ThreadID, cmp.Or(pick.Title, t.Label)
+		t.Subagent = top == nil
 	}
 	if latest.Kind == "cos" {
 		t.Label = "COS agent"

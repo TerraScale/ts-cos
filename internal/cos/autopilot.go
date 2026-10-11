@@ -341,6 +341,7 @@ func (a *Autopilot) beat(ctx context.Context, reason string) {
 			if err := a.engine.Beat(ctx, live); err != nil {
 				slog.Warn("autopilot rules beat skipped", "error", err)
 			}
+			a.engine.Policy(ctx, live)
 		}
 	}
 }

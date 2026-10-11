@@ -3,6 +3,7 @@ package cos
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -27,7 +28,7 @@ func TestKPIsFold(t *testing.T) {
 			for _, e := range tc.events {
 				k.fold(e)
 			}
-			if k != tc.want {
+			if !reflect.DeepEqual(k, tc.want) {
 				t.Fatalf("got %+v, want %+v", k, tc.want)
 			}
 		})
