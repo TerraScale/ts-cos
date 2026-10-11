@@ -1,7 +1,0 @@
-{
-  "summary": "dashboard shows the Work queue heading",
-  "path": "/",
-  "contains": [
-    "Work queue"
-  ]
-}
