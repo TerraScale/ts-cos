@@ -68,11 +68,12 @@ type forgejoPR struct {
 }
 
 type forgejoStatus struct {
-	ID        int64     `json:"id"`
-	Context   string    `json:"context"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        int64        `json:"id"`
+	Context   string       `json:"context"`
+	Status    string       `json:"status"`
+	Creator   *forgejoUser `json:"creator"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
 type forgejoReview struct {

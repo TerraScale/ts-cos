@@ -398,7 +398,7 @@ func (d *selfDriver) advance(ctx context.Context, r selfRecord, rolling string) 
 			if err != nil {
 				return r, err
 			}
-			p, err := d.f.selfRevertPR(ctx, orig.SHA, r.Branch, r.Ticket+": "+r.title(), "Part of "+r.Ticket+". Undo requested in chat.")
+			p, err := d.f.selfRevertPR(ctx, orig.SHA, orig.PR, r.Branch, r.Ticket+": "+r.title(), "Part of "+r.Ticket+". Undo requested in chat.")
 			if err != nil {
 				if strings.Contains(err.Error(), "changed on main") {
 					return r.to(selfBlocked, "cannot revert automatically: "+err.Error()), nil

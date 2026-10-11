@@ -181,7 +181,7 @@ func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pr := func(n int, branch string) map[string]any {
 		return map[string]any{"number": n, "html_url": "https://git/pulls/" + itoa(n), "state": map[bool]string{true: "open", false: "closed"}[f.prOpen[n]],
 			"merged": f.merged[n], "merge_commit_sha": map[bool]string{true: "merge" + itoa(n) + "0000000"}[f.merged[n]], "mergeable": true,
-			"user": map[string]string{"login": "mariogk"}, "head": map[string]string{"ref": branch, "sha": "head" + itoa(n)}}
+			"user": map[string]string{"login": "mariogk"}, "head": map[string]string{"ref": branch, "sha": "head" + itoa(n)}, "base": map[string]string{"ref": "main"}}
 	}
 	switch {
 	case r.Method == "POST" && p == "/branches":
@@ -220,10 +220,20 @@ func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			out = append(out, map[string]string{"filename": name, "status": "modified"})
 		}
 		forgejoTestJSON(w, out)
-	case r.Method == "GET" && strings.HasPrefix(p, "/commits/") && strings.HasSuffix(p, "/status"):
-		forgejoTestJSON(w, map[string]any{"statuses": []map[string]string{{"context": "ts-cos CI / test (pull_request)", "status": f.ci}, {"context": "ts-reviewer", "status": f.reviewer}}, "total_count": 2})
+	case r.Method == "GET" && p == "/actions/runs":
+		status := f.ci
+		if status == "pending" {
+			status = "running"
+		}
+		forgejoTestJSON(w, map[string]any{"total_count": 1, "workflow_runs": []map[string]any{{"id": 1, "workflow_id": "ci.yml", "commit_sha": r.URL.Query().Get("head_sha"), "status": status}}})
+	case r.Method == "GET" && strings.HasPrefix(p, "/commits/") && strings.HasSuffix(p, "/statuses"):
+		list := []map[string]any{}
+		if f.reviewer != "" {
+			list = append(list, map[string]any{"id": 1, "context": "ts-reviewer", "status": f.reviewer, "creator": map[string]string{"login": "terrascale-bot"}})
+		}
+		forgejoTestJSON(w, list)
 	case r.Method == "GET" && strings.HasSuffix(p, "/comments"):
-		forgejoTestJSON(w, []map[string]string{{"body": f.review}})
+		forgejoTestJSON(w, []map[string]any{{"body": f.review, "user": map[string]string{"login": "terrascale-bot"}}})
 	case r.Method == "POST" && strings.HasSuffix(p, "/merge"):
 		n := int(p[len("/pulls/")] - '0')
 		f.merged[n], f.prOpen[n], f.mergeBody[n] = true, false, body
@@ -231,7 +241,7 @@ func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.files["main"]["internal/cos/dashboard.templ"] = "new"
 		}
 	case r.Method == "GET" && strings.HasPrefix(p, "/git/commits/"):
-		forgejoTestJSON(w, map[string]any{"parents": []map[string]string{{"sha": "parent7"}}, "files": []map[string]string{{"filename": "internal/cos/dashboard.templ", "status": "modified"}}})
+		forgejoTestJSON(w, map[string]any{"parents": []map[string]string{{"sha": "parent7"}}})
 	default:
 		t := "unexpected " + r.Method + " " + r.URL.String()
 		http.Error(w, t, 500)
