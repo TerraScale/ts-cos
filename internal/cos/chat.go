@@ -83,6 +83,8 @@ type Chat struct {
 	entries map[string]ChatEntry
 	ready   bool
 	subs    map[*chatSub]struct{}
+	// recheck is how often follow verifies the bucket's identity; tests shorten it.
+	recheck time.Duration
 }
 
 // chatSub collects changed keys between wake-ups so a slow SSE client never misses one.
@@ -92,7 +94,7 @@ type chatSub struct {
 }
 
 func NewChat() *Chat {
-	return &Chat{entries: map[string]ChatEntry{}, subs: map[*chatSub]struct{}{}}
+	return &Chat{entries: map[string]ChatEntry{}, subs: map[*chatSub]struct{}{}, recheck: 5 * time.Second}
 }
 
 // Run creates the chat and context buckets (retrying until JetStream has quorum) and follows every change until ctx ends.
@@ -117,6 +119,7 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 				c.mu.Lock()
 				c.kv, c.ready = nil, false
 				clear(c.entries)
+				c.notify("")
 				c.mu.Unlock()
 				err = errors.New("chat watcher stopped")
 			}
@@ -137,7 +140,7 @@ func (c *Chat) follow(ctx context.Context, kv jetstream.KeyValue, w jetstream.Ke
 	c.mu.Unlock()
 	// The watcher survives a deleted or recreated bucket without closing; check its identity.
 	created := bucketCreated(ctx, kv)
-	check := time.NewTicker(5 * time.Second)
+	check := time.NewTicker(c.recheck)
 	defer check.Stop()
 	for {
 		select {

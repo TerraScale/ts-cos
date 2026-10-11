@@ -61,23 +61,41 @@ func chatTestCluster(t *testing.T, ctx context.Context) ([]*Bus, []Config) {
 	return nodes, configs
 }
 
+// chatTestAwait waits for check to hold, re-evaluating it on every change the chat notifies
+// (puts, deletes, ready, resets), so the outcome does not depend on wall-clock polling.
+func chatTestAwait(t *testing.T, c *Chat, description string, check func() bool) {
+	t.Helper()
+	sub, stop := c.Subscribe()
+	defer stop()
+	timeout := time.After(2 * time.Minute) // generous: 3-node elections are slow on a loaded runner
+	for !check() {
+		select {
+		case <-sub.wake:
+			c.Changed(sub)
+		case <-timeout:
+			t.Fatalf("timeout waiting for %s", description)
+		}
+	}
+}
+
 func TestChatReplicatesAcrossNodes(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	nodes, _ := chatTestCluster(t, ctx)
 	chats := make([]*Chat, len(nodes))
 	for i, bus := range nodes {
 		chats[i] = NewChat()
+		chats[i].recheck = 100 * time.Millisecond
 		go chats[i].Run(ctx, bus)
 	}
 	for _, c := range chats {
-		chatTestWait(t, "chat ready", c.Ready)
+		chatTestAwait(t, c, "chat ready", c.Ready)
 	}
 	e, err := chats[0].Put(ctx, ChatEntry{Role: "user", Text: "what's running?"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatTestWait(t, "entry on another node", func() bool {
+	chatTestAwait(t, chats[2], "entry on another node", func() bool {
 		got, ok := chats[2].Entry(e.ID)
 		return ok && got.Text == "what's running?"
 	})
@@ -90,21 +108,25 @@ func TestChatReplicatesAcrossNodes(t *testing.T) {
 	if err := js.DeleteKeyValue(ctx, chatBucket); err != nil {
 		t.Fatal(err)
 	}
-	var again ChatEntry
-	chatTestWait(t, "bucket recreated", func() bool {
-		var err error
-		again, err = chats[1].Put(ctx, ChatEntry{Role: "user", Text: "still there?"})
-		return err == nil
-	})
-	// Each node notices the lost bucket on its next 5 s check, then rebinds; allow slow CI runners.
-	deadline := time.Now().Add(45 * time.Second)
+	// Every node notices the lost bucket and drops its mirror; the leader then recreates the bucket.
 	for _, c := range chats {
-		for _, ok := c.Entry(again.ID); !ok || !c.Ready(); _, ok = c.Entry(again.ID) {
-			if time.Now().After(deadline) {
-				t.Fatal("timeout waiting for the new entry on every node")
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		chatTestAwait(t, c, "mirror reset after the bucket was deleted", func() bool {
+			_, ok := c.Entry(e.ID)
+			return !ok
+		})
+	}
+	for _, c := range chats {
+		chatTestAwait(t, c, "chat ready on the recreated bucket", c.Ready)
+	}
+	again, err := chats[1].Put(ctx, ChatEntry{Role: "user", Text: "still there?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range chats {
+		chatTestAwait(t, c, "new entry on every node", func() bool {
+			_, ok := c.Entry(again.ID)
+			return ok
+		})
 	}
 }
 
