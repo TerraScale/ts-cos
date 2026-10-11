@@ -413,6 +413,17 @@ func TestSelfChangeGuardsAndQueue(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	rig := newSelfTestRig(t, ctx)
+	js, err := rig.d.bus.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := js.Stream(ctx, "KV_"+selfBucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.CachedInfo().Config.AllowDirect {
+		t.Fatal("COS_SELF allows direct gets; a lagging replica could serve a stale record")
+	}
 	rig.set(func(f *selfFake) { f.ci, f.reviewer = "success", "success" })
 
 	// A check that already passes means there is nothing to change.

@@ -112,6 +112,12 @@ func openSelfStore(ctx context.Context, bus *Bus, create bool) (selfStore, error
 	var kv jetstream.KeyValue
 	if create {
 		kv, err = js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: selfBucket, History: 8, Replicas: 3, Storage: jetstream.FileStorage})
+		if err == nil {
+			err = selfLeaderReads(ctx, js)
+		}
+		if err == nil {
+			kv, err = js.KeyValue(ctx, selfBucket)
+		}
 	} else {
 		kv, err = js.KeyValue(ctx, selfBucket)
 	}
@@ -119,6 +125,23 @@ func openSelfStore(ctx context.Context, bus *Bus, create bool) (selfStore, error
 		return selfStore{}, fmt.Errorf("COS self-change store unavailable; is cos serve running? (%w)", err)
 	}
 	return selfStore{kv}, nil
+}
+
+// selfLeaderReads turns off direct gets on COS_SELF: a direct get may be answered by a
+// lagging replica, and a stale record would repeat a step's side effects (ticket, launch).
+// CreateOrUpdateKeyValue turns them back on, so the leader reapplies this on every open.
+func selfLeaderReads(ctx context.Context, js jetstream.JetStream) error {
+	s, err := js.Stream(ctx, "KV_"+selfBucket)
+	if err != nil {
+		return err
+	}
+	cfg := s.CachedInfo().Config
+	if !cfg.AllowDirect && !cfg.MirrorDirect {
+		return nil
+	}
+	cfg.AllowDirect, cfg.MirrorDirect = false, false
+	_, err = js.UpdateStream(ctx, cfg)
+	return err
 }
 
 func (s selfStore) list(ctx context.Context) ([]selfRecord, error) {
