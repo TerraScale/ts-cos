@@ -137,6 +137,9 @@ func checkLeaderKill(ctx context.Context, e *E2EEnv) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := e.allCurrent(ctx, bus, "cluster.leader-kill"); err != nil {
+		return "", err
+	}
 	if err := e.chaos(ctx, bus, leader, "cluster.leader-kill", "sigkill"); err != nil {
 		return "", err
 	}
@@ -257,6 +260,9 @@ func checkLeaderFreeze(ctx context.Context, e *E2EEnv) (string, error) {
 	}
 	leader, err := leaderOf(ctx, bus)
 	if err != nil {
+		return "", err
+	}
+	if err := e.allCurrent(ctx, bus, "cluster.leader-freeze"); err != nil {
 		return "", err
 	}
 	if err := e.chaos(ctx, bus, leader, "cluster.leader-freeze", "freeze"); err != nil {

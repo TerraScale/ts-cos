@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -334,6 +335,63 @@ func waitCluster(ctx context.Context, conn *nats.Conn, want []string, down strin
 	}
 }
 
+// nodeStatus asks one host's own release.health endpoint: "ok" when it reports no problems, else why not.
+func nodeStatus(ctx context.Context, conn *nats.Conn, host string) string {
+	msg, err := conn.RequestWithContext(ctx, "cos."+host+".release.health", nil)
+	switch {
+	case err != nil:
+		return "unreachable: " + err.Error()
+	case msg.Header.Get("Nats-Service-Error") != "":
+		return msg.Header.Get("Nats-Service-Error")
+	}
+	var health NodeHealth
+	if err := json.Unmarshal(msg.Data, &health); err != nil {
+		return "bad reply: " + err.Error()
+	}
+	if len(health.Problems) > 0 {
+		return strings.Join(health.Problems, "; ")
+	}
+	return "ok"
+}
+
+// allHealthy reports whether every host is "ok" and joins the per-host statuses in host order for evidence.
+func allHealthy(status map[string]string) (bool, string) {
+	ok := len(status) > 0
+	var parts []string
+	for _, h := range slices.Sorted(maps.Keys(status)) {
+		ok = ok && status[h] == "ok"
+		parts = append(parts, h+"="+status[h])
+	}
+	return ok, strings.Join(parts, " ")
+}
+
+// allCurrent waits until every node reports JetStream current on its own, so a perturbation never
+// lands on a cluster still catching up from the last one (TS-816). It skips, not fails, on timeout.
+func (e *E2EEnv) allCurrent(ctx context.Context, bus *Bus, step string) error {
+	start := time.Now()
+	deadline := start.Add(120 * time.Second)
+	for {
+		status := make(map[string]string, len(e2eHosts))
+		for _, h := range e2eHosts {
+			call, cancel := context.WithTimeout(ctx, 5*time.Second)
+			status[h] = nodeStatus(call, bus.conn, h)
+			cancel()
+		}
+		ok, evidence := allHealthy(status)
+		if ok {
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return e2eSkip(fmt.Sprintf("JetStream not fully current on every node before %s after %s, not perturbing: %s",
+				step, time.Since(start).Round(time.Second), e2eClip(evidence, 300)))
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 	bus, err := e.bus(ctx)
 	if err != nil {
@@ -346,6 +404,9 @@ func checkRestartCatchUp(ctx context.Context, e *E2EEnv) (string, error) {
 	}
 	if _, _, err := waitCluster(ctx, bus.conn, e2eHosts, "", 10*time.Second); err != nil {
 		return "", fmt.Errorf("cluster unhealthy before restart, not perturbing it: %w", err)
+	}
+	if err := e.allCurrent(ctx, bus, "cluster.restart"); err != nil {
+		return "", err
 	}
 	if err := e.chaos(ctx, bus, target, "cluster.restart", "restart"); err != nil {
 		return "", err
@@ -441,6 +502,9 @@ func checkPartition(ctx context.Context, e *E2EEnv) (string, error) {
 				peers = append(peers, a)
 			}
 		}
+	}
+	if err := e.allCurrent(ctx, bus, "cluster.partition"); err != nil {
+		return "", err
 	}
 	if err := e.chaos(ctx, bus, target, "cluster.partition", "partition"); err != nil {
 		return "", err

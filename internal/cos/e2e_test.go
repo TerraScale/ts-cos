@@ -213,6 +213,28 @@ func TestE2EClipRedacts(t *testing.T) {
 	}
 }
 
+func TestAllHealthy(t *testing.T) {
+	tests := []struct {
+		name   string
+		status map[string]string
+		ok     bool
+		want   string
+	}{
+		{"all ok", map[string]string{"beta": "ok", "delta": "ok", "mariogk-dev": "ok"}, true,
+			"beta=ok delta=ok mariogk-dev=ok"},
+		{"one catching up", map[string]string{"beta": "ok", "delta": "JetStream not in sync: consumer lagging", "mariogk-dev": "ok"}, false,
+			"beta=ok delta=JetStream not in sync: consumer lagging mariogk-dev=ok"},
+		{"one unreachable", map[string]string{"beta": "ok", "delta": "unreachable: timeout", "mariogk-dev": "ok"}, false,
+			"beta=ok delta=unreachable: timeout mariogk-dev=ok"},
+		{"no hosts", map[string]string{}, false, ""},
+	}
+	for _, tc := range tests {
+		if ok, got := allHealthy(tc.status); ok != tc.ok || got != tc.want {
+			t.Errorf("%s: allHealthy = %v %q, want %v %q", tc.name, ok, got, tc.ok, tc.want)
+		}
+	}
+}
+
 func TestE2EClipTruncates(t *testing.T) {
 	if got, want := e2eClip(strings.Repeat("a", 700), 600), strings.Repeat("a", 600)+"…"; got != want {
 		t.Errorf("long text clipped to len %d, want 600 + ellipsis", len(got))
