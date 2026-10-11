@@ -856,3 +856,36 @@ func TestAdvisorProblems(t *testing.T) {
 		})
 	}
 }
+
+// TestInboxE2EChecksRegistered: the four Inbox checks run live once, never in smoke or chaos runs,
+// and are no longer pending. inbox.needs-user-forward stays pending.
+func TestInboxE2EChecksRegistered(t *testing.T) {
+	live := []string{"inbox.add-visible", "inbox.answer-closes", "inbox.concurrent-answer", "inbox.dedup"}
+	count := map[string]int{}
+	for _, c := range e2eChecks() {
+		if !slices.Contains(live, c.ID) {
+			continue
+		}
+		count[c.ID]++
+		if c.Smoke || c.Chaos || c.Stream != "TS-815" {
+			t.Errorf("%s: Smoke=%t Chaos=%t Stream=%q, want a plain TS-815 check", c.ID, c.Smoke, c.Chaos, c.Stream)
+		}
+	}
+	for _, id := range live {
+		if count[id] != 1 {
+			t.Errorf("%s registered %d times, want once", id, count[id])
+		}
+	}
+	pendingIDs := map[string]int{}
+	for _, c := range e2ePending {
+		pendingIDs[c.ID]++
+	}
+	for _, id := range live {
+		if pendingIDs[id] != 0 {
+			t.Errorf("%s is still pending", id)
+		}
+	}
+	if pendingIDs["inbox.needs-user-forward"] != 1 {
+		t.Errorf("inbox.needs-user-forward pending %d times, want 1", pendingIDs["inbox.needs-user-forward"])
+	}
+}

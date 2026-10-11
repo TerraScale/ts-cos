@@ -116,8 +116,8 @@ func (e *E2EEnv) nodeURLs(ctx context.Context) ([]string, error) {
 }
 
 // e2eRequest sends one request without following redirects; it returns the status, the
-// Location, the new session cookie (if any) and the body.
-func e2eRequest(ctx context.Context, method, target, cookie string, form url.Values) (int, string, string, string, error) {
+// Location, the new session cookie (if any) and the body. headers are name, value pairs.
+func e2eRequest(ctx context.Context, method, target, cookie string, form url.Values, headers ...string) (int, string, string, string, error) {
 	var body io.Reader
 	if form != nil {
 		body = strings.NewReader(form.Encode())
@@ -127,6 +127,9 @@ func e2eRequest(ctx context.Context, method, target, cookie string, form url.Val
 		return 0, "", "", "", err
 	}
 	req.Header.Set("Accept", "text/html")
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}

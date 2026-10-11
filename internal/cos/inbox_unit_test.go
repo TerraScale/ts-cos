@@ -46,6 +46,7 @@ func TestInboxUnitItemValidation(t *testing.T) {
 		{name: "blocker without options", input: InboxInput{Kind: "blocker", Title: "CI red"}, ok: true},
 		{name: "source rules", input: InboxInput{Title: "Rule", Source: "rules"}, ok: true},
 		{name: "source worker", input: InboxInput{Title: "Ask", Source: "worker"}, ok: true},
+		{name: "source e2e", input: InboxInput{Title: "Probe", Source: "e2e"}, ok: true},
 		{name: "unknown kind", input: InboxInput{Kind: "nope", Title: "x"}},
 		{name: "unknown source", input: InboxInput{Title: "x", Source: "human"}},
 		{name: "empty title", input: InboxInput{Title: "   "}},
@@ -91,6 +92,33 @@ func TestInboxUnitItemValidation(t *testing.T) {
 				tc.check(t, item)
 			}
 		})
+	}
+}
+
+// TestInboxUnitE2ESourceIsSilent: an e2e item builds a well-formed event but never reaches publish.
+// The Inbox has no JetStream, so reaching publish panics; the cos item is the control.
+func TestInboxUnitE2ESourceIsSilent(t *testing.T) {
+	probe, err := InboxInput{Title: "[e2e] probe", Source: "e2e"}.item(inboxTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := itemEvent(probe); e.ID == "" || e.Kind != KindInboxItemAdded {
+		t.Fatalf("e2e item event = %+v", e)
+	}
+	panics := func(item InboxItem) (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		(&Inbox{}).publish(context.Background(), item)
+		return false
+	}
+	if panics(probe) {
+		t.Fatal("e2e item reached publish")
+	}
+	cosItem, err := InboxInput{Title: "Pick window"}.item(inboxTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !panics(cosItem) {
+		t.Fatal("control: publish of a cos item did not reach the nil JetStream")
 	}
 }
 

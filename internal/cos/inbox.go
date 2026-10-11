@@ -108,8 +108,8 @@ func (in InboxInput) item(now time.Time) (InboxItem, error) {
 	switch {
 	case !slices.Contains(inboxKinds, item.Kind):
 		return item, errors.New("inbox kind must be question, approval, decision, blocker, or fyi")
-	case !slices.Contains([]string{"cos", "rules", "worker", "deploy", "budget"}, item.Source):
-		return item, errors.New("inbox source must be cos, rules, worker, deploy, or budget")
+	case !slices.Contains([]string{"cos", "rules", "worker", "deploy", "budget", "e2e"}, item.Source):
+		return item, errors.New("inbox source must be cos, rules, worker, deploy, budget, or e2e")
 	case item.Kind == "fyi" && item.Urgent:
 		return item, errors.New("inbox fyi items are never urgent")
 	case item.Title == "" || strings.ContainsAny(item.Title, "\r\n") || utf8.RuneCountInString(item.Title) > inboxTitleMax:
@@ -262,6 +262,10 @@ func (in *Inbox) update(ctx context.Context, id string, fn func(item *InboxItem,
 }
 
 func (in *Inbox) publish(ctx context.Context, item InboxItem) {
+	// e2e probes must not wake COS or push to the user's phone.
+	if item.Source == "e2e" {
+		return
+	}
 	if _, err := PublishEvent(ctx, in.js, itemEvent(item)); err != nil {
 		// The reconciler re-emits recent items, so a lost publish is retried.
 		slog.Warn("publish inbox event", "item", item.ID, "error", err)
