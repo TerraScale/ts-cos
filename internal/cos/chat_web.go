@@ -205,7 +205,7 @@ func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
 	h := headerOf(v)
 	b, ok := w.homeBoard(r.Context())
 	nodes, nodesOK := w.homeNodes(r.Context())
-	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(), b, ok, nodes, nodesOK).Render(r.Context(), rw); err != nil {
+	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(chatMainTab), b, ok, nodes, nodesOK).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render chat", err)
 	}
 }
@@ -281,7 +281,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		return patchElements(ctx, rw, inbox(v))
 	}
 	repaint := func() error {
-		entries := w.Chat.Entries()
+		entries := w.Chat.Entries(chatMainTab)
 		clear(sent)
 		for _, e := range entries {
 			sent[e.ID] = true
@@ -294,7 +294,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	// window is the IDs the log shows now; the cache keeps trimmed entries, so an edit must not re-append them.
 	window := func() map[string]bool {
 		ids := map[string]bool{}
-		for _, e := range w.Chat.Entries() {
+		for _, e := range w.Chat.Entries(chatMainTab) {
 			ids[e.ID] = true
 		}
 		return ids
