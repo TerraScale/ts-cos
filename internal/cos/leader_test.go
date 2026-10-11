@@ -108,10 +108,14 @@ func TestBusLeader(t *testing.T) {
 	// A stopping leader releases its lease at once.
 	stopped := time.Now()
 	buses[second].Close()
-	third := leader(leaseTTL, second, others(second)...)
-	// The survivors take the deleted lease at their next refresh, once the lease stream has a leader again (4–9 s re-election on a slow runner).
-	if time.Since(stopped) > leaseTTL {
+	third := leader(2*leaseTTL, second, others(second)...)
+	// The survivors take the deleted lease at their next refresh, once the lease stream has a leader
+	// again; the bound is the 30 s handover promise, and releases shows it was a release, not an expiry.
+	if time.Since(stopped) > 2*leaseTTL {
 		t.Fatalf("graceful handover took %s", time.Since(stopped))
+	}
+	if buses[second].releases.Load() < 1 {
+		t.Fatalf("closing leader %s did not release its lease", hosts[second])
 	}
 
 	// A resigned leader hands over at once and never campaigns again.
@@ -124,9 +128,12 @@ func TestBusLeader(t *testing.T) {
 	resigned := time.Now()
 	buses[third].Resign()
 	buses[third].Resign()
-	leader(leaseTTL, third, survivor, third)
-	if time.Since(resigned) > leaseTTL {
+	leader(2*leaseTTL, third, survivor, third)
+	if time.Since(resigned) > 2*leaseTTL {
 		t.Fatalf("resign handover took %s", time.Since(resigned))
+	}
+	if buses[third].releases.Load() < 1 {
+		t.Fatalf("resigned leader %s did not release its lease", hosts[third])
 	}
 	buses[survivor].Resign()
 	time.Sleep(leaseTTL / 2)

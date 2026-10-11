@@ -70,9 +70,20 @@ func (b *Bus) elect(ctx context.Context) {
 		if stop != nil {
 			stop()
 			b.setLeading(nil)
-			// Hand over now instead of after the lease expires.
-			release, cancel := context.WithTimeout(context.Background(), time.Second)
-			_ = kv.Delete(release, leaseKey, jetstream.LastRevision(revision))
+			// Hand over now instead of after the lease expires. Retry while the lease stream
+			// re-elects: a lost release costs the survivors a full leaseTTL.
+			release, cancel := context.WithTimeout(context.Background(), leaseTTL/3)
+			for {
+				err := kv.Delete(release, leaseKey, jetstream.LastRevision(revision))
+				if err == nil {
+					b.releases.Add(1)
+				}
+				var refused *jetstream.APIError
+				if err == nil || errors.As(err, &refused) || release.Err() != nil {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
 			cancel()
 		}
 		return

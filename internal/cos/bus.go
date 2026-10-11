@@ -83,6 +83,7 @@ type Bus struct {
 	elected     chan struct{} // closed when elect returns
 	hookSecrets map[string]string
 	reloads     atomic.Int64 // route reloads applied; tests read it
+	releases    atomic.Int64 // lease releases the lease stream accepted; tests read it
 }
 
 // Fixed COS node settings; the ports stay clear of dev dashboards near 8790 and NATS defaults.
@@ -340,7 +341,7 @@ func connectBus(ctx context.Context, credential busCredential) (*nats.Conn, erro
 		conn, err = nats.Connect(address, nats.UserInfo(busClientUser, credential.Password), nats.Name("cos"), nats.Timeout(timeout),
 			nats.MaxReconnects(-1), nats.ReconnectWait(500*time.Millisecond),
 			nats.PingInterval(15*time.Second), nats.MaxPingsOutstanding(2),
-			nats.ReconnectBufSize(-1), nats.IgnoreDiscoveredServers(),
+			nats.IgnoreDiscoveredServers(),
 			nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
 		if !errors.Is(err, nats.ErrAuthorization) || time.Since(started) >= 2*time.Second {
 			break
