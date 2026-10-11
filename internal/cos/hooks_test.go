@@ -21,7 +21,7 @@ func hookTestSign(secret string, body []byte) string {
 }
 
 // TestHooksStoreSignedDeliveriesOnce posts through the signed-out dashboard handler
-// of one node of a real three-node cluster, as Forgejo and Ku do via cos.terrascale.tech.
+// of one node of a real three-node cluster, as Forgejo does via cos.terrascale.tech.
 func TestHooksStoreSignedDeliveriesOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -40,8 +40,8 @@ func TestHooksStoreSignedDeliveriesOnce(t *testing.T) {
 	server := httptest.NewServer(auth.Protect(http.NotFoundHandler(), hooks))
 	defer server.Close()
 	secret := buses[0].HookSecret("forgejo")
-	if len(secret) != 64 || secret != buses[2].HookSecret("forgejo") || secret == buses[0].HookSecret("ku") || buses[0].HookSecret("github") != "" {
-		t.Fatal("hook secrets must be equal on every node and separate per source")
+	if len(secret) != 64 || secret != buses[2].HookSecret("forgejo") || buses[0].HookSecret("github") != "" {
+		t.Fatal("hook secrets must be equal on every node and only for known sources")
 	}
 	post := func(path, body string, header ...string) int {
 		req, _ := http.NewRequest("POST", server.URL+path, strings.NewReader(body))
@@ -80,11 +80,6 @@ func TestHooksStoreSignedDeliveriesOnce(t *testing.T) {
 		t.Fatalf("stored delivery %+v, %v", msg, err)
 	}
 
-	kuBody := `{"event":"issue.updated"}`
-	if code := post("/hooks/ku", kuBody, "X-Webhook-Event", "issue.updated", "X-Webhook-Signature", "sha256="+hookTestSign(buses[2].HookSecret("ku"), []byte(kuBody))); code != http.StatusAccepted || stored() != 2 {
-		t.Fatalf("signed Ku delivery = %d, stored %d", code, stored())
-	}
-
 	for name, test := range map[string]struct {
 		path, body string
 		header     []string
@@ -92,23 +87,23 @@ func TestHooksStoreSignedDeliveriesOnce(t *testing.T) {
 	}{
 		"unsigned":                  {"/hooks/forgejo", body, nil, http.StatusUnauthorized},
 		"another key":               {"/hooks/forgejo", body, []string{"X-Forgejo-Signature", hookTestSign("guess", []byte(body))}, http.StatusUnauthorized},
-		"Ku key on Forgejo":         {"/hooks/forgejo", body, []string{"X-Forgejo-Signature", hookTestSign(buses[0].HookSecret("ku"), []byte(body))}, http.StatusUnauthorized},
-		"altered body":              {"/hooks/ku", kuBody + " ", []string{"X-Webhook-Signature", "sha256=" + hookTestSign(buses[0].HookSecret("ku"), []byte(kuBody))}, http.StatusUnauthorized},
+		"altered body":              {"/hooks/forgejo", body + " ", forgejo[4:], http.StatusUnauthorized},
 		"unknown source":            {"/hooks/github", body, nil, http.StatusNotFound},
-		"over the size cap":         {"/hooks/ku", strings.Repeat("x", ingestMaxMsg+1), nil, http.StatusRequestEntityTooLarge},
+		"retired Ku source":         {"/hooks/ku", body, forgejo[4:], http.StatusNotFound},
+		"over the size cap":         {"/hooks/forgejo", strings.Repeat("x", ingestMaxMsg+1), nil, http.StatusRequestEntityTooLarge},
 		"dashboard stays signed in": {"/autopilot/run", "", nil, http.StatusUnauthorized},
 	} {
 		if code := post(test.path, test.body, test.header...); code != test.want {
 			t.Errorf("%s = %d, want %d", name, code, test.want)
 		}
 	}
-	if stored() != 2 {
+	if stored() != 1 {
 		t.Fatalf("rejected deliveries were stored: %d", stored())
 	}
 
 	var last int
 	for range hookPerMinute + 1 {
-		last = post("/hooks/ku", "{}", "Cf-Connecting-Ip", "203.0.113.7")
+		last = post("/hooks/forgejo", "{}", "Cf-Connecting-Ip", "203.0.113.7")
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("request %d from one address = %d", hookPerMinute+1, last)

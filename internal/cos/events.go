@@ -33,7 +33,6 @@ const (
 	IngestStream   = "COS_INGEST"
 	IngestSubjects = "cos.ingest.>"
 	IngestForgejo  = "cos.ingest.forgejo"
-	IngestKu       = "cos.ingest.ku"
 	ingestMaxAge   = 7 * 24 * time.Hour
 	ingestMaxBytes = 256 << 20
 	ingestMaxMsg   = 1 << 20
@@ -47,7 +46,6 @@ type EventSource string
 const (
 	SourceT3      EventSource = "t3"
 	SourceForgejo EventSource = "forgejo"
-	SourceKu      EventSource = "ku"
 	SourceUser    EventSource = "user"
 	SourceInbox   EventSource = "inbox"
 	SourceDeploy  EventSource = "deploy"
@@ -75,11 +73,6 @@ const (
 	KindReview         EventKind = "review.submitted"
 	KindPushMain       EventKind = "push.main"
 
-	// Ku, only issues assigned to mariogk@terrascale.tech.
-	KindIssueCreated EventKind = "issue.created"
-	KindIssueUpdated EventKind = "issue.updated"
-	KindIssueComment EventKind = "issue.comment"
-
 	// Published by the dashboard chat (B) and the user Inbox (F).
 	KindChatMessage    EventKind = "chat.message"
 	KindUserAnswer     EventKind = "user.answer" // Data: AnswerData
@@ -100,7 +93,6 @@ var eventKinds = map[EventKind]EventSource{
 	KindPROpened: SourceForgejo, KindPRSynchronized: SourceForgejo, KindPRMergeable: SourceForgejo,
 	KindPRConflict: SourceForgejo, KindPRMerged: SourceForgejo, KindPRClosed: SourceForgejo,
 	KindCIStatus: SourceForgejo, KindReview: SourceForgejo, KindPushMain: SourceForgejo,
-	KindIssueCreated: SourceKu, KindIssueUpdated: SourceKu, KindIssueComment: SourceKu,
 	KindChatMessage: SourceUser, KindUserAnswer: SourceUser,
 	KindInboxItemAdded: SourceInbox, KindInboxClosed: SourceInbox,
 	KindDeployStarted: SourceDeploy, KindNodeUpdated: SourceDeploy, KindGateFailed: SourceDeploy,

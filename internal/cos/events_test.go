@@ -52,8 +52,8 @@ func TestEventValidate(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*Event){
 		"missing ID":      func(e *Event) { e.ID = "" },
-		"foreign ID":      func(e *Event) { e.ID = "ku:1" },
-		"wrong source":    func(e *Event) { e.Source = SourceKu; e.ID = "ku:1" },
+		"foreign ID":      func(e *Event) { e.ID = "github:1" },
+		"wrong source":    func(e *Event) { e.Source = SourceT3; e.ID = "t3:1" },
 		"unknown kind":    func(e *Event) { e.Kind = "pr.exploded" },
 		"zero time":       func(e *Event) { e.Time = time.Time{} },
 		"bad severity":    func(e *Event) { e.Severity = "fatal" },

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,12 +14,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Forgejo and Ku POST webhooks to /hooks/<source>, outside the login. A body with
-// a valid HMAC is stored unchanged on cos.ingest.<source> for TS-814 to normalize;
-// the sender gets 202 only once JetStream has stored it on a quorum.
+// Forgejo POSTs webhooks to /hooks/<source>, outside the login. A body with a valid
+// HMAC is stored unchanged on cos.ingest.<source> for TS-814 to normalize; the sender
+// gets 202 only once JetStream has stored it on a quorum.
 const hookPerMinute = 300 // requests per client address on one node
 
-var hookSources = map[string]string{"forgejo": IngestForgejo, "ku": IngestKu}
+var hookSources = map[string]string{"forgejo": IngestForgejo}
 
 type Hooks struct {
 	bus   *Bus
@@ -47,7 +46,7 @@ func (h *Hooks) Start(ctx context.Context) {
 	}
 }
 
-// HookSecret is the HMAC secret Forgejo and Ku sign webhooks with; every node
+// HookSecret is the HMAC secret Forgejo signs webhooks with; every node
 // derives the same value from the Vault master. TS-814 registers it with the senders.
 func (b *Bus) HookSecret(source string) string {
 	return b.hookSecrets[source]
@@ -69,7 +68,7 @@ func (h *Hooks) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	source := r.PathValue("source")
-	if !validHookSignature(h.bus.HookSecret(source), source, r.Header, body) {
+	if !validHookSignature(h.bus.HookSecret(source), r.Header, body) {
 		http.Error(rw, "Invalid webhook signature", http.StatusUnauthorized)
 		return
 	}
@@ -90,14 +89,9 @@ func (h *Hooks) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	rw.WriteHeader(http.StatusAccepted)
 }
 
-// validHookSignature checks Forgejo's X-Forgejo-Signature (hex HMAC-SHA256) or
-// Ku's X-Webhook-Signature ("sha256=<hex>").
-func validHookSignature(secret, source string, header http.Header, body []byte) bool {
-	signature := header.Get("X-Forgejo-Signature")
-	if source == "ku" {
-		signature, _ = strings.CutPrefix(header.Get("X-Webhook-Signature"), "sha256=")
-	}
-	got, err := hex.DecodeString(signature)
+// validHookSignature checks Forgejo's X-Forgejo-Signature (hex HMAC-SHA256).
+func validHookSignature(secret string, header http.Header, body []byte) bool {
+	got, err := hex.DecodeString(header.Get("X-Forgejo-Signature"))
 	if secret == "" || err != nil {
 		return false
 	}
