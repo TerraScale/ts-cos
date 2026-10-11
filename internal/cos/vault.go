@@ -17,12 +17,12 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/vault"
 )
 
-// The dedicated COS vault (TS-810); production cell vaults are never used.
+// ts-cos secrets live in ts-ops-vault (the only kept OCI resources, user 2026-10-11); production vaults are never used.
 const (
 	vaultRegion      = "sa-saopaulo-1"
-	vaultCompartment = "ocid1.compartment.oc1..aaaaaaaangcm4a4gp4epa2jec7mizqkomvgjnymdrxecimlroa42ozvk7cna"
-	vaultID          = "ocid1.vault.oc1.sa-saopaulo-1.ffvmvu45aafxc.abtxeljr7acg2kjyzkphfjd7mjzbjipxfnshbqrpmff6ghrpf3k3zvq2hw3q"
-	vaultKeyID       = "ocid1.key.oc1.sa-saopaulo-1.ffvmvu45aafxc.abtxeljrqg6huxgfm3xh3e5qbuas7knbzawgylrb7vscncdj2h3wop2hi55q"
+	vaultCompartment = "ocid1.compartment.oc1..aaaaaaaazb4rfjdb3bfi2rdlle3smjfhcvuf5rq57qk3q3cyytdgc6anlkca"
+	vaultID          = "ocid1.vault.oc1.sa-saopaulo-1.ffvmxfwxaad5y.abtxeljranepvnbymucmhphlo5r47qpmzntw2hivduv6owoj4cumtsdsntnq"
+	vaultKeyID       = "ocid1.key.oc1.sa-saopaulo-1.ffvmxfwxaad5y.abtxeljrerrhjb2xbpqi5ptjd4swjgh5mhlfub2wfohri3nzbhnhxxvw33ea"
 	vaultMasterName  = "cos-master"
 )
 
