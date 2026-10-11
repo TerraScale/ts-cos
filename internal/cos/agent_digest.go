@@ -22,6 +22,10 @@ const agentDigestSubject = "cos.autopilot.log." + ClassEscalate
 
 // digestWake returns the escalation digest the COS agent wakes on, or "" when nothing new is worth a wake.
 func (a *Agent) digestWake(ctx context.Context, st *AgentState, now time.Time) (string, error) {
+	// Escalations are reported to the main tab only.
+	if a.Tab.ID != chatMainTab {
+		return "", nil
+	}
 	if st.DigestSince.IsZero() {
 		// First start or upgrade: start from now so old escalations are never replayed.
 		st.DigestSince = now

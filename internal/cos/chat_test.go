@@ -172,7 +172,7 @@ func TestChatApplyAndOrder(t *testing.T) {
 	if !c.Ready() {
 		t.Fatal("not ready after initial values marker")
 	}
-	entries := c.Entries()
+	entries := c.Entries(chatMainTab)
 	if len(entries) != 2 || entries[0].ID != "0000000000000001-a" || entries[1].ID != "0000000000000002-b" {
 		t.Fatal(entries)
 	}
@@ -190,7 +190,7 @@ func TestChatApplyAndOrder(t *testing.T) {
 	for i := range 205 {
 		c.apply(chatTestPut(t, fmt.Sprintf("%016x-n", i+10), fmt.Sprint(i)))
 	}
-	entries = c.Entries()
+	entries = c.Entries(chatMainTab)
 	if len(entries) != chatShown || entries[0].ID != fmt.Sprintf("%016x-n", 15) || entries[len(entries)-1].ID != fmt.Sprintf("%016x-n", 214) {
 		t.Fatal(len(entries), entries[0].ID, entries[len(entries)-1].ID)
 	}

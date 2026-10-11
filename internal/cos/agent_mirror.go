@@ -158,7 +158,7 @@ func (a *Agent) mirror(ctx context.Context, st *AgentState, p agentProjection) e
 		// A re-mirror after a failed save keeps the entry, so answers already recorded in it survive.
 		id := replyID(r.ID, r.CreatedAt)
 		if _, ok := a.Chat.Entry(id); !ok {
-			if _, err := a.Chat.Put(ctx, ChatEntry{ID: id, Role: "cos", Ask: ask}); err != nil {
+			if _, err := a.put(ctx, ChatEntry{ID: id, Role: "cos", Ask: ask}); err != nil {
 				return err
 			}
 		}
@@ -195,7 +195,7 @@ func (a *Agent) show(ctx context.Context, e ChatEntry) error {
 	if old, ok := a.Chat.Entry(e.ID); ok {
 		e.At = old.At
 	}
-	if _, err := a.Chat.Put(ctx, e); err != nil {
+	if _, err := a.put(ctx, e); err != nil {
 		return err
 	}
 	if a.shown == nil || len(a.shown) > 100 {
