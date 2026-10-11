@@ -50,6 +50,7 @@ const (
 	SourceKu      EventSource = "ku"
 	SourceUser    EventSource = "user"
 	SourceInbox   EventSource = "inbox"
+	SourceDeploy  EventSource = "deploy"
 )
 
 type EventKind string
@@ -84,6 +85,13 @@ const (
 	KindUserAnswer     EventKind = "user.answer" // Data: AnswerData
 	KindInboxItemAdded EventKind = "inbox.item_added"
 	KindInboxClosed    EventKind = "inbox.item_closed"
+
+	// Published by the rollout leader (TS-818). Data: {"rollout", "to", "change", "hosts", "from", "reason"}.
+	KindDeployStarted    EventKind = "deploy.started"
+	KindNodeUpdated      EventKind = "node.updated"
+	KindGateFailed       EventKind = "gate.failed"
+	KindDeployRolledBack EventKind = "deploy.rolled_back"
+	KindDeployCompleted  EventKind = "deploy.completed"
 )
 
 var eventKinds = map[EventKind]EventSource{
@@ -95,6 +103,8 @@ var eventKinds = map[EventKind]EventSource{
 	KindIssueCreated: SourceKu, KindIssueUpdated: SourceKu, KindIssueComment: SourceKu,
 	KindChatMessage: SourceUser, KindUserAnswer: SourceUser,
 	KindInboxItemAdded: SourceInbox, KindInboxClosed: SourceInbox,
+	KindDeployStarted: SourceDeploy, KindNodeUpdated: SourceDeploy, KindGateFailed: SourceDeploy,
+	KindDeployRolledBack: SourceDeploy, KindDeployCompleted: SourceDeploy,
 }
 
 // Severity is the source's hint; the rules engine makes the final classification.

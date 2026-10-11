@@ -139,6 +139,40 @@ healthy build with `release.commit` (it becomes `good`); an unconfirmed build
 stops itself after 10 minutes, which reverts it. `release.restore` puts a host
 back on a given build.
 
+### Rolling deploys (TS-818)
+
+The leader checks main every minute. When main's head has a green combined CI
+status and some host does not run it, and every host answers healthy with none
+on trial, it builds that commit once (git checkout in `~/.local/share/cos/src`,
+`go build -trimpath`, build time stamped) into the three-replica `cos_builds`
+object store (newest three kept) and rolls it out one host at a time:
+non-leaders by name, then the leader. Before acting on itself the leader calls
+`Bus.Resign`; an updated node takes over and finishes. Each host must pass the
+gate within two minutes: it runs the new revision, is a cluster member with
+JetStream in sync, its dashboard and SSE work, its COS operations service
+is registered from the new build, and TS-816's smoke checks for that host
+(`E2ESmoke`: unit, version, error-free log) pass. Then the host commits the build as
+last-known-good and the next one starts. A failed gate (or the watchdog
+reverting the host) restores every updated host to its previous build, last
+updated first, adds an Inbox FYI ("Deploy rolled back: <change>", source
+`deploy`) and records `failed.<revision>` so only a newer main build (or
+`cos deploy`) tries again. A main build that does not compile or start is marked
+failed the same way.
+
+The rollout record is `rollout` in the three-replica `cos_deploy` KV, written
+with compare-and-set: a resumed leader continues it, and a second rollout is
+refused while one is active.
+
+```sh
+cos deploy            # roll out main now (same checks; refused while a rollout runs)
+cos deploy <branch>   # roll out a branch or commit, e.g. to prove a rollback
+cos deploy status     # the current or last rollout
+```
+
+Every step is an event on `cos.events.deploy.>`: `deploy.started`,
+`node.updated`, `gate.failed`, `deploy.rolled_back`, `deploy.completed`, with
+`{"rollout","to","change","hosts","from","reason"}` data.
+
 The CLI connects to **its local** NATS node. Calls to `cos.<host>.<command>` route
 through that cluster; remote T3 HTTP connections and SSH tunnels are not used.
 Client cancellation is sent to the remote operation; it cannot undo a mutation

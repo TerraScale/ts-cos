@@ -317,6 +317,7 @@ func Serve(ctx context.Context, cfg Config, args []string) error {
 	if err := bus.serveReleases(ctx, cfg, probe, cancel); err != nil {
 		return err
 	}
+	go bus.Lead(ctx, func(ctx context.Context) { RunRollouts(ctx, cfg, bus) })
 	w.Autopilot, err = StartAutopilot(ctx, cfg.LocalHost, bus, s, Reconcile(cfg, bus, s), NewRulesEngine(cfg, bus, s))
 	if err != nil {
 		return err
