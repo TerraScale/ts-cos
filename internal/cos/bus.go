@@ -676,7 +676,7 @@ func (b *Bus) Call(ctx context.Context, host, command string, args []string, out
 			return ctx.Err()
 		}
 		if errors.Is(err, nats.ErrNoResponders) {
-			return fmt.Errorf("COS node unavailable: %w", nats.ErrNoResponders)
+			return fmt.Errorf("COS node %s unavailable: %w", host, nats.ErrNoResponders)
 		}
 		return errors.New("COS request failed; local node unavailable")
 	}

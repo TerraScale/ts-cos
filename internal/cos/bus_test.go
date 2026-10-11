@@ -287,7 +287,7 @@ func TestBusCluster(t *testing.T) {
 	t.Run("absent node and cancelled calls are bounded", func(t *testing.T) {
 		start := time.Now()
 		err := clients[0].Call(ctx, "offline-host", "projects", nil, nil)
-		if !errors.Is(err, nats.ErrNoResponders) || time.Since(start) > time.Second {
+		if !errors.Is(err, nats.ErrNoResponders) || !strings.HasPrefix(err.Error(), "COS node offline-host unavailable") || time.Since(start) > time.Second {
 			t.Fatalf("absent node: %v after %s", err, time.Since(start))
 		}
 		short, stop := context.WithTimeout(ctx, 50*time.Millisecond)
