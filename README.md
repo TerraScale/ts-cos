@@ -91,9 +91,9 @@ exists; the file is never rewritten and the hash is never logged.
   HTTPS, 7 days; logout ends the session on every node.
 - `/password` (current + new, 12 to 72 characters) replaces the bcrypt hash
   everywhere and signs out the user's other sessions.
-- Five consecutive failures lock a user for 15 minutes on every node, even with
-  the right password. Each node allows 10 attempts per client address per
-  minute (`Cf-Connecting-Ip` from the local connector).
+- Five failed sign-ins lock the account and the client address
+  (`Cf-Connecting-Ip`) for 15 minutes on every node, even with the right
+  password. Successful sign-ins never count toward a lock.
 - Cross-site form posts are rejected; pages are `no-store` and cannot be framed.
   Requests from outside loopback and Tailscale are refused.
 

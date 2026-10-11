@@ -35,7 +35,6 @@ const (
 	sessionCookie        = "cos_session"
 	lockAfter            = 5                // failures that lock an account or a client address
 	lockFor              = 15 * time.Minute // also how long idle failures are remembered
-	loginPerMinute       = 10               // attempts per client address on one node
 	sessionMissPerMinute = 30               // leader reads for unknown session cookies per client address on one node
 	passwordMin          = 12
 	passwordMax          = 72 // bcrypt's limit
@@ -288,10 +287,6 @@ func setSessionCookie(rw http.ResponseWriter, r *http.Request, value string, max
 }
 
 func (a *Auth) login(rw http.ResponseWriter, r *http.Request) {
-	if !a.limit.allow(clientIP(r), loginPerMinute) {
-		renderAuth(rw, r, http.StatusTooManyRequests, loginPage("Too many attempts from your address. Wait a minute."))
-		return
-	}
 	users, sessions, lockouts := a.kv()
 	if users == nil {
 		renderAuth(rw, r, http.StatusServiceUnavailable, loginPage("COS is starting. Try again in a minute."))
@@ -485,10 +480,6 @@ func (a *Auth) logout(rw http.ResponseWriter, r *http.Request) {
 // the user on every node, and keeps this browser signed in.
 func (a *Auth) changePassword(rw http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(authUserKey{}).(string)
-	if !a.limit.allow(clientIP(r), loginPerMinute) {
-		renderAuth(rw, r, http.StatusTooManyRequests, passwordPage("Too many attempts from your address. Wait a minute."))
-		return
-	}
 	next := r.PostFormValue("new")
 	if next != r.PostFormValue("confirm") {
 		renderAuth(rw, r, http.StatusBadRequest, passwordPage("The new passwords do not match."))

@@ -273,19 +273,6 @@ func TestAuthAcrossNodes(t *testing.T) {
 		}
 	})
 
-	t.Run("one address is limited per node", func(t *testing.T) {
-		var last *http.Response
-		for range loginPerMinute + 1 {
-			last, _ = login(d, "nobody", "wrong-password-1", "Cf-Connecting-Ip", "203.0.113.9")
-		}
-		if last.StatusCode != http.StatusTooManyRequests {
-			t.Fatalf("attempt %d = %d", loginPerMinute+1, last.StatusCode)
-		}
-		if response, _ := login(d, "nobody", "wrong-password-1", "Cf-Connecting-Ip", "203.0.113.10"); response.StatusCode != http.StatusUnauthorized {
-			t.Fatal("another address was limited")
-		}
-	})
-
 	t.Run("failures lock the account on every node, even with the right password", func(t *testing.T) {
 		hash, err := bcrypt.GenerateFromPassword([]byte("locked-password-4"), bcrypt.MinCost)
 		if err != nil {
@@ -418,6 +405,39 @@ func TestForgedSessionsCannotStampedeLeader(t *testing.T) {
 	}
 	if response, body := c.do(server, "GET", "/", nil, session, header...); response.StatusCode != 200 || body != "dashboard for tester" {
 		t.Fatalf("real session after forged cookies = %d %q", response.StatusCode, body)
+	}
+}
+
+// Only failed sign-ins count toward a lockout: signing in again and again from one address is never refused.
+func TestRepeatedSuccessfulLoginsAreNotLimited(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	buses, configs := authTestCluster(t, ctx)
+	authTestAdmin(t, configs[0].Home, "tester", "first-password-1", 0600)
+	js, err := buses[0].JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := NewAuth(configs[0].Home, js)
+	go auth.Start(ctx)
+	server := httptest.NewServer(auth.Protect(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(rw, "dashboard for ", r.Context().Value(authUserKey{}))
+	}), http.NotFoundHandler()))
+	t.Cleanup(server.Close)
+	deadline := time.Now().Add(40 * time.Second)
+	for users, _, _ := auth.kv(); users == nil; users, _, _ = auth.kv() {
+		if time.Now().After(deadline) {
+			t.Fatal("auth buckets were not created")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	c := authTestClient{t, &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	header := []string{"Cf-Connecting-Ip", "203.0.113.41"}
+	for i := range 25 {
+		response, _ := c.do(server, "POST", "/login", url.Values{"user": {"tester"}, "password": {"first-password-1"}}, nil, header...)
+		if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/" || sessionOf(response) == nil {
+			t.Fatalf("sign-in %d: HTTP %d", i+1, response.StatusCode)
+		}
 	}
 }
 
