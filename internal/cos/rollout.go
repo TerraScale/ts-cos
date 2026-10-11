@@ -26,7 +26,7 @@ const (
 	mainCheckEvery = time.Minute
 	// mainQuiet is how long main must stay unchanged before its newest build rolls out, so a
 	// merge train lands as one rolling restart instead of one per merge.
-	mainQuiet = time.Minute
+	mainQuiet = 3 * time.Minute
 )
 
 const (

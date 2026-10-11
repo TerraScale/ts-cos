@@ -512,10 +512,10 @@ func TestMainSettlesBeforeRollingOut(t *testing.T) {
 	ctx, failed, now := context.Background(), func(string) bool { return false }, time.Now()
 	tipAt = now.Add(-10 * time.Second)
 	var settling mainSettling
-	if _, err := newestDeployableMain(ctx, f.Config, deployed, time.Time{}, failed); !errors.As(err, &settling) || time.Duration(settling) < 45*time.Second || time.Duration(settling) > 60*time.Second {
-		t.Fatalf("err = %v; want mainSettling with 45 to 60 s left", err)
+	if _, err := newestDeployableMain(ctx, f.Config, deployed, time.Time{}, failed); !errors.As(err, &settling) || time.Duration(settling) < mainQuiet-15*time.Second || time.Duration(settling) > mainQuiet {
+		t.Fatalf("err = %v; want mainSettling with up to %s left", err, mainQuiet)
 	}
-	tipAt = now.Add(-2 * time.Minute)
+	tipAt = now.Add(-mainQuiet - time.Minute)
 	if got, err := newestDeployableMain(ctx, f.Config, deployed, time.Time{}, failed); err != nil || got != tip {
 		t.Fatalf("quiet main: got %.12s, %v; want the tip", got, err)
 	}
