@@ -34,7 +34,7 @@ var rawStampText = regexp.MustCompile(`>[^<]*T\d\d:\d\d:\d\dZ`)
 func TestChatHeaderLocalTimes(t *testing.T) {
 	beat := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
 	var buf bytes.Buffer
-	if err := chatHead(chatHeader{Autopilot: AutopilotState{Interval: 15, LastBeat: beat.Format(time.RFC3339)}}, "chat").Render(context.Background(), &buf); err != nil {
+	if err := chatHead(chatHeader{Owner: true, Autopilot: AutopilotState{Interval: 15, LastBeat: beat.Format(time.RFC3339)}}, "chat").Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	head := buf.String()
@@ -42,7 +42,7 @@ func TestChatHeaderLocalTimes(t *testing.T) {
 		t.Fatalf("header with a beat:\n%s", head)
 	}
 	buf.Reset()
-	if err := chatHead(chatHeader{Autopilot: AutopilotState{Interval: 15}}, "chat").Render(context.Background(), &buf); err != nil {
+	if err := chatHead(chatHeader{Owner: true, Autopilot: AutopilotState{Interval: 15}}, "chat").Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "after the leader's first check") {
@@ -54,7 +54,7 @@ func TestSettingsLocalTimes(t *testing.T) {
 	beat := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
 	a := AutopilotState{Interval: 15, LastBeat: beat.Format(time.RFC3339), Log: []AutopilotEntry{{At: beat.Format(time.RFC3339), Host: "delta", Kind: "beat", Action: "Heartbeat"}}}
 	var buf bytes.Buffer
-	if err := settingsPage(chatHeader{}, a, modelsPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
+	if err := settingsPage(chatHeader{Owner: true}, a, modelsPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	page := buf.String()
@@ -66,7 +66,7 @@ func TestSettingsLocalTimes(t *testing.T) {
 		t.Fatal("settings shows a raw RFC3339 stamp as text")
 	}
 	buf.Reset()
-	if err := settingsPage(chatHeader{}, AutopilotState{Interval: 15}, modelsPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
+	if err := settingsPage(chatHeader{Owner: true}, AutopilotState{Interval: 15}, modelsPanelData{}, PushState{}, nil).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "last —") {

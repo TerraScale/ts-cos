@@ -123,8 +123,7 @@ func TestNodeRoutesWithoutBus(t *testing.T) {
 	}
 	defer store.Close()
 	w := NewWeb(store, nil)
-	mux := http.NewServeMux()
-	w.nodesRoutes(mux)
+	mux := w.routes()
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		rec := httptest.NewRecorder()

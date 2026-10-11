@@ -85,10 +85,11 @@ func presetButtons(body string) map[int]bool {
 
 // presetPage checks GET /settings on base renders every preset.
 func presetPage(ctx context.Context, e *E2EEnv, base string, interval int) (string, error) {
-	cookie, err := e.session(ctx, base)
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/settings", cookie, nil)
 	if err != nil {
 		return "", err

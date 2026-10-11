@@ -18,10 +18,11 @@ var haikuShare = regexp.MustCompile(`Haiku share</span>\s*<span class="kpi-value
 
 // checkTokensSavings uses the run's session on base and checks the Tokens page shows the Haiku share, and that host's savings ledger has today's row.
 func checkTokensSavings(ctx context.Context, e *E2EEnv, host, base string) (string, error) {
-	cookie, err := e.session(ctx, base)
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/tokens?w=7d", cookie, nil)
 	if err != nil {
 		return "", err

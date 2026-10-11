@@ -244,6 +244,26 @@ func (e *E2EEnv) session(ctx context.Context, base string) (string, error) {
 	return cookie, nil
 }
 
+// ownerSession signs the first admin in over NATS, with no password, for checks that read owner pages (node T3
+// data); end deletes the session and closes the connection. The session works on every node.
+func (e *E2EEnv) ownerSession(ctx context.Context) (cookie string, end func(), err error) {
+	bus, err := e.bus(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	js, err := bus.JetStream()
+	if err != nil {
+		bus.Close()
+		return "", nil, err
+	}
+	cookie, endSession, err := ownerProbeCookie(ctx, js, bus.conn)
+	if err != nil {
+		bus.Close()
+		return "", nil, err
+	}
+	return cookie, func() { endSession(); bus.Close() }, nil
+}
+
 // openSession creates the run's shared user, unless a test replaced newUser. Callers hold sessMu.
 func (e *E2EEnv) openSession(ctx context.Context) error {
 	newUser := e.newUser

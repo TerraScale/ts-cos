@@ -18,6 +18,7 @@ type Dashboard struct {
 	Inbox                   []InboxItem    `json:"inbox"`
 	History                 []InboxItem    `json:"history"`
 	Running, Ready, Failing int
+	Owner                   bool `json:"owner"` // node-T3 state is included: the viewer is the first admin
 }
 
 var ticketPattern = regexp.MustCompile(`(?i)\b[a-z]{1,10}-\d+\b`)

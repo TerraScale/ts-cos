@@ -135,29 +135,33 @@ templ settingsPage(h chatHeader, a AutopilotState, m modelsPanelData, push PushS
 		<body class="ts-app">
 			@chatHead(h, "settings")
 			<main class="page page-narrow">
-				@autopilotPanel(a)
+				if h.Owner {
+					@autopilotPanel(a)
+				}
 				@pushPanel(push)
-				<section class="panel" aria-labelledby="wakes-heading">
-					<header class="panel-head"><h2 id="wakes-heading">COS wakes</h2></header>
-					<table>
-						<thead>
-							<tr><th>Time (UTC)</th><th>Reason</th><th>Items</th><th>Input</th><th>Cached</th><th>Output</th></tr>
-						</thead>
-						<tbody>
-							for _, wk := range wakes {
-								<tr>
-									<td>{ wk.At.UTC().Format("15:04") }</td>
-									<td>{ wk.Reason }</td>
-									<td>{ integer(wk.Items) }</td>
-									<td>{ integer(wk.Input) }</td>
-									<td>{ integer(wk.CachedInput) }</td>
-									<td>{ integer(wk.Output) }</td>
-								</tr>
-							}
-						</tbody>
-					</table>
-				</section>
-				@modelsSection(m)
+				if h.Owner {
+					<section class="panel" aria-labelledby="wakes-heading">
+						<header class="panel-head"><h2 id="wakes-heading">COS wakes</h2></header>
+						<table>
+							<thead>
+								<tr><th>Time (UTC)</th><th>Reason</th><th>Items</th><th>Input</th><th>Cached</th><th>Output</th></tr>
+							</thead>
+							<tbody>
+								for _, wk := range wakes {
+									<tr>
+										<td>{ wk.At.UTC().Format("15:04") }</td>
+										<td>{ wk.Reason }</td>
+										<td>{ integer(wk.Items) }</td>
+										<td>{ integer(wk.Input) }</td>
+										<td>{ integer(wk.CachedInput) }</td>
+										<td>{ integer(wk.Output) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</section>
+					@modelsSection(m)
+				}
 				<section class="panel" aria-labelledby="account-heading">
 					<header class="panel-head"><h2 id="account-heading">Account</h2></header>
 					<div class="row">
@@ -179,25 +183,29 @@ templ chatHead(h chatHeader, page string) {
 	<header id="chat-head" class="ts-topbar">
 		<a class="ts-topbar-brand" href="/"><img src="/static/icon.svg" alt="" width="24" height="24"/><span>COS</span></a>
 		<ul id="topbar-stats" class="ts-topbar-stats" aria-label="Status">
-			<!-- TS-813 heartbeat state -->
-			<li id="heartbeat-slot" class="ts-topbar-stat">
-				if h.Autopilot.Interval > 0 {
-					<a href="/settings">
-						Heartbeat { integer(h.Autopilot.Interval) } min ·
-						if next := h.Autopilot.NextBeatTime(); next.IsZero() {
-							after the leader's first check
-						} else {
-							next @when(next)
-						}
-					</a>
-				}
-			</li>
-			<li class="ts-topbar-stat">{ integer(h.Running) } running</li>
-			<li class="ts-topbar-stat">{ integer(h.PRs) } PRs waiting</li>
+			if h.Owner {
+				<!-- TS-813 heartbeat state -->
+				<li id="heartbeat-slot" class="ts-topbar-stat">
+					if h.Autopilot.Interval > 0 {
+						<a href="/settings">
+							Heartbeat { integer(h.Autopilot.Interval) } min ·
+							if next := h.Autopilot.NextBeatTime(); next.IsZero() {
+								after the leader's first check
+							} else {
+								next @when(next)
+							}
+						</a>
+					}
+				</li>
+				<li class="ts-topbar-stat">{ integer(h.Running) } running</li>
+				<li class="ts-topbar-stat">{ integer(h.PRs) } PRs waiting</li>
+			}
 		</ul>
 		<nav class="ts-topnav" aria-label="Main">
 			for _, l := range navLinks {
-				<a class="ts-nav-link" href={ templ.SafeURL(l.href) } { currentPage(page, l.page)... }>{ l.label }</a>
+				if !l.owner || h.Owner {
+					<a class="ts-nav-link" href={ templ.SafeURL(l.href) } { currentPage(page, l.page)... }>{ l.label }</a>
+				}
 			}
 		</nav>
 		<a id="inbox-slot" class="ts-nav-link ts-topbar-inbox" href="/inbox" { currentPage(page, "inbox")... }>Inbox <span class="ts-nav-count">{ integer(h.Inbox) }</span></a>

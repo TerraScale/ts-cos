@@ -26,7 +26,7 @@ func TestChatSSEHeaderFollowsState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer web.Close()
-	server := httptest.NewServer(web.routes())
+	server := httptest.NewServer(ownerRoutes(web))
 	defer server.Close()
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/chat/events", nil)
 	response, err := server.Client().Do(req)
@@ -86,7 +86,7 @@ func TestChatRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	h := NewWeb(store, nil).routes()
+	h := ownerRoutes(NewWeb(store, nil))
 	serve := func(method, path string, datastar bool, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRecorder()
@@ -238,7 +238,7 @@ func TestMetricsRendersKPIProbe(t *testing.T) {
 	r := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	w.routes().ServeHTTP(r, req)
+	ownerRoutes(w).ServeHTTP(r, req)
 	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `data-probe="cos:kpi-probe:mariogk:1"`) {
 		t.Fatalf("GET /metrics = %d without the probe on #kpis", r.Code)
 	}

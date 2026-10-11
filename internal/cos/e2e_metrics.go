@@ -14,10 +14,11 @@ import (
 
 // checkMetricsKPIs uses the run's session on base and checks the Metrics page renders the KPI tiles.
 func checkMetricsKPIs(ctx context.Context, e *E2EEnv, base string) (string, error) {
-	cookie, err := e.session(ctx, base)
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	status, _, _, body, err := e2eRequest(ctx, "GET", base+"/metrics", cookie, nil)
 	if err != nil {
 		return "", err
@@ -30,10 +31,11 @@ func checkMetricsKPIs(ctx context.Context, e *E2EEnv, base string) (string, erro
 
 // checkMetricsKPIsLive publishes a kpi.probe and checks that base's open /metrics/events stream repaints #kpis with it within 2 s.
 func checkMetricsKPIsLive(ctx context.Context, e *E2EEnv, host, base string) (string, error) {
-	cookie, err := e.session(ctx, base)
+	cookie, end, err := e.ownerSession(ctx)
 	if err != nil {
 		return "", err
 	}
+	defer end()
 	stream, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(stream, "GET", base+"/metrics/events", nil)

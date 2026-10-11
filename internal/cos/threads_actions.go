@@ -200,6 +200,9 @@ func (w *Web) publishThreadAction(ctx context.Context, id string, now time.Time,
 	if err != nil {
 		return err
 	}
+	if w.Bus == nil {
+		return errBusUnavailable
+	}
 	js, err := w.Bus.JetStream()
 	if err != nil {
 		return err

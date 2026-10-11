@@ -120,7 +120,7 @@ func TestTokensPageRenders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	h := NewWeb(store, nil).routes()
+	h := ownerRoutes(NewWeb(store, nil))
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRecorder()

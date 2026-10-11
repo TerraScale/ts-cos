@@ -598,6 +598,10 @@ func limitsCommand(ctx context.Context, cfg Config, args []string, w io.Writer) 
 
 // limitsJSON serves the replicated state to the dashboard.
 func (w *Web) limitsJSON(rw http.ResponseWriter, r *http.Request) {
+	if w.Bus == nil {
+		http.Error(rw, "COS limits unavailable until COS NATS is ready", http.StatusServiceUnavailable)
+		return
+	}
 	kv, err := openLimits(r.Context(), w.Bus)
 	if err != nil {
 		http.Error(rw, "Cannot read COS limits", http.StatusInternalServerError)

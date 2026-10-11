@@ -82,7 +82,7 @@ func TestHomeScrollAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	server := httptest.NewServer(NewWeb(store, nil).routes())
+	server := httptest.NewServer(ownerRoutes(NewWeb(store, nil)))
 	defer server.Close()
 	res, err := server.Client().Get(server.URL + "/")
 	if err != nil {

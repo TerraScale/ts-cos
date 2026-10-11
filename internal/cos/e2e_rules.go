@@ -75,20 +75,20 @@ func autopilotKV(ctx context.Context, b *Bus) (jetstream.KeyValue, error) {
 	return js.KeyValue(ctx, autopilotSettings)
 }
 
-// nodeSession is one node's dashboard, signed in as the throwaway e2e user.
+// nodeSession is one node's dashboard, signed in as the first admin, who owns the autopilot state.
 type nodeSession struct{ host, base, cookie string }
 
-// nodeSessions returns the run's shared session on every node, so the polls below do not repeat the login.
-func nodeSessions(ctx context.Context, e *E2EEnv, urls []string) ([]nodeSession, error) {
+// nodeSessions returns the owner's session for every node, so the polls below do not repeat the sign-in; end deletes it.
+func nodeSessions(ctx context.Context, e *E2EEnv, urls []string) ([]nodeSession, func(), error) {
+	cookie, end, err := e.ownerSession(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	out := make([]nodeSession, 0, len(e2eHosts))
 	for i, h := range e2eHosts {
-		cookie, err := e.session(ctx, urls[i])
-		if err != nil {
-			return nil, err
-		}
 		out = append(out, nodeSession{h, urls[i], cookie})
 	}
-	return out, nil
+	return out, end, nil
 }
 
 // nodeAutopilot reads a node's autopilot state from its /status: the node's own SQLite mirror of COS_AUTOPILOT,
@@ -196,10 +196,11 @@ func reconcilerDroppedEvent(ctx context.Context, e *E2EEnv, urls []string) (evid
 	if err != nil {
 		return "", err
 	}
-	nodes, err := nodeSessions(ctx, e, urls)
+	nodes, endOwner, err := nodeSessions(ctx, e, urls)
 	if err != nil {
 		return "", err
 	}
+	defer endOwner()
 	// Restored when the replay fails. After a successful beat the beat writes the fingerprint back itself.
 	defer func() {
 		if err == nil {

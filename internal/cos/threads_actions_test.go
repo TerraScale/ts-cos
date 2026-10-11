@@ -220,6 +220,7 @@ func TestThreadActionRoute(t *testing.T) {
 	fake := &fakeBus{}
 	w := NewWeb(store, nil)
 	w.Bus, w.Chat, w.call, w.merge = nodes[0], chat, fake.bus, fake.merge
+	w.ownerID.Store(&u.ID) // the Threads panel lists node-T3 threads, which only the first admin sees
 	tab, err := chat.CreateTab(ctx, "Feature X", "")
 	if err != nil {
 		t.Fatal(err)

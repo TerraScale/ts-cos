@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -350,15 +351,24 @@ func revokeSessions(ctx context.Context, sessions jetstream.KeyValue, id string)
 }
 
 func (a *Auth) startSession(rw http.ResponseWriter, r *http.Request, sessions jetstream.KeyValue, u User) error {
+	cookie, _, err := mintSession(r.Context(), sessions, u)
+	if err != nil {
+		return err
+	}
+	setSessionCookie(rw, r, cookie, int(sessionTTL.Seconds()))
+	return nil
+}
+
+// mintSession stores a new random session for u and returns its cookie value ("<ULID>.<token>") and store key.
+func mintSession(ctx context.Context, sessions jetstream.KeyValue, u User) (cookie, key string, err error) {
 	raw := make([]byte, 32)
 	rand.Read(raw)
 	token := base64.RawURLEncoding.EncodeToString(raw)
-	key, _ := sessionKey(u.ID, token)
-	if _, err := sessions.Put(r.Context(), key, sessionValue(u)); err != nil {
-		return err
+	key, _ = sessionKey(u.ID, token)
+	if _, err := sessions.Put(ctx, key, sessionValue(u)); err != nil {
+		return "", "", err
 	}
-	setSessionCookie(rw, r, u.ID+"."+token, int(sessionTTL.Seconds()))
-	return nil
+	return u.ID + "." + token, key, nil
 }
 
 // ProbeSession signs the deploy health probe in like a browser, as "cos-probe"
@@ -368,14 +378,44 @@ func (a *Auth) ProbeSession(ctx context.Context) (cookie string, end func(), err
 	if sessions == nil {
 		return "", nil, errors.New("COS sessions are not available yet")
 	}
-	raw := make([]byte, 32)
-	rand.Read(raw)
-	token := base64.RawURLEncoding.EncodeToString(raw)
-	key, _ := sessionKey(probeUserID, token)
-	if _, err := sessions.Put(ctx, key, sessionValue(probeUser)); err != nil {
+	cookie, key, err := mintSession(ctx, sessions, probeUser)
+	if err != nil {
 		return "", nil, err
 	}
-	return probeUserID + "." + token, func() { _ = sessions.Delete(context.Background(), key) }, nil
+	return cookie, func() { _ = sessions.Delete(context.Background(), key) }, nil
+}
+
+// ownerProbeCookie signs the first admin in over NATS, with no password, so a check can read the owner's pages
+// (node T3 data) the way a browser does. It refuses before the bootstrap and for a disabled first admin; end deletes
+// the session. It needs only COS NATS access, like ProbeSession.
+func ownerProbeCookie(ctx context.Context, js jetstream.JetStream, nc *nats.Conn) (cookie string, end func(), err error) {
+	id, ok, err := firstAdmin(ctx, nc)
+	if err != nil {
+		return "", nil, err
+	}
+	if !ok {
+		return "", nil, errors.New("COS first admin is not bootstrapped yet")
+	}
+	value, _, found, err := leaderGet(ctx, nc, authBucket, "uid."+id)
+	if err != nil {
+		return "", nil, err
+	}
+	var rec authUser
+	if !found || json.Unmarshal(value, &rec) != nil {
+		return "", nil, errors.New("COS first admin has no account record")
+	}
+	if !rec.DisabledAt.IsZero() {
+		return "", nil, errors.New("COS first admin is disabled")
+	}
+	sessions, err := js.KeyValue(ctx, sessionBucket)
+	if err != nil {
+		return "", nil, fmt.Errorf("COS sessions unavailable: %w", err)
+	}
+	cookie, key, err := mintSession(ctx, sessions, User{ID: id, Name: rec.Name, Role: rec.Role})
+	if err != nil {
+		return "", nil, err
+	}
+	return cookie, func() { _ = sessions.Delete(context.Background(), key) }, nil
 }
 
 func setSessionCookie(rw http.ResponseWriter, r *http.Request, value string, maxAge int) {

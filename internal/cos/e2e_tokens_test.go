@@ -44,7 +44,7 @@ func TestTokensHaikuSharePageRenders(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := httptest.NewRecorder()
-	NewWeb(store, nil).routes().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/tokens?w=7d", nil))
+	ownerRoutes(NewWeb(store, nil)).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/tokens?w=7d", nil))
 	if r.Code != http.StatusOK {
 		t.Fatalf("GET /tokens?w=7d = %d", r.Code)
 	}

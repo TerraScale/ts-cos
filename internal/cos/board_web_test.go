@@ -82,7 +82,7 @@ var workFilterRE = regexp.MustCompile(`name="stage" value="([^"]*)" aria-pressed
 
 func workGet(t *testing.T, web *Web, path string) (int, string) {
 	t.Helper()
-	server := httptest.NewServer(web.routes())
+	server := httptest.NewServer(ownerRoutes(web))
 	defer server.Close()
 	response, err := server.Client().Get(server.URL + path)
 	if err != nil {
@@ -241,7 +241,7 @@ func TestWorkEventsStreamsTable(t *testing.T) {
 	defer cancel()
 	s := boardTestStore(t)
 	workFixture(t, s)
-	server := httptest.NewServer(NewWeb(s, nil).routes())
+	server := httptest.NewServer(ownerRoutes(NewWeb(s, nil)))
 	defer server.Close()
 	request, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/work/events?stage=in-review", nil)
 	response, err := server.Client().Do(request)
