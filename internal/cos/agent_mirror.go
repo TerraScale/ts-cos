@@ -15,6 +15,7 @@ import (
 type agentProjection struct {
 	Runs []struct {
 		ID          string    `json:"id"`
+		RootNodeID  string    `json:"rootNodeId"`
 		Status      string    `json:"status"`
 		RequestedAt time.Time `json:"requestedAt"`
 	} `json:"runs"`
@@ -109,12 +110,14 @@ func (a *Agent) mirror(ctx context.Context, st *AgentState, p agentProjection) e
 		}
 		if r.ID != st.Run {
 			st.Run, st.Reply = r.ID, replyID(r.ID, r.RequestedAt)
+			st.attachRun(r.ID)
 		}
 		e := ChatEntry{ID: st.Reply, Role: "cos", Text: text, Tools: tools, Streaming: active(r.Status)}
 		if err := a.show(ctx, e); err != nil {
 			return err
 		}
 	}
+	meterWakes(st, p)
 	pending := map[string]bool{}
 	for _, r := range p.RuntimeRequests {
 		if r.Status != "pending" {

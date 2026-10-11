@@ -48,6 +48,7 @@ type AgentState struct {
 	BriefTokens   int               `json:"briefTokens,omitempty"`
 	CarriedTokens int               `json:"carriedTokens,omitempty"`
 	Asked         map[string]string `json:"asked,omitempty"`
+	Wakes         []WakeRecord      `json:"wakes,omitempty"`
 	Orphans       []AgentThread     `json:"orphans,omitempty"`
 	// DigestSince is where the next escalation digest starts; it survives a fresh COS thread.
 	DigestSince time.Time `json:"digestSince,omitempty"`
@@ -235,8 +236,10 @@ func (a *Agent) Step(ctx context.Context) error {
 		}
 	}
 	wake := []string{}
+	reasons := []string{}
 	if failover && unanswered(a.Chat.Entries()) {
 		wake = append(wake, "The previous COS host failed over. The last user message in Recent chat has no reply yet: answer it.")
+		reasons = append(reasons, "failover")
 	}
 	focusText := ""
 	if e, err := a.Context.Get(ctx, "focus"); err == nil {
@@ -248,6 +251,7 @@ func (a *Agent) Step(ctx context.Context) error {
 		if st.ThreadID != "" {
 			st.addReason("focus changed")
 			wake = append(wake, "Focus changed: "+focusText+". Re-plan around it.")
+			reasons = append(reasons, "focus")
 		}
 		st.Focus = focus
 	}
@@ -272,10 +276,16 @@ func (a *Agent) Step(ctx context.Context) error {
 		wake = append(wake, "User: "+m.Text)
 		st.Delivered = m.ID
 	}
+	items := len(messages)
+	if items > 0 {
+		reasons = append(reasons, "chat")
+	}
 	if text, err := a.digestWake(ctx, &st, now); err != nil {
 		slog.Warn("escalation digest", "error", err)
 	} else if text != "" {
 		wake = append(wake, text)
+		reasons = append(reasons, "digest")
+		items++ // digestWake returns text only, so a digest counts as one item
 	}
 	busy := false
 	// Poll T3 every second while COS works or a wake is due, otherwise every 30 seconds.
@@ -318,7 +328,13 @@ func (a *Agent) Step(ctx context.Context) error {
 	}
 	if len(wake) > 0 {
 		text := strings.Join(wake, "\n\n")
+		reason := strings.Join(reasons, ", ")
 		if st.ThreadID == "" || (st.Restart != "" && !busy) {
+			// restart() clears st.Restart, so the reason is read first.
+			reason = "first start"
+			if st.Restart != "" {
+				reason = st.Restart
+			}
 			if err := a.restart(ctx, c, &st, v, text, now); err != nil {
 				return fmt.Errorf("start COS thread: %w", err)
 			}
@@ -327,6 +343,7 @@ func (a *Agent) Step(ctx context.Context) error {
 		}
 		st.LastWake = now
 		a.hot = now.Add(2 * time.Minute)
+		st.recordWake(WakeRecord{At: now, Reason: reason, Items: items})
 	}
 	if len(st.Orphans) > 0 && now.Sub(a.orphanCheck) > time.Minute {
 		a.orphanCheck = now
@@ -374,7 +391,7 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 		}
 	}
 	carried, oldBrief, replaced := st.CarriedTokens, st.BriefTokens, st.ThreadID != ""
-	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince, Asked: st.Asked}
+	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince, Asked: st.Asked, Wakes: st.Wakes}
 	st.BriefTokens = len(brief) / 4
 	if a.Savings != nil {
 		// Savings are best effort: a failed write must never fail the restart that already launched.
@@ -470,13 +487,15 @@ func (a *Agent) brief(ctx context.Context, v Dashboard, reason, wake string) (st
 }
 
 func init() {
-	cliCommands["agent"] = cliCommand{Usage: "agent [restart '<reason>']", Run: agentCommand}
+	cliCommands["agent"] = cliCommand{Usage: "agent [restart '<reason>' | wakes]", Run: agentCommand}
 }
 
-// agentCommand shows the COS thread state or asks the leader for a fresh brief.
+// agentCommand shows the COS thread state or its last wakes, or asks the leader for a fresh brief.
 func agentCommand(ctx context.Context, cfg Config, args []string, w io.Writer) error {
-	if len(args) > 2 || (len(args) > 0 && args[0] != "restart") || (len(args) == 1) {
-		return errors.New("usage: cos agent [restart '<reason>']")
+	wakes := len(args) == 1 && args[0] == "wakes"
+	valid := len(args) == 0 || wakes || (len(args) == 2 && args[0] == "restart")
+	if !valid {
+		return errors.New("usage: cos agent [restart '<reason>' | wakes]")
 	}
 	bus, err := ConnectBus(ctx, cfg)
 	if err != nil {
@@ -499,10 +518,20 @@ func agentCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 	}
 	e, err := kv.Get(ctx, "state")
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		if wakes {
+			return output(w, []WakeRecord{})
+		}
 		return output(w, AgentState{})
 	}
 	if err != nil {
 		return err
+	}
+	if wakes {
+		var st AgentState
+		if err := json.Unmarshal(e.Value(), &st); err != nil {
+			return err
+		}
+		return output(w, st.recentWakes(20))
 	}
 	_, err = w.Write(append(e.Value(), '\n'))
 	return err

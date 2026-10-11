@@ -168,7 +168,7 @@ templ kpiTiles(k kpiView) {
 	</section>
 }
 
-templ settingsPage(a AutopilotState, b budgetPanelData, push PushState) {
+templ settingsPage(a AutopilotState, b budgetPanelData, push PushState, wakes []WakeRecord) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Settings · COS")
@@ -185,6 +185,28 @@ templ settingsPage(a AutopilotState, b budgetPanelData, push PushState) {
 				@autopilotPanel(a)
 				@pushPanel(push)
 				@budgetSection(b)
+				<section class="panel" aria-labelledby="wakes-heading">
+					<header class="panel-head"><h2 id="wakes-heading">COS wakes</h2></header>
+					<table>
+						<thead>
+							<tr><th>Time (UTC)</th><th>Reason</th><th>Items</th><th>Input</th><th>Cached</th><th>Output</th><th>$</th></tr>
+						</thead>
+						<tbody>
+							for _, wk := range wakes {
+								<tr>
+									<td>{ wk.At.UTC().Format("15:04") }</td>
+									<td>{ wk.Reason }</td>
+									<td>{ integer(wk.Items) }</td>
+									<td>{ integer(wk.Input) }</td>
+									<td>{ integer(wk.CachedInput) }</td>
+									<td>{ integer(wk.Output) }</td>
+									<td>{ dollars(wk.USD, 3) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+					<p><small>API-equivalent cost at Opus 5.5 rates; the subscription pays.</small></p>
+				</section>
 				<section class="panel" aria-labelledby="account-heading">
 					<header class="panel-head"><h2 id="account-heading">Account</h2></header>
 					<div class="row">
