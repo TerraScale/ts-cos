@@ -142,7 +142,7 @@ func openAgentKV(ctx context.Context, bus *Bus) (jetstream.KeyValue, error) {
 // forTab makes the agent for another chat tab, sharing this agent's dependencies.
 func (a *Agent) forTab(t ChatTab) *Agent {
 	return &Agent{Host: a.Host, Home: a.Home, Exe: a.Exe, Tab: t, Chat: a.Chat, Store: a.Store, KV: a.KV, Context: a.Context,
-		Memory: a.Memory, Savings: a.Savings, T3: a.T3, Remote: a.Remote, js: a.js}
+		Memory: a.Memory, Savings: a.Savings, Limits: a.Limits, T3: a.T3, Remote: a.Remote, js: a.js}
 }
 
 // key names this agent's KV key; the main tab keeps the bare name.
