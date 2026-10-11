@@ -1,0 +1,67 @@
+package charts
+
+import "fmt"
+
+templ Line(data LineData) {
+	if len(data.Paths) > 0 {
+		<svg
+			class="ts-chart"
+			viewBox={ data.ViewBox }
+			role="group"
+			aria-label={ data.Label }
+			data-init={ columnTabStop }
+			data-on:keydown={ columnKeys }
+		>
+			<defs>
+				<linearGradient id={ data.GradientID } x1="0" y1="0" x2="0" y2="1">
+					<stop class="ts-chart-fill-start" offset="0"></stop>
+					<stop class="ts-chart-fill-end" offset="1"></stop>
+				</linearGradient>
+			</defs>
+			for i, grid := range data.Grid {
+				<line class={ "ts-chart-grid", templ.KV("ts-chart-baseline", i == len(data.Grid)-1) } x1={ fmt.Sprint(data.PlotLeft) } y1={ grid.Y } x2={ fmt.Sprint(data.PlotEnd) } y2={ grid.Y }></line>
+				if grid.Label != "" {
+					<text class="ts-chart-axis" x={ fmt.Sprint(data.PlotLeft - 10) } y={ grid.Y } dy="0.32em" text-anchor="end">{ grid.Label }</text>
+				}
+			}
+			for _, tick := range data.Ticks {
+				<text class="ts-chart-axis" x={ tick.X } y={ fmt.Sprint(data.Height - 8) } text-anchor={ tick.Anchor }>{ tick.Label }</text>
+			}
+			if data.AreaPath != "" {
+				<path class="ts-chart-area" d={ data.AreaPath } fill={ "url(#" + data.GradientID + ")" }></path>
+			}
+			for _, path := range data.Paths {
+				<path class={ "ts-chart-line " + path.Class } d={ path.Data } stroke-dasharray={ path.Dash }></path>
+			}
+			for _, marker := range data.Markers {
+				<circle class={ "ts-chart-dot ts-chart-marker " + marker.Class } cx={ marker.X } cy={ marker.Y } stroke-dasharray={ marker.Dash } r="4" aria-hidden="true"></circle>
+			}
+			for _, column := range data.Columns {
+				<g class="ts-chart-column" tabindex="0" role="img" aria-label={ column.Label }>
+					<rect class="ts-chart-hit" x={ column.Left } y={ fmt.Sprint(data.PlotTop) } width={ column.Width } height={ fmt.Sprint(data.PlotBottom - data.PlotTop) }></rect>
+					<line class="ts-chart-guide" x1={ column.X } y1={ fmt.Sprint(data.PlotTop) } x2={ column.X } y2={ fmt.Sprint(data.PlotBottom) }></line>
+					for _, dot := range column.Dots {
+						<circle class={ "ts-chart-dot " + dot.Class } cx={ dot.X } cy={ dot.Y } stroke-dasharray={ dot.Dash } r="4"></circle>
+					}
+					@lineTip(column.Tip)
+				</g>
+			}
+		</svg>
+	}
+}
+
+// lineTip is drawn inside its column so :hover and :focus-visible on the
+// column reveal it; the column's aria-label already carries the same text.
+templ lineTip(tip ChartTip) {
+	<g class="ts-chart-tip" aria-hidden="true">
+		<rect class="ts-chart-tip-box" x={ tip.X } y={ tip.Y } width={ tip.Width } height={ tip.Height } rx="6"></rect>
+		if tip.Header != "" {
+			<text class="ts-chart-tip-label" x={ tip.HeaderX } y={ tip.HeaderY } dy="0.35em">{ tip.Header }</text>
+		}
+		for _, row := range tip.Rows {
+			<line class={ "ts-chart-tip-swatch " + row.Class } x1={ tip.SwatchX } x2={ tip.SwatchEndX } y1={ row.Y } y2={ row.Y } stroke-dasharray={ row.Dash }></line>
+			<text class="ts-chart-tip-name" x={ tip.NameX } y={ row.Y } dy="0.35em">{ row.Name }</text>
+			<text class="ts-chart-tip-value" x={ tip.ValueX } y={ row.Y } dy="0.35em" text-anchor="end">{ row.Value }</text>
+		}
+	</g>
+}
