@@ -6,5 +6,5 @@ package behavior
 
 import "embed"
 
-//go:embed brief.md rules.md wake.json templates
+//go:embed brief.md rules.md wake.json models.json templates
 var Files embed.FS

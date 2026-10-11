@@ -35,7 +35,7 @@ type PlanInput struct {
 type WorkerBrief struct {
 	ID     string
 	Wave   int
-	Target map[string]string
+	Target map[string]any
 	Brief  string
 }
 
@@ -235,8 +235,9 @@ func PlanWorkers(in PlanInput) (Plan, error) {
 }
 
 // planTarget returns a fresh map so callers cannot mutate a shared one.
-func planTarget() map[string]string {
-	return map[string]string{"providerInstanceId": "claudeAgent", "model": "claude-haiku-5-5"}
+func planTarget() map[string]any {
+	pol := CurrentBehavior().Models
+	return pol.WorkerTarget(pol.Leader)
 }
 
 func planBrief(in PlanInput, it PlanItem, wave int) string {

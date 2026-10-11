@@ -1,0 +1,22 @@
+{
+  "_doc": "ts-cos model policy: the one file that decides which models COS runs. Hot-reloaded: every node applies a merge to main within seconds, with no rebuild. Edit it on main, ask COS in chat (COS runs a self-change that edits it), or change it on Settings. route = when each pair is used (no fixed mix): opus for important or complex work, sol for routine work; the launch and the self-change pick the pair from this text. leader = the pair COS's own brain runs on. Each pair = one advisor model (the thread: decides, runs commands only to decide) + its worker model (delegate_task subagents: writes code and does the work). priority = stream ticket keys, first = highest.",
+  "route": {
+    "opus": "important or complex: architecture, cluster/leader/consensus, auth, security, data loss, billing, prod infra, multi-repo, or failed twice on sol",
+    "sol": "less important or routine: UI polish, docs, tests and e2e checks, small fixes, chores"
+  },
+  "leader": "opus",
+  "pairs": {
+    "opus": {
+      "advisor": { "instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": [{ "id": "effort", "value": "high" }] },
+      "highStakesEffort": "xhigh",
+      "worker": { "providerInstanceId": "claudeAgent", "model": "claude-haiku-5-5" }
+    },
+    "sol": {
+      "advisor": { "instanceId": "codex", "model": "gpt-6.1-sol", "options": [{ "id": "reasoningEffort", "value": "high" }, { "id": "serviceTier", "value": "default" }] },
+      "highStakesEffort": "xhigh",
+      "worker": { "providerInstanceId": "codex", "model": "gpt-6-luna", "options": { "reasoningEffort": "medium", "serviceTier": "default" } }
+    }
+  },
+  "workerOnly": ["claude-haiku-5-5", "gpt-6-luna", "gpt-5.6-luna", "claude-haiku-4-5"],
+  "priority": []
+}

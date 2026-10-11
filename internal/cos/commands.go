@@ -100,6 +100,10 @@ func localCommand(ctx context.Context, open func(context.Context) (*T3, error), 
 		if err != nil {
 			return nil, err
 		}
+		input, err = launchInput(CurrentBehavior().Models, input)
+		if err != nil {
+			return nil, err
+		}
 		return c.Launch(ctx, input)
 	}
 	if command == "dispatch" {
@@ -250,6 +254,7 @@ func (c *T3) Projects(ctx context.Context) ([]Project, error) {
 	}
 	return out, nil
 }
+
 func (c *T3) Launch(ctx context.Context, input map[string]any) (any, error) {
 	if input["projectId"] == nil || input["projectId"] == "" {
 		ps, err := c.Projects(ctx)

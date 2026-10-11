@@ -48,13 +48,11 @@ const (
 	selfBlocked  = "blocked" // a guardrail stopped it; needs the user
 )
 
-// Self-change workers are Opus 5.5 managers; Haiku 5.5 only runs as their delegate_task subagents.
-var selfModel = map[string]any{"instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": []map[string]string{{"id": "effort", "value": "high"}}}
-
 type selfRecord struct {
 	ID         string    `json:"id"`
 	Request    string    `json:"request"`
 	Summary    string    `json:"summary"`
+	Pair       string    `json:"pair,omitempty"` // route pair the worker advises; "" on records made before pairs
 	Check      selfCheck `json:"check"`
 	Reverts    string    `json:"reverts,omitempty"`
 	RevertedBy string    `json:"revertedBy,omitempty"`
@@ -235,6 +233,7 @@ func selfRequest(raw string) (selfRecord, error) {
 	var in struct {
 		Request string    `json:"request"`
 		Summary string    `json:"summary"`
+		Pair    string    `json:"pair"`
 		Check   selfCheck `json:"check"`
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -254,8 +253,12 @@ func selfRequest(raw string) (selfRecord, error) {
 	if err := in.Check.validate(); err != nil {
 		return selfRecord{}, err
 	}
+	pol := CurrentBehavior().Models
+	if _, ok := pol.Pairs[in.Pair]; !ok {
+		return selfRecord{}, errors.New("pair must be " + pol.routeChoices(""))
+	}
 	now := time.Now().UTC()
-	return selfRecord{ID: selfID(now), Request: in.Request, Summary: in.Summary, Check: in.Check, State: selfQueued, CreatedAt: now}, nil
+	return selfRecord{ID: selfID(now), Request: in.Request, Summary: in.Summary, Pair: in.Pair, Check: in.Check, State: selfQueued, CreatedAt: now}, nil
 }
 
 // hasControl reports whether s has a control character other than those in allow.
@@ -659,8 +662,13 @@ func (d *selfDriver) launchWorker(ctx context.Context, r selfRecord, brief strin
 			}
 		}
 	}
+	pol := CurrentBehavior().Models
+	pair := r.Pair
+	if pair == "" {
+		pair = pol.Leader // records queued before the pair field existed have no route pair
+	}
 	input, _ := json.Marshal(map[string]any{
-		"projectTitle": "ts-cos", "title": r.Ticket + " · ts-cos: " + r.Summary, "modelSelection": selfModel, "message": brief,
+		"projectTitle": "ts-cos", "title": r.Ticket + " · ts-cos: " + r.Summary, "modelSelection": pol.Advisor(pair, false), "message": brief + "\n\n" + pol.BriefLine(pair),
 		"workspaceStrategy": map[string]any{"type": "worktree", "baseRef": r.Branch, "branch": r.Branch, "startFromOrigin": true},
 	})
 	var last error = errors.New("no COS host can launch a worker")

@@ -92,8 +92,8 @@ func usageTicket(branch, worktree string) string {
 	return strings.ToUpper(ticket)
 }
 
-// usageWorker is a Haiku session; every other model counts as advisor work.
-func usageWorker(model string) bool { return strings.Contains(model, "haiku") }
+// usageWorker is a worker-only model session; every other model counts as advisor work.
+func usageWorker(model string) bool { return CurrentBehavior().Models.WorkerOnlyModel(model) }
 
 type usageEntry struct {
 	Timestamp time.Time `json:"timestamp"`
