@@ -50,6 +50,8 @@ type AgentState struct {
 	Orphans       []AgentThread     `json:"orphans,omitempty"`
 	// DigestSince is where the next escalation digest starts; it survives a fresh COS thread.
 	DigestSince time.Time `json:"digestSince,omitempty"`
+	// EventsSince is where the next immediate-event read starts; it survives a fresh COS thread.
+	EventsSince time.Time `json:"eventsSince,omitempty"`
 }
 
 // addReason keeps every pending restart reason, so a failover is never hidden by a later trigger.
@@ -89,6 +91,7 @@ type Agent struct {
 	shown           map[string]string
 	orphanCheck     time.Time
 	digestCheck     time.Time
+	eventCheck      time.Time
 	hot, nextPoll   time.Time
 	saved           string
 }
@@ -302,6 +305,13 @@ func (a *Agent) Step(ctx context.Context) error {
 		reasons = append(reasons, "digest")
 		items++ // digestWake returns text only, so a digest counts as one item
 	}
+	if text, n, err := a.eventWake(ctx, &st, now); err != nil {
+		slog.Warn("COS events", "error", err)
+	} else if n > 0 {
+		wake = append(wake, text)
+		reasons = append(reasons, "event")
+		items += n
+	}
 	busy := false
 	// Poll T3 every second while COS works or a wake is due, otherwise every 30 seconds.
 	if st.ThreadID != "" && (len(wake) > 0 || now.Before(a.hot) || !now.Before(a.nextPoll)) {
@@ -407,7 +417,7 @@ func (a *Agent) restart(ctx context.Context, c agentT3, st *AgentState, v Dashbo
 		}
 	}
 	carried, oldBrief, replaced := st.CarriedTokens, st.BriefTokens, st.ThreadID != ""
-	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince, Asked: st.Asked, Wakes: st.Wakes}
+	*st = AgentState{Host: a.Host, ThreadID: id, Started: now, Behavior: st.Behavior, Reason: reason, Focus: st.Focus, OpenPRs: st.OpenPRs, Delivered: st.Delivered, Orphans: st.Orphans, DigestSince: st.DigestSince, EventsSince: st.EventsSince, Asked: st.Asked, Wakes: st.Wakes}
 	st.BriefTokens = len(brief) / 4
 	if a.Savings != nil {
 		// Savings are best effort: a failed write must never fail the restart that already launched.

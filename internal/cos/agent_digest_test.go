@@ -77,29 +77,41 @@ func TestAgentDigest(t *testing.T) {
 		e.publishEscalation(AutopilotEntry{Kind: ClassEscalate, Event: "budget-1", Host: "delta",
 			Action: "budget-pause", Reason: "fleet budget reached, pausing threads"})
 
+		// The worker question is urgent, so the digest is held for agentUrgentDelay and the window does not move.
 		e.step()
-		e.expectLaunches(1)
-		e.expectBrief("Escalations since "+since.Format("15:04")+" (6 events, 0 merged, 0 left out):",
-			"[urgent] worker-question", "(x3)", "[warn] orphan", "(x2)")
-		brief, _ := e.fake.launches[0]["message"].(string)
-		if strings.Count(brief, "[urgent] worker-question") != 1 {
-			t.Fatalf("worker question not folded to one line:\n%s", brief)
+		e.expectLaunches(0)
+		if !e.state().DigestSince.Equal(since) {
+			t.Fatalf("held digest moved the window to %s", e.state().DigestSince)
 		}
-		if strings.Index(brief, "[urgent] budget-pause") > strings.Index(brief, "[urgent] worker-question") {
-			t.Fatalf("budget pause is not first:\n%s", brief)
+		st := e.state()
+		text, err := e.a.digestWake(e.ctx, &st, time.Now().UTC().Add(agentUrgentDelay))
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !e.state().DigestSince.After(since) {
+		for _, want := range []string{"Escalations since " + since.Format("15:04") + " (6 events, 0 merged, 0 left out):",
+			"[urgent] worker-question", "(x3)", "[warn] orphan", "(x2)"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("digest missing %q:\n%s", want, text)
+			}
+		}
+		if strings.Count(text, "[urgent] worker-question") != 1 {
+			t.Fatalf("worker question not folded to one line:\n%s", text)
+		}
+		if strings.Index(text, "[urgent] budget-pause") > strings.Index(text, "[urgent] worker-question") {
+			t.Fatalf("budget pause is not first:\n%s", text)
+		}
+		if !st.DigestSince.After(since) {
 			t.Fatalf("digest window did not advance past %s", since)
+		}
+		again, err := e.a.escalations(e.ctx, st.DigestSince)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(again) != 0 {
+			t.Fatalf("%d escalations re-read after the digest, the last one included", len(again))
 		}
 		if got := e.savingCounter(SavingDedup); got.Events <= before.Events || got.Tokens <= before.Tokens {
 			t.Fatalf("dedup saving not recorded: before %+v, after %+v", before, got)
-		}
-
-		// Within the window the next step sends nothing new.
-		e.step()
-		e.expectLaunches(1)
-		if len(e.fake.sends) != 0 {
-			t.Fatalf("second step within the window sent %d messages", len(e.fake.sends))
 		}
 	})
 
@@ -113,7 +125,7 @@ func TestAgentDigest(t *testing.T) {
 				Reason: digestTestWord(i) + " " + strings.Repeat("the worker is waiting on a decision ", 8)})
 		}
 		st := e.state()
-		text, err := e.a.digestWake(e.ctx, &st, time.Now().UTC())
+		text, err := e.a.digestWake(e.ctx, &st, time.Now().UTC().Add(agentUrgentDelay))
 		if err != nil {
 			t.Fatal(err)
 		}

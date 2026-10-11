@@ -36,16 +36,36 @@ func (a *Agent) digestWake(ctx context.Context, st *AgentState, now time.Time) (
 	if err != nil {
 		return "", err
 	}
-	if len(events) == 0 {
+	if len(events) == 0 || !digestDue(*st, events, now) {
 		return "", nil
 	}
 	d := BuildDigest(events, since, digestMaxBytes)
 	a.recordDigestSavings(ctx, events, d, now)
-	st.DigestSince = events[len(events)-1].Time
+	// The read is inclusive of its start time, so the last escalation is read again unless the cursor moves past it.
+	st.DigestSince = events[len(events)-1].Time.Add(time.Nanosecond)
 	if d.Text == "" {
 		return "", nil
 	}
 	return fmt.Sprintf("Escalations since %s (%d events, %d merged, %d left out):\n%s", since.Format("15:04"), d.Events, d.Merged, d.Dropped, d.Text), nil
+}
+
+// agentUrgentDelay holds an urgent escalation this long, so a problem fixed meanwhile is not reported.
+const agentUrgentDelay = 2 * time.Minute
+
+// digestDue reports whether the unread escalations warrant a wake now. An urgent one is due after
+// agentUrgentDelay and ignores the hourly limit; otherwise the oldest must be DigestSeconds old and fewer
+// than MaxWakesPerHour digest wakes may have happened in the last hour.
+func digestDue(st AgentState, events []Event, now time.Time) bool {
+	for _, e := range events {
+		if e.Severity == SeverityUrgent {
+			if now.Sub(e.Time) >= agentUrgentDelay {
+				return true
+			}
+			break
+		}
+	}
+	b := CurrentBehavior().Wake
+	return now.Sub(events[0].Time) >= time.Duration(b.DigestSeconds)*time.Second && st.digestWakes(now.Add(-time.Hour)) < b.MaxWakesPerHour
 }
 
 // escalations reads the escalations published after since, oldest first, up to agentDigestFetch.

@@ -2,6 +2,7 @@ package cos
 
 import (
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -11,7 +12,7 @@ const agentMaxWakes = 100
 // WakeRecord is one COS wake, with its token use.
 type WakeRecord struct {
 	At          time.Time `json:"at"`
-	Reason      string    `json:"reason"` // chat, digest, focus, failover, or the restart reason
+	Reason      string    `json:"reason"` // chat, digest, event, focus, failover, or the restart reason
 	Items       int       `json:"items"`
 	Run         string    `json:"run,omitempty"`
 	Input       int       `json:"input"`
@@ -26,6 +27,17 @@ func (st *AgentState) recordWake(w WakeRecord) {
 	if len(st.Wakes) > agentMaxWakes {
 		st.Wakes = st.Wakes[len(st.Wakes)-agentMaxWakes:]
 	}
+}
+
+// digestWakes counts the digest wakes at or after since.
+func (st AgentState) digestWakes(since time.Time) int {
+	n := 0
+	for _, w := range st.Wakes {
+		if !w.At.Before(since) && strings.Contains(w.Reason, "digest") {
+			n++
+		}
+	}
+	return n
 }
 
 // recentWakes returns the last n wakes, newest first.
