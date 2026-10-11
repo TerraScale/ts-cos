@@ -32,12 +32,27 @@ func init() {
 			if err != nil {
 				return "", err
 			}
-			if !passed {
-				return "", errors.New(c.Summary + ": " + selfEvidence(results))
-			}
-			return c.Summary + ": " + selfEvidence(results), nil
+			return selfE2EVerdict(c, results, passed)
 		}})
 	}
+}
+
+// selfE2EVerdict skips a check while some node runs a build without the self-check
+// probe (its prerequisite), and fails only once every node can answer.
+func selfE2EVerdict(c selfCheck, results []selfCheckResult, passed bool) (string, error) {
+	var missing []string
+	for _, r := range results {
+		if r.Evidence == selfNotDeployed {
+			missing = append(missing, r.Host)
+		}
+	}
+	switch {
+	case len(missing) > 0:
+		return "", E2ESkip("self-check probe not deployed on " + strings.Join(missing, ", ") + ": TS-817 build not rolled out yet")
+	case !passed:
+		return "", errors.New(c.Summary + ": " + selfEvidence(results))
+	}
+	return c.Summary + ": " + selfEvidence(results), nil
 }
 
 func selfE2EID(ticket string) string { return "accept." + strings.ToLower(ticket) + ".live" }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -466,14 +467,25 @@ func TestSelfCheckOnEveryNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	buses, configs := authTestCluster(t, ctx)
+	live := selfCheck{Summary: "updated line", Template: "updated", Contains: []string{"Updated:"}}
+	// Before the probe is deployed the e2e check skips and names the prerequisite.
+	var results []selfCheckResult
+	busTestReady(t, "every node reports the probe missing", func() bool {
+		results, _, _ = runSelfCheck(ctx, buses[1], live)
+		return len(results) == 3 && results[0].Evidence == selfNotDeployed && results[2].Evidence == selfNotDeployed
+	})
+	if _, err := selfE2EVerdict(live, results, false); !errors.As(err, new(e2eSkip)) || !strings.Contains(err.Error(), "TS-817 build not rolled out") {
+		t.Fatalf("undeployed probe: %v", err)
+	}
+	if failedEverywhere(results) {
+		t.Fatal("nodes without the probe count as a failing check")
+	}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer cancel()
 	for i, bus := range buses {
 		wg.Go(func() { runSelfProbe(ctx, configs[i], bus) })
 	}
-	live := selfCheck{Summary: "updated line", Template: "updated", Contains: []string{"Updated:"}}
-	var results []selfCheckResult
 	busTestReady(t, "all nodes answer", func() bool {
 		var passed bool
 		results, passed, _ = runSelfCheck(ctx, buses[1], live)
@@ -483,6 +495,9 @@ func TestSelfCheckOnEveryNode(t *testing.T) {
 	results, passed, err := runSelfCheck(ctx, buses[1], missing)
 	if err != nil || passed || !failedEverywhere(results) || !strings.Contains(results[0].Evidence, `missing "Shipped:"`) {
 		t.Fatalf("failing check: %v %v %+v", passed, err, results)
+	}
+	if _, err := selfE2EVerdict(missing, results, passed); err == nil || errors.As(err, new(e2eSkip)) {
+		t.Fatalf("deployed probe with a failing check must fail, got %v", err)
 	}
 	bad, _ := json.Marshal(map[string]any{"summary": "x", "path": "http://evil/", "contains": []string{"x"}})
 	m, err := buses[0].conn.RequestWithContext(ctx, selfCheckSubject("beta"), bad)

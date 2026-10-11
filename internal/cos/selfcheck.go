@@ -41,6 +41,8 @@ const (
 	selfDashboard = "http://127.0.0.1:8790" // every node serves the dashboard here
 	selfNodes     = 3
 	selfProbeTime = 20 * time.Second
+	// Evidence when no process serves the node's selfcheck subject: its build predates TS-817.
+	selfNotDeployed = "self-check probe not deployed"
 )
 
 var (
@@ -193,8 +195,12 @@ func runSelfCheck(ctx context.Context, bus *Bus, c selfCheck) (results []selfChe
 			results[i] = selfCheckResult{Host: host, Evidence: "no answer"}
 			call, cancel := context.WithTimeout(ctx, selfProbeTime+5*time.Second)
 			defer cancel()
-			if m, err := bus.conn.RequestWithContext(call, selfCheckSubject(host), data); err == nil {
+			m, err := bus.conn.RequestWithContext(call, selfCheckSubject(host), data)
+			switch {
+			case err == nil:
 				_ = json.Unmarshal(m.Data, &results[i])
+			case errors.Is(err, nats.ErrNoResponders):
+				results[i].Evidence = selfNotDeployed
 			}
 		})
 	}
@@ -212,7 +218,7 @@ func failedEverywhere(results []selfCheckResult) bool {
 		return false
 	}
 	for _, r := range results {
-		if r.Pass || r.Evidence == "no answer" {
+		if r.Pass || r.Evidence == "no answer" || r.Evidence == selfNotDeployed {
 			return false
 		}
 	}
