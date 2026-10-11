@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +19,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Access checks sign in as a throwaway "e2e-<random>" user written straight into the auth KV and
+// Access checks sign in as a throwaway "e2e-<random>" user created in the auth KV and
 // deleted afterwards, so the user's own credential is never read, used or locked. Brute force runs
 // only against tailnet URLs: the public URL shares the homelab's address with the user's browser.
 
@@ -30,6 +29,7 @@ var e2eHTTP = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.
 
 type e2eUser struct {
 	name, password string
+	user           User
 	users          jetstream.KeyValue
 	sessions       jetstream.KeyValue
 	lockouts       jetstream.KeyValue
@@ -61,19 +61,17 @@ func (e *E2EEnv) tempUser(ctx context.Context, bus *Bus) (*e2eUser, func(), erro
 	if err != nil {
 		return nil, nil, err
 	}
-	value, _ := json.Marshal(authUser{Bcrypt: string(hash)})
-	if _, err := u.users.Create(call, "user."+u.name, value); err != nil {
+	if u.user, err = createUser(call, u.users, u.name, roleMember, string(hash)); err != nil {
 		return nil, nil, fmt.Errorf("create temporary user: %w", err)
 	}
-	return u, func() { deleteE2EUser(u, u.name) }, nil
+	return u, func() { deleteE2EUser(u, u.user) }, nil
 }
 
 // deleteE2EUser runs on a fresh context so a cancelled run still removes the account.
-func deleteE2EUser(u *e2eUser, name string) {
+func deleteE2EUser(u *e2eUser, user User) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = u.users.Delete(ctx, "user."+name)
-	_ = u.lockouts.Delete(ctx, "acct."+name)
+	_ = deleteUser(ctx, u.users, u.sessions, u.lockouts, user)
 	// Brute-force checks lock the runner's own address too, which would refuse every later check's login.
 	if addrs, err := net.InterfaceAddrs(); err == nil {
 		for _, a := range addrs {
@@ -82,22 +80,21 @@ func deleteE2EUser(u *e2eUser, name string) {
 			}
 		}
 	}
-	if keys, err := u.sessions.ListKeysFiltered(ctx, name+".*"); err == nil {
-		for key := range keys.Keys() {
-			_ = u.sessions.Delete(ctx, key)
-		}
-	}
 }
 
 // sweepE2EUsers removes accounts a crashed earlier run left behind (older than 10 minutes).
 func sweepE2EUsers(ctx context.Context, u *e2eUser) {
-	keys, err := u.users.ListKeysFiltered(ctx, "user.e2e-*")
+	keys, err := u.users.ListKeys(ctx)
 	if err != nil {
 		return
 	}
 	for key := range keys.Keys() {
-		if entry, err := u.users.Get(ctx, key); err == nil && time.Since(entry.Created()) > 10*time.Minute {
-			deleteE2EUser(u, strings.TrimPrefix(key, "user."))
+		name, ok := strings.CutPrefix(key, "name.")
+		if !ok || !strings.HasPrefix(name, "e2e-") {
+			continue
+		}
+		if entry, err := u.users.Get(ctx, key); err == nil && ulidPattern.Match(entry.Value()) && time.Since(entry.Created()) > 10*time.Minute {
+			deleteE2EUser(u, User{ID: string(entry.Value()), Name: name})
 		}
 	}
 }

@@ -130,11 +130,11 @@ func selfProbeCookie(ctx context.Context, js jetstream.JetStream) (string, func(
 	raw := make([]byte, 32)
 	rand.Read(raw)
 	token := base64.RawURLEncoding.EncodeToString(raw)
-	key, _ := sessionKey("cos-probe", token)
-	if _, err := sessions.Put(ctx, key, []byte(time.Now().UTC().Format(time.RFC3339))); err != nil {
+	key, _ := sessionKey(probeUserID, token)
+	if _, err := sessions.Put(ctx, key, sessionValue(probeUser)); err != nil {
 		return "", nil, err
 	}
-	return "cos-probe." + token, func() { _ = sessions.Delete(context.Background(), key) }, nil
+	return probeUserID + "." + token, func() { _ = sessions.Delete(context.Background(), key) }, nil
 }
 
 func selfCheckSubject(host string) string { return "cos." + host + ".selfcheck" }
