@@ -10,8 +10,9 @@ nice -n 19 go test ./...
 ```
 
 Go 1.27 (latest stable) with pure-Go SQLite. HTML is generated with the pinned
-templ tool; Datastar and Pico.css load from pinned CDNs. No JS/CSS build step,
-Node runtime, or cgo. Commit both `.templ` and generated `_templ.go` files.
+templ tool; Datastar loads from a pinned CDN. The one hand-written stylesheet,
+`internal/cos/static/cos.css`, is embedded and served at a content-hashed URL
+with long cache headers. No JS/CSS build step, Node runtime, or cgo. Commit both `.templ` and generated `_templ.go` files.
 
 ## Run a host
 

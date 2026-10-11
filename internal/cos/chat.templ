@@ -3,95 +3,72 @@ package cos
 templ chatPage(h chatHeader, entries []ChatEntry) {
 	<!DOCTYPE html>
 	<html lang="en">
-		@pageHead()
-		<body data-init="@get('/chat/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
+		@docHead("COS · TerraScale")
+		<body class="shell chat" data-init="@get('/chat/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
 			@chatHead(h)
-			<main id="scroll">
+			<main id="scroll" class="chat-log">
 				@chatMessages(entries)
 			</main>
-			<form id="composer" data-on:submit__prevent="@post('/chat')">
+			<form id="composer" class="composer" data-on:submit__prevent="@post('/chat')">
 				<textarea data-bind:msg rows="2" maxlength="20000" placeholder="Message COS" aria-label="Message COS" data-on:keydown="evt.key === 'Enter' && (evt.ctrlKey || evt.metaKey) && el.form.requestSubmit()"></textarea>
-				<button type="submit">Send</button>
+				<button class="btn-primary" type="submit">Send</button>
 			</form>
 		</body>
 	</html>
 }
 
-templ pageHead() {
-	<head>
-		<meta charset="utf-8"/>
-		<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content"/>
-		<title>COS · TerraScale</title>
-		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.classless.min.css"/>
-		<script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js"></script>
-		<style>
-			body{display:flex;flex-direction:column;height:100dvh;margin:0}
-			#chat-head{flex:none;padding:0 1rem}
-			#chat-head ul{flex-wrap:wrap}
-			#chat-head li{padding:.25rem .5rem}
-			#chat-head li:empty{display:none}
-			#scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column-reverse;padding:0 1rem;max-width:none}
-			#messages,#composer{width:100%;max-width:48rem;margin:0 auto}
-			.msg{margin:.5rem 0;padding:.75rem 1rem;overflow-wrap:anywhere}
-			.msg pre,.table-scroll{overflow-x:auto}
-			.inbox-text{white-space:pre-wrap}
-			.inbox-options{display:flex;flex-wrap:wrap;gap:.5rem}
-			.inbox-options button{width:auto;margin:0}
-			body>main{width:100%;max-width:48rem;margin:0 auto;padding:0 1rem;overflow-y:auto}
-			.msg>:last-child{margin-bottom:0}
-			.user{margin-left:15%;white-space:pre-wrap;background:var(--pico-primary-background);color:var(--pico-primary-inverse)}
-			.system{text-align:center;background:none;box-shadow:none;padding:.25rem}
-			#composer{flex:none;display:flex;gap:.5rem;padding:.5rem 1rem calc(.5rem + env(safe-area-inset-bottom))}
-			#composer textarea{margin:0;resize:none}
-			#composer button{margin:0;width:auto}
-		</style>
-	</head>
-}
-
 templ settingsPage(a AutopilotState) {
 	<!DOCTYPE html>
 	<html lang="en">
-		@pageHead()
-		<body>
-			<header id="chat-head">
-				<nav>
-					<ul><li><a href="/">Chat</a></li><li><strong>Settings</strong></li></ul>
-					<ul>
-						<li><a href="/password">Change password</a></li>
-						<li><form method="post" action="/logout"><button type="submit" class="secondary">Log out</button></form></li>
-					</ul>
+		@docHead("Settings · COS")
+		<body class="shell">
+			<header class="topbar">
+				<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
+				<nav class="topbar-nav" aria-label="Main">
+					<a class="navlink" href="/">Chat</a>
+					<a class="navlink" href="/settings" aria-current="page">Settings</a>
 				</nav>
 			</header>
-			<main>
-				<p id="autopilot-notice" role="status"></p>
+			<main class="page page-narrow">
 				@autopilotPanel(a)
+				<section class="panel" aria-labelledby="account-heading">
+					<header class="panel-head"><h2 id="account-heading">Account</h2></header>
+					<div class="row">
+						<a class="btn" href="/password">Change password</a>
+						<form class="inline-form" method="post" action="/logout">
+							<button type="submit">Log out</button>
+						</form>
+					</div>
+				</section>
 			</main>
+			<p id="autopilot-notice" class="toast" role="status"></p>
 		</body>
 	</html>
 }
 
 templ chatHead(h chatHeader) {
-	<header id="chat-head">
-		<nav>
-			<ul><li><a href="/"><strong>COS</strong></a></li></ul>
-			<ul>
-				<!-- TS-813 heartbeat state -->
-				<li id="heartbeat-slot">
-					if h.Autopilot.Interval > 0 {
-						<a href="/settings">Heartbeat { integer(h.Autopilot.Interval) } min · next { h.Autopilot.NextBeat() }</a>
-					}
-				</li>
-				<li>{ integer(h.Running) } running</li>
-				<li>{ integer(h.PRs) } PRs waiting</li>
-				<li id="inbox-slot"><a href="/inbox">Inbox <mark>{ integer(h.Inbox) }</mark></a></li>
-				<li><a href="/settings">Settings</a></li>
-			</ul>
+	<header id="chat-head" class="topbar">
+		<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
+		<ul class="topbar-stats" aria-label="Status">
+			<!-- TS-813 heartbeat state -->
+			<li id="heartbeat-slot" class="stat">
+				if h.Autopilot.Interval > 0 {
+					<a href="/settings">Heartbeat { integer(h.Autopilot.Interval) } min · next { h.Autopilot.NextBeat() }</a>
+				}
+			</li>
+			<li class="stat">{ integer(h.Running) } running</li>
+			<li class="stat">{ integer(h.PRs) } PRs waiting</li>
+		</ul>
+		<nav class="topbar-nav" aria-label="Main">
+			<a class="navlink" href="/">Chat</a>
+			<a id="inbox-slot" class="navlink" href="/inbox">Inbox <span class="badge badge-accent">{ integer(h.Inbox) }</span></a>
+			<a class="navlink" href="/settings">Settings</a>
 		</nav>
 	</header>
 }
 
 templ chatMessages(entries []ChatEntry) {
-	<div id="messages" role="log" aria-live="polite">
+	<div id="messages" class="chat-thread" role="log" aria-live="polite">
 		if len(entries) == 0 {
 			<p class="msg system" id="m-empty">Ask COS anything: what's running, what needs you, or what to do next.</p>
 		}
@@ -110,7 +87,7 @@ templ chatEntry(e ChatEntry) {
 				<small>{ e.Text }</small>
 			default:
 				if len(e.Tools) > 0 {
-					<details>
+					<details class="disclosure msg-tools">
 						<summary>{ toolSummary(e.Tools) }</summary>
 						<ol>
 							for _, tool := range e.Tools {
@@ -119,9 +96,9 @@ templ chatEntry(e ChatEntry) {
 						</ol>
 					</details>
 				}
-				@templ.Raw(renderMarkdown(e.Text))
+				<div class="prose">@templ.Raw(renderMarkdown(e.Text))</div>
 				if e.Streaming {
-					<small aria-busy="true">Working…</small>
+					<small class="msg-status" aria-busy="true">Working…</small>
 				}
 		}
 	</article>

@@ -651,6 +651,14 @@ func inboxKindLabel(item InboxItem) string {
 	}
 	return label
 }
+
+// inboxTone colors an item's kind tag (cos.css .tag[data-tone]); "" is neutral.
+func inboxTone(item InboxItem) string {
+	if urgent(item) {
+		return "danger"
+	}
+	return map[string]string{"question": "accent", "decision": "ok", "blocker": "warn"}[item.Kind]
+}
 func inboxTextLabel(item InboxItem) string {
 	switch item.Kind {
 	case "decision":

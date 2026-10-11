@@ -1,6 +1,6 @@
 # ts-cos
 
-COS is one Go binary: a JSON CLI and a templ / Datastar / Pico.css dashboard.
+COS is one Go binary: a JSON CLI and a templ / Datastar dashboard styled by one vanilla CSS file (`internal/cos/static/cos.css`, no framework).
 Local SQLite (`~/.local/share/cos/cos.db`, modernc.org/sqlite, no cgo) is the
 recorded exception to TerraScale's TerraBase storage rule (2026-10-09).
 

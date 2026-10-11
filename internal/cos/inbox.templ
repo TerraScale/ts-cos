@@ -3,112 +3,134 @@ package cos
 templ inboxPage(h chatHeader, v Dashboard) {
 	<!DOCTYPE html>
 	<html lang="en">
-		@pageHead()
-		<body data-init="@get('/inbox/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
+		@docHead("COS · TerraScale")
+		<body class="shell" data-init="@get('/inbox/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
 			@chatHead(h)
-			<main>
+			<main class="page">
 				@inbox(v)
 			</main>
 		</body>
 	</html>
 }
 
-// The Inbox mirrors T3 Code's: a list of what COS needs, each opening to its
-// context with answer controls. Open items keep their state across live patches.
+// The Inbox mirrors T3 Code's: a list of what COS needs; the selected item (URL fragment) shows its context and answer controls.
 templ inbox(v Dashboard) {
-	<section id="inbox" aria-labelledby="inbox-heading">
-		<h2 id="inbox-heading">Inbox <mark>{ integer(len(v.Inbox)) }</mark></h2>
+	<section id="inbox" class="panel inbox" aria-labelledby="inbox-heading">
+		<header class="panel-head"><h2 id="inbox-heading">Inbox <span class="badge badge-accent">{ integer(len(v.Inbox)) }</span></h2></header>
 		if len(v.Inbox) == 0 {
-			<p>Nothing needs you. COS keeps working.</p>
-		}
-		for _, item := range v.Inbox {
-			<details id={ "inbox-" + item.ID } name="inbox" data-preserve-attr="open">
-				<summary>
-					<strong>{ inboxKindLabel(item) }</strong> · { item.Title }
-					<small>
-						{ age(item.Created) } ago
-						if item.Blocks != "" {
-							· blocks { item.Blocks }
-						}
-						if item.Ticket != "" {
-							· { item.Ticket }
-						}
-					</small>
-				</summary>
-				<article>
-					if item.Context != "" {
-						<p class="inbox-text">{ item.Context }</p>
-					}
-					<p>
-						if url := ticketURL(v, item.Ticket); url != "" {
-							<a href={ templ.URL(url) }>{ item.Ticket }</a> ·
-						}
-						for _, link := range item.Links {
-							<a href={ templ.URL(link) }>{ link }</a> ·
-						}
-						<small>From { item.Source }
-							if item.Host != "" {
-								· { item.Host } worker thread
-							}
-						</small>
-					</p>
-					if item.Kind != "fyi" {
-						<form method="post" action={ templ.SafeURL("/inbox/" + item.ID + "/answer") } data-on:submit={ "@post('/inbox/" + item.ID + "/answer', {contentType: 'form'})" }>
-							if len(item.Options) > 0 {
-								<div class="inbox-options" role="group" aria-label="Options">
-									for i, option := range item.Options {
-										<button type="submit" name="option" value={ option }>
-											{ option }
-											if i == 0 && item.Kind == "question" {
-												(Recommended)
+			<p class="empty">Nothing needs you. COS keeps working.</p>
+		} else {
+			<div class="inbox-pane">
+				<ol class="inbox-list">
+					for _, item := range v.Inbox {
+						<li id={ "inbox-" + item.ID } class="inbox-item">
+							<a class="inbox-row" href={ templ.SafeURL("#inbox-" + item.ID) }>
+								<span class="row">
+									<span class="tag" data-tone={ inboxTone(item) }>{ inboxKindLabel(item) }</span>
+									<span class="inbox-age">{ age(item.Created) } ago</span>
+								</span>
+								<span class="inbox-title">{ item.Title }</span>
+								if item.Blocks != "" || item.Ticket != "" {
+									<span class="meta">
+										if item.Blocks != "" {
+											blocks { item.Blocks }
+										}
+										if item.Blocks != "" && item.Ticket != "" {
+											·
+										}
+										if item.Ticket != "" {
+											{ item.Ticket }
+										}
+									</span>
+								}
+							</a>
+							<article class="inbox-detail" aria-labelledby={ "inbox-" + item.ID + "-title" }>
+								<a class="inbox-back" href="#inbox">← Inbox</a>
+								<h3 id={ "inbox-" + item.ID + "-title" } class="inbox-detail-title">{ item.Title }</h3>
+								<p class="meta">
+									<span class="tag" data-tone={ inboxTone(item) }>{ inboxKindLabel(item) }</span>
+									<span>{ age(item.Created) } ago</span>
+									if item.Blocks != "" {
+										<span>blocks { item.Blocks }</span>
+									}
+									<span>From { item.Source }</span>
+									if item.Host != "" {
+										<span>{ item.Host } worker thread</span>
+									}
+								</p>
+								if item.Context != "" {
+									<p class="inbox-text">{ item.Context }</p>
+								}
+								<p class="meta inbox-links">
+									if url := ticketURL(v, item.Ticket); url != "" {
+										<a href={ templ.URL(url) }>{ item.Ticket }</a>
+									}
+									for _, link := range item.Links {
+										<a href={ templ.URL(link) }>{ link }</a>
+									}
+								</p>
+								if item.Kind != "fyi" {
+									<form class="stack inbox-answer" method="post" action={ templ.SafeURL("/inbox/" + item.ID + "/answer") } data-on:submit={ "@post('/inbox/" + item.ID + "/answer', {contentType: 'form'})" }>
+										if len(item.Options) > 0 {
+											<div class="inbox-options" role="group" aria-label="Options">
+												for i, option := range item.Options {
+													if i == 0 && item.Kind == "question" {
+														<button class="btn-primary" type="submit" name="option" value={ option }>
+															{ option }
+															<span class="tag">Recommended</span>
+														</button>
+													} else {
+														<button type="submit" name="option" value={ option }>{ option }</button>
+													}
+												}
+											</div>
+										}
+										<label class="field">
+											<span class="field-label">{ inboxTextLabel(item) }</span>
+											<textarea name="text" rows="2" maxlength="3000"></textarea>
+										</label>
+										<div class="row"><button type="submit">Send</button></div>
+									</form>
+								}
+								if item.Kind == "decision" || item.Kind == "blocker" || item.Kind == "fyi" {
+									<form method="post" action={ templ.SafeURL("/inbox/" + item.ID + "/dismiss") } data-on:submit={ "@post('/inbox/" + item.ID + "/dismiss', {contentType: 'form'})" }>
+										<button class="btn-ghost" type="submit">
+											if item.Kind == "decision" {
+												Keep this decision
+											} else {
+												Got it
 											}
 										</button>
-									}
-								</div>
-							}
-							<label>
-								{ inboxTextLabel(item) }
-								<textarea name="text" rows="2" maxlength="3000"></textarea>
-							</label>
-							<button type="submit">Send</button>
-						</form>
-					}
-					if item.Kind == "decision" || item.Kind == "blocker" || item.Kind == "fyi" {
-						<form method="post" action={ templ.SafeURL("/inbox/" + item.ID + "/dismiss") } data-on:submit={ "@post('/inbox/" + item.ID + "/dismiss', {contentType: 'form'})" }>
-							<button type="submit">
-								if item.Kind == "decision" {
-									Keep this decision
-								} else {
-									Got it
+									</form>
 								}
-							</button>
-						</form>
+							</article>
+						</li>
 					}
-				</article>
-			</details>
+				</ol>
+			</div>
 		}
 		if len(v.History) > 0 {
-			<details>
+			<details class="disclosure inbox-history">
 				<summary>History ({ integer(len(v.History)) })</summary>
-				<ul>
+				<ol class="list history-list">
 					for _, item := range v.History {
 						<li>
-							<strong>{ item.Status }</strong> · { item.Title }
+							<div class="row"><span class="tag">{ item.Status }</span><span>{ item.Title }</span></div>
 							if item.Answer != nil {
-								<small class="inbox-text">Answer: { answerText(item.Answer) }</small>
+								<p class="sub inbox-text">Answer: { answerText(item.Answer) }</p>
 							}
 							if item.Note != "" {
-								<small>{ item.Note }</small>
+								<p class="sub">{ item.Note }</p>
 							}
-							<small>
+							<p class="sub">
 								{ age(item.Closed) } ago on { item.ClosedOn }
 								if item.ForwardError != "" {
 									· forward to worker failed, retrying: { item.ForwardError }
 								}
-							</small>
+							</p>
 						</li>
 					}
-				</ul>
+				</ol>
 			</details>
 		}
 	</section>
