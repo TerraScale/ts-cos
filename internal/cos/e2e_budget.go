@@ -96,14 +96,20 @@ func budgetCleanup(ctx context.Context, steps ...func(context.Context) error) er
 	return errors.Join(errs...)
 }
 
-// budgetE2EPurge removes the item under key, if the check filed it, so history keeps no probe items.
-func budgetE2EPurge(in *Inbox, key string) func(context.Context) error {
+// budgetE2EPurge removes the item under key, if the check filed it, and the applied marker an answer left
+// for it, so history and the settings bucket keep no probe state.
+func budgetE2EPurge(in *Inbox, settings jetstream.KeyValue, key string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		item, ok, err := budgetE2EItem(ctx, in, key)
 		if err != nil || !ok {
 			return err
 		}
-		return in.purge(ctx, item.ID)
+		// Only an answered item has a marker, so a missing one is not a failure.
+		err = settings.Delete(ctx, budgetAppliedKey(item.ID))
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			err = nil
+		}
+		return errors.Join(err, in.purge(ctx, item.ID))
 	}
 }
 
@@ -147,7 +153,7 @@ func checkBudgetFYI(ctx context.Context, e *E2EEnv) (evidence string, err error)
 	day := time.Now().UTC().Format(time.DateOnly)
 	fyiKey, pauseKey, raiseKey := budgetExceededKey(day, scope, e2eBudgetLimit), budgetE2EPauseKey(day, scope), budgetRaiseKey(day, scope)
 	defer func() {
-		err = errors.Join(err, budgetCleanup(ctx, budgetE2EPurge(in, fyiKey), budgetE2EPurge(in, pauseKey), budgetE2EDeleteRaise(settings, raiseKey)))
+		err = errors.Join(err, budgetCleanup(ctx, budgetE2EPurge(in, settings, fyiKey), budgetE2EPurge(in, settings, pauseKey), budgetE2EDeleteRaise(settings, raiseKey)))
 	}()
 
 	ev, err := budgetE2EEvent(scope, day, "", "")
@@ -237,7 +243,7 @@ func checkBudgetPause(ctx context.Context, e *E2EEnv) (evidence string, err erro
 	}
 	threadID := launched.ThreadID
 	defer func() {
-		steps := []func(context.Context) error{budgetE2EPurge(in, pauseKey), budgetE2EDeleteRaise(settings, raiseKey),
+		steps := []func(context.Context) error{budgetE2EPurge(in, settings, pauseKey), budgetE2EDeleteRaise(settings, raiseKey),
 			func(ctx context.Context) error { return bus.Call(ctx, host, "delete", []string{threadID}, nil) }}
 		err = errors.Join(err, budgetCleanup(ctx, steps...))
 	}()

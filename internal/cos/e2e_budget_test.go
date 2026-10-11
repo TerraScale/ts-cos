@@ -2,6 +2,7 @@ package cos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -64,6 +65,42 @@ type budgetFailingKV struct {
 
 func (f budgetFailingKV) Delete(context.Context, string, ...jetstream.KVDeleteOpt) error {
 	return f.err
+}
+
+// The purge removes the answered item's applied marker with the item, and a marker that was never written is fine.
+func TestBudgetE2EPurgeRemovesAppliedMarker(t *testing.T) {
+	id := inboxID("k")
+	body, err := json.Marshal(InboxItem{ID: id, Key: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kv := &deleteKV{fakeKV{data: map[string][]byte{id: body, budgetAppliedKey(id): []byte(budgetTestDay)}}}
+	if err := budgetE2EPurge(&Inbox{kv: kv}, kv, "k")(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(kv.data) != 0 {
+		t.Fatalf("purge left %v behind", kv.data)
+	}
+	kv.data[id] = body
+	if err := budgetE2EPurge(&Inbox{kv: kv}, kv, "k")(context.Background()); err != nil {
+		t.Fatalf("purge without an applied marker failed: %v", err)
+	}
+}
+
+// deleteKV is a fakeKV that also deletes and purges, reporting a missing key like NATS does.
+type deleteKV struct{ fakeKV }
+
+func (kv *deleteKV) Delete(_ context.Context, key string, _ ...jetstream.KVDeleteOpt) error {
+	if _, ok := kv.data[key]; !ok {
+		return jetstream.ErrKeyNotFound
+	}
+	delete(kv.data, key)
+	return nil
+}
+
+func (kv *deleteKV) Purge(_ context.Context, key string, _ ...jetstream.KVDeleteOpt) error {
+	delete(kv.data, key)
+	return nil
 }
 
 func TestBudgetCleanupRunsEveryStep(t *testing.T) {

@@ -353,13 +353,20 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 	var mirror sync.WaitGroup
 	defer mirror.Wait()
 	mirror.Go(func() {
+		var failures int
 		for ctx.Err() == nil {
-			if err := mirrorUsage(ctx, kv, store); err != nil && ctx.Err() == nil {
-				slog.Error("mirror usage", "error", err)
+			start := time.Now()
+			err := mirrorUsage(ctx, kv, store)
+			if time.Since(start) >= mirrorHealthy {
+				failures = 0
+			}
+			wait := 2 * time.Second
+			if err != nil {
+				failures, wait = usageMirrorFailed(ctx, err, failures)
 			}
 			select {
 			case <-ctx.Done():
-			case <-time.After(2 * time.Second):
+			case <-time.After(wait):
 			}
 		}
 	})
@@ -489,6 +496,18 @@ func retryUsage(ctx context.Context, op func() error) error {
 func transientUsageErr(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrTimeout) ||
 		errors.Is(err, nats.ErrNoResponders) || errors.Is(err, jetstream.ErrNoStreamResponse)
+}
+
+// usageMirrorFailed logs a failed mirror run and returns the consecutive failure count and the wait
+// before the next run. A shutdown logs nothing.
+func usageMirrorFailed(ctx context.Context, err error, failures int) (int, time.Duration) {
+	if ctx.Err() != nil {
+		return failures, 0
+	}
+	failures++
+	wait, level := mirrorBackoff(failures)
+	slog.Log(ctx, level, "mirror usage failed; retrying", "error", err, "in", wait, "failures", failures)
+	return failures, wait
 }
 
 // mirrorUsage copies the bucket into SQLite until ctx ends. The initial replay is
