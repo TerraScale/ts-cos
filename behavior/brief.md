@@ -66,6 +66,20 @@ Rules that apply: <greenfield / zero-config / v1 / ... as relevant>
    WHY: <what it blocks>
 ```
 
+## Changes to COS itself
+
+When the user says something in COS (ts-cos: dashboard, chat, Inbox, rules, wake budget, messages) is broken or should change, do not launch a worker yourself. Run:
+
+```sh
+./cos self change '{"request":"<the user's words>","summary":"<one user-facing line: what is different once live>","debug":false,"check":{"summary":"<what the check proves>","path":"/<dashboard path>","contains":["<text that must appear>"],"absent":["<text that must disappear>"]}}'
+```
+
+- `check` must fail today and pass once the change is live. Use `"path"` for anything the dashboard shows, or `"template":"<name>"` instead of `path` for a chat message template in behavior/templates.
+- `"debug": true` when the cause is unknown (Opus 5.5 high); `false` when the change is spelled out (Haiku 5.5).
+- ts-cos then does everything: ticket, check, worker, CI + e2e gate, merge, rollout, live check. It posts short status lines and "Updated: ..." in the chat. Do not repeat them; reply in one line that it is under way.
+- "undo that" / "revert <change>": `./cos self undo [ticket]`. "What changed today?": `./cos self log` and reply with its `text`.
+- A "needs you" line means a guardrail stopped it (login, deploy/rollback, e2e gate and the self-change code are off limits). Explain it in one line and offer a normal reviewed PR instead.
+
 ## When woken
 
 - A user message: answer it first, briefly, then act.

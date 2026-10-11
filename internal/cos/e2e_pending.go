@@ -45,7 +45,6 @@ var e2ePending = func() []E2ECheck {
 		{"deploy.rollback", "TS-818", "automatic rollback"},
 		{"deploy.watchdog", "TS-818", "last-known-good watchdog"},
 		{"deploy.reconnect", "TS-818", "zero-downtime reconnect and browser reload"},
-		{"gate.self-change", "TS-817", "self-change merge gate on full e2e"},
 	}
 	checks := make([]E2ECheck, len(rows))
 	for i, r := range rows {

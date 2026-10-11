@@ -242,6 +242,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "cluster.partition", Stream: "TS-810", Run: checkPartition},
 		E2ECheck{ID: "cluster.leader-kill", Stream: "TS-810", Run: checkLeaderKill},
 		E2ECheck{ID: "rules.heartbeat-leader", Stream: "TS-813", Smoke: true, Run: checkHeartbeatLeader},
+		E2ECheck{ID: "gate.self-change", Stream: "TS-817", Run: checkSelfGate},
 	)
 	return append(append(checks, e2ePending...), e2eRegistered...)
 }

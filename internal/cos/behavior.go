@@ -45,6 +45,8 @@ var behaviorTemplates = map[string]any{
 	"progress": SelfChangeStep{Ticket: "TS-900", Step: "PR open", Detail: "CI running"},
 	"digest":   Digest{Since: time.Unix(0, 0).UTC(), Items: []DigestItem{{Kind: "ci.status", Text: "ts-cos#9 failed"}}},
 	"changes":  []SelfChange{{Summary: "Header label reads Fleet", SHA: "0123456789abcdef", Ticket: "TS-900", At: time.Unix(0, 0).UTC()}},
+	"selfbrief": SelfBrief{Ticket: "TS-900", Branch: "cos/ts-900-self", Summary: "Header label reads Fleet", Request: "rename the header to Fleet",
+		CheckFile: "checks/TS-900.json", Check: `{"summary": "Header reads Fleet", "path": "/", "contains": ["Fleet"]}`},
 }
 
 // Templates that become chat status lines: one short line each.
@@ -58,6 +60,9 @@ type SelfChange struct {
 	At                       time.Time
 	Reverted                 bool
 }
+
+// SelfBrief is the worker brief of a self-change.
+type SelfBrief struct{ Ticket, Branch, Summary, Request, CheckFile, Check string }
 
 // SelfChangeStep is one progress line of a running self-change.
 type SelfChangeStep struct{ Ticket, Step, Detail string }

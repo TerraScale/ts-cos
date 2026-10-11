@@ -1,0 +1,5 @@
+{
+  "summary": "Chat confirms a live self-change with an Updated line",
+  "template": "updated",
+  "contains": ["Updated:"]
+}

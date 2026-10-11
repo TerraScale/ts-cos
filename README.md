@@ -218,6 +218,32 @@ template that does not render) is never published and is rejected on load; the
 node keeps its previous behavior. `cos behavior` shows the published version,
 any rejection and the version each node runs.
 
+## Self-change loop
+
+When the user asks the COS chat to fix or change COS itself, the agent runs
+`cos self change '<json>'` with the user's words, a one-line summary and an
+acceptance check: a dashboard path or a behavior template, plus text that must
+appear or disappear. The cluster leader then drives it with no further input:
+
+1. Ku ticket under TS-769, branch `cos/<ticket>-self` whose first commit is
+   `checks/<ticket>.json`; the check must fail on all 3 live nodes.
+2. Worker thread on the least busy host (Haiku 5.5, or Opus 5.5 high when
+   `debug` is true) with a brief rendered from `behavior/templates/selfbrief.tmpl`.
+3. Gate: every CI context green (CI runs every `checks/*.json` against the PR
+   build); ts-reviewer must finish but only security/data-loss findings block.
+   PRs that touch login, deploy/rollback, CI, e2e, the self-change code or
+   another check are refused ("needs you").
+4. Squash merge with an `Update-Note:` trailer, one rollout at a time; behavior-only
+   changes are live once every node loads the new bundle, code waits for the
+   TS-818 rollout event.
+5. The check runs on every node; on success the chat shows
+   `Updated: <summary> (<sha>)` and the ticket closes.
+
+`cos self undo [ticket]` reverts the newest (or named) live change through the
+same gate and posts `Reverted: ...` once the check fails again everywhere.
+`cos self log [all]` lists today's (or every) change with ticket, PR, commit and
+verified time. Records live in the replicated `COS_SELF` KV bucket.
+
 ## Story and live data
 
 State uses `~/.local/share/cos/cos.db` with WAL and a 5-second busy timeout.
