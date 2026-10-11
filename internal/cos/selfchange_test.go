@@ -166,6 +166,7 @@ type selfFake struct {
 	ci        string
 	reviewer  string
 	review    string
+	pushed    string // PR 7's head once the worker pushes a fix; "" keeps head7
 	mergeBody map[int]map[string]any
 }
 
@@ -179,9 +180,13 @@ func (f *selfFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(data, &body)
 	}
 	pr := func(n int, branch string) map[string]any {
+		sha := "head" + itoa(n)
+		if n == 7 && f.pushed != "" {
+			sha = f.pushed
+		}
 		return map[string]any{"number": n, "html_url": "https://git/pulls/" + itoa(n), "state": map[bool]string{true: "open", false: "closed"}[f.prOpen[n]],
 			"merged": f.merged[n], "merge_commit_sha": map[bool]string{true: "merge" + itoa(n) + "0000000"}[f.merged[n]], "mergeable": true,
-			"user": map[string]string{"login": "mariogk"}, "head": map[string]string{"ref": branch, "sha": "head" + itoa(n)}, "base": map[string]string{"ref": "main"}}
+			"user": map[string]string{"login": "mariogk"}, "head": map[string]string{"ref": branch, "sha": sha}, "base": map[string]string{"ref": "main"}}
 	}
 	switch {
 	case r.Method == "POST" && p == "/branches":
@@ -260,7 +265,8 @@ type selfTestRig struct {
 	// Full e2e suite: what it reports and which own check it skipped per run.
 	e2eFail string
 	e2eRuns []string
-	asks    string // the worker's open NEEDS-USER question
+	asks    string   // the worker's open NEEDS-USER question
+	told    []string // "thread: text" for every message the driver sent a worker
 }
 
 func newSelfTestRig(t *testing.T, ctx context.Context) *selfTestRig {
@@ -304,6 +310,10 @@ func newSelfTestRig(t *testing.T, ctx context.Context) *selfTestRig {
 	}
 	d.rollout = func(context.Context, selfRecord) (bool, string, error) { return rig.live, "", nil }
 	d.say = func(_ context.Context, line string) { rig.said = append(rig.said, line) }
+	d.tell = func(_ context.Context, r selfRecord, text string) error {
+		rig.told = append(rig.told, r.Thread+": "+text)
+		return nil
+	}
 	d.e2e = func(_ context.Context, skip string) string {
 		rig.e2eRuns = append(rig.e2eRuns, skip)
 		return rig.e2eFail
@@ -334,6 +344,39 @@ func (rig *selfTestRig) set(fn func(f *selfFake)) {
 	rig.fake.mu.Lock()
 	defer rig.fake.mu.Unlock()
 	fn(rig.fake)
+}
+
+func TestSelfChangeCIFailureAsksWorkerOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rig := newSelfTestRig(t, ctx)
+	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.d.store.create(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 { // ticket, failing check on branch, worker, PR found
+		rig.d.step(ctx)
+	}
+	if got := rig.state(t, ctx, r.ID); got.State != selfGating {
+		t.Fatalf("not gating after 4 steps: %+v", got)
+	}
+	rig.set(func(f *selfFake) { f.ci = "failure" })
+	for range 3 {
+		rig.d.step(ctx)
+	}
+	got := rig.state(t, ctx, r.ID)
+	if got.State != selfGating || !strings.HasPrefix(got.Note, "CI failure") || len(rig.told) != 1 {
+		t.Fatalf("CI failure should ask the worker once: %+v told=%q", got, rig.told)
+	}
+	// The worker pushes a fix, so the new head gets its own ask.
+	rig.set(func(f *selfFake) { f.pushed, f.files["headfix"] = "headfix", f.files["head7"] })
+	rig.d.step(ctx)
+	if len(rig.told) != 2 {
+		t.Fatalf("new head should ask the worker again: told=%q", rig.told)
+	}
 }
 
 func TestSelfChangeLoopAndUndo(t *testing.T) {

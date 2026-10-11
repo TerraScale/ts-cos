@@ -31,6 +31,7 @@ const (
 	selfVerifyDeadline  = 5 * time.Minute
 	selfE2ERetry        = 10 * time.Minute
 	selfMaxOpen         = 3 // self-changes that may be unfinished at once
+	selfFixCI           = "CI failed on your PR. Rebase your branch onto origin/main, fix the failure without touching protected files, run the tests and push. Do not merge: the self-change gate merges it."
 )
 
 // States in order; done, failed and blocked are final.
@@ -67,6 +68,7 @@ type selfRecord struct {
 	E2ESHA     string    `json:"e2eSha,omitempty"` // PR head the full e2e suite last ran for
 	E2EFail    string    `json:"e2eFail,omitempty"`
 	E2EAt      time.Time `json:"e2eAt,omitzero"`
+	FixSHA     string    `json:"fixSha,omitempty"` // PR head the worker was last asked to fix
 	State      string    `json:"state"`
 	Note       string    `json:"note,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -300,6 +302,7 @@ type selfDriver struct {
 	e2e     func(ctx context.Context, skip string) (failures string)
 	asks    func(context.Context, selfRecord) (question string)
 	say     func(context.Context, string)
+	tell    func(ctx context.Context, r selfRecord, text string) error
 	finish  func(context.Context, selfRecord)
 }
 
@@ -314,6 +317,9 @@ func newSelfDriver(cfg Config, bus *Bus, store selfStore) *selfDriver {
 	d.e2e = d.runE2E
 	d.asks = d.workerQuestion
 	d.say = func(ctx context.Context, text string) { selfChatPost(ctx, bus, text) }
+	d.tell = func(ctx context.Context, r selfRecord, text string) error {
+		return bus.Call(ctx, r.Host, "send", []string{r.Thread, text}, nil)
+	}
 	return d
 }
 
@@ -473,6 +479,10 @@ func (d *selfDriver) advance(ctx context.Context, r selfRecord, rolling string) 
 			return r.to(selfBlocked, block), nil
 		case wait != "":
 			r.Note = wait
+			// CI failed on this head: ask the worker once to rebase on main and fix it.
+			if strings.HasPrefix(wait, "CI failure") && r.Thread != "" && r.FixSHA != p.Head.SHA && d.tell(ctx, r, selfFixCI) == nil {
+				r.FixSHA = p.Head.SHA
+			}
 			return r, nil
 		case rolling != "" && rolling != r.Ticket:
 			r.Note = "green; queued behind " + rolling + " (one rollout at a time)"
