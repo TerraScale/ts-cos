@@ -450,11 +450,6 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 			}
 		}
 	})
-	var lead sync.WaitGroup
-	defer lead.Wait()
-	lead.Go(func() {
-		bus.Lead(ctx, func(ctx context.Context) { runBudgets(ctx, bus, store) })
-	})
 	root := filepath.Join(home, ".claude", "projects")
 	codexRoot := filepath.Join(home, ".codex", "sessions")
 	var scanner usageScanner
