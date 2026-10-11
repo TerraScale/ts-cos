@@ -700,6 +700,29 @@ func selfQueueUndo(ctx context.Context, store selfStore, r selfRecord) error {
 	return store.save(ctx, r, rev)
 }
 
+// selfEnqueue stores a new self-change unless too many are open or the same request is already in progress.
+func selfEnqueue(ctx context.Context, store selfStore, r selfRecord) error {
+	records, err := store.list(ctx)
+	if err != nil {
+		return err
+	}
+	inProgress := 0
+	for _, o := range records {
+		if !o.final() {
+			inProgress++
+		}
+	}
+	if inProgress >= selfMaxOpen {
+		return fmt.Errorf("%d self-changes are already in progress; wait for one to finish", selfMaxOpen)
+	}
+	for _, o := range records {
+		if !o.final() && strings.TrimSpace(o.Request) == strings.TrimSpace(r.Request) {
+			return fmt.Errorf("the same request is already in progress as %s", cmp.Or(o.Ticket, o.ID))
+		}
+	}
+	return store.create(ctx, r)
+}
+
 // selfCLI implements `cos self change|undo|log`; the COS agent is its main caller.
 func selfCLI(ctx context.Context, cfg Config, args []string, w io.Writer) error {
 	usage := errors.New("usage: cos self change '<json: request, summary, check>' | undo [ticket] | log [all]")
@@ -721,25 +744,7 @@ func selfCLI(ctx context.Context, cfg Config, args []string, w io.Writer) error 
 		if err != nil {
 			return err
 		}
-		records, err := store.list(ctx)
-		if err != nil {
-			return err
-		}
-		inProgress := 0
-		for _, o := range records {
-			if !o.final() {
-				inProgress++
-			}
-		}
-		if inProgress >= selfMaxOpen {
-			return fmt.Errorf("%d self-changes are already in progress; wait for one to finish", selfMaxOpen)
-		}
-		for _, o := range records {
-			if !o.final() && strings.TrimSpace(o.Request) == strings.TrimSpace(r.Request) {
-				return fmt.Errorf("the same request is already in progress as %s", cmp.Or(o.Ticket, o.ID))
-			}
-		}
-		if err := store.create(ctx, r); err != nil {
+		if err := selfEnqueue(ctx, store, r); err != nil {
 			return err
 		}
 		return output(w, map[string]any{"id": r.ID, "state": r.State, "next": "COS posts progress lines in the chat and \"Updated\" once it is live on every node"})

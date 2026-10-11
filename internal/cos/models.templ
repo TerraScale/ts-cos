@@ -1,0 +1,67 @@
+package cos
+
+// modelsSection is the Model policy panel on Settings: the policy as it runs now, and a form that changes it.
+templ modelsSection(d modelsPanelData) {
+	<section id="models" class="panel" aria-labelledby="models-heading">
+		<header class="panel-head"><h2 id="models-heading">Model policy</h2></header>
+		if d.Alert != "" {
+			<p role="alert" class="alert" data-tone={ d.Tone }>{ d.Alert }</p>
+		}
+		<div class="stack">
+			<p class="meta">{ d.Summary } · policy { d.Hash }</p>
+			<div class="stack" aria-label="Pairs">
+				for _, p := range d.Pairs {
+					<div class="meter-row">
+						<span class="meter-label">{ p.Key }</span>
+						<span class="meter-value">{ p.Advisor } ({ p.Effort }) · high stakes { p.HighStakes } · worker { p.Worker }</span>
+					</div>
+					<p class="meta">{ p.Route }</p>
+				}
+			</div>
+			<p class="meta">Leader: { d.Leader }</p>
+			<div class="stack">
+				<p class="meta">Priority, first is highest</p>
+				if len(d.Priorities) == 0 {
+					<p class="meta">(none)</p>
+				}
+				<ol>
+					for _, k := range d.Priorities {
+						<li>{ k }</li>
+					}
+				</ol>
+			</div>
+			<form class="stack" method="post" action="/settings/models">
+				<div class="field">
+					<label class="field-label" for="models-priority">Priority</label>
+					<input id="models-priority" name="priority" type="text" value={ d.Priority } aria-describedby="models-priority-hint"/>
+					<span id="models-priority-hint" class="field-hint">Ticket keys, comma-separated, first is highest · e.g. TS-819, TS-813</span>
+				</div>
+				for _, p := range d.Pairs {
+					<div class="field">
+						<label class="field-label" for={ "models-route-" + p.Key }>{ p.Key } route</label>
+						<input id={ "models-route-" + p.Key } name={ "route_" + p.Key } type="text" required value={ p.Route }/>
+					</div>
+					<div class="field">
+						<label class="field-label" for={ "models-advisor-" + p.Key }>{ p.Key } advisor model</label>
+						<input id={ "models-advisor-" + p.Key } name={ "advisor_" + p.Key } type="text" required value={ p.Advisor }/>
+					</div>
+					<div class="field">
+						<label class="field-label" for={ "models-worker-" + p.Key }>{ p.Key } worker model</label>
+						<input id={ "models-worker-" + p.Key } name={ "worker_" + p.Key } type="text" required value={ p.Worker }/>
+					</div>
+				}
+				<div class="field">
+					<label class="field-label" for="models-leader">Leader</label>
+					<select id="models-leader" name="leader">
+						for _, p := range d.Pairs {
+							<option value={ p.Key } selected?={ p.Key == d.Leader }>{ p.Key }</option>
+						}
+					</select>
+				</div>
+				<div class="row">
+					<button class="btn-primary" type="submit">Save</button>
+				</div>
+			</form>
+		</div>
+	</section>
+}

@@ -55,7 +55,7 @@ func TestCosWakesSettings(t *testing.T) {
 	ctx := context.Background()
 	wakes := []WakeRecord{{At: time.Date(2026, 10, 11, 10, 4, 0, 0, time.UTC), Reason: "digest", Items: 3, Input: 100000, CachedInput: 80000, Output: 2000}}
 	var page bytes.Buffer
-	if err := settingsPage(AutopilotState{}, budgetPanelData{}, PushState{}, wakes).Render(ctx, &page); err != nil {
+	if err := settingsPage(AutopilotState{}, budgetPanelData{}, modelsPanelData{}, PushState{}, wakes).Render(ctx, &page); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`aria-labelledby="wakes-heading"`, "COS wakes", "<td>10:04</td>", "<td>100000</td>", "<td>2000</td>"} {

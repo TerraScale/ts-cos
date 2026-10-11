@@ -158,11 +158,11 @@ func (w *Web) agentState(ctx context.Context) (AgentState, error) {
 
 // settings hosts the heartbeat presets (TS-813), token budgets (TS-826) and the COS wakes; account settings join it here.
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
-	w.renderSettings(rw, r, http.StatusOK, w.budgetPanel(r.Context(), time.Now()))
+	w.renderSettings(rw, r, http.StatusOK, w.budgetPanel(r.Context(), time.Now()), modelsPanelFor(CurrentBehavior().Models, ""))
 }
 
-// renderSettings writes the Settings page with the Budgets section d, at status.
-func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int, d budgetPanelData) {
+// renderSettings writes the Settings page with the Budgets section d and the Model policy section m, at status.
+func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int, d budgetPanelData, m modelsPanelData) {
 	v, err := View(r.Context(), w.Store)
 	if err != nil {
 		http.Error(rw, "Cannot read COS state", 500)
@@ -174,7 +174,7 @@ func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(status)
-	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context(), pushUser(r)), st.recentWakes(20)).Render(r.Context(), rw); err != nil {
+	if err := settingsPage(v.Autopilot, d, m, w.pushState(r.Context(), pushUser(r)), st.recentWakes(20)).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render settings", err)
 	}
 }
