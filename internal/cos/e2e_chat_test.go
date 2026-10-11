@@ -67,7 +67,7 @@ func TestE2EChatReplyAll(t *testing.T) {
 	}
 	for _, web := range webs {
 		chatTestAwait(t, web.Chat, "reply on every node", func() bool {
-			return slices.ContainsFunc(web.Chat.Entries(), func(e ChatEntry) bool { return e.ID == entry.ID })
+			return slices.ContainsFunc(web.Chat.Entries(chatMainTab), func(e ChatEntry) bool { return e.ID == entry.ID })
 		})
 	}
 	id, err := newestCOSReply(ctx, buses[1])
