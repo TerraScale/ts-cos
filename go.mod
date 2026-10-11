@@ -1,4 +1,4 @@
-module git.terrascale.tech/TerraScale/ts-cos
+module github.com/TerraScale/ts-cos
 
 go 1.27.2
 

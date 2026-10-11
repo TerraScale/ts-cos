@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"git.terrascale.tech/TerraScale/ts-cos/checks"
+	"github.com/TerraScale/ts-cos/checks"
 )
 
 // TestRepoAcceptanceChecks is the CI half of the self-change gate: every committed
