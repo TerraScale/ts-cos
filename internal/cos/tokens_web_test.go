@@ -32,6 +32,87 @@ func TestTokenSavings(t *testing.T) {
 	}
 }
 
+func TestNiceMax(t *testing.T) {
+	for in, want := range map[float64]float64{0: 1, 0.3: 0.5, 12.4: 20, 20: 20, 51: 100, 4000: 5000} {
+		if got := niceMax(in); !near(got, want) {
+			t.Errorf("niceMax(%v) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestBarChartStacks(t *testing.T) {
+	g := barChart([]chartColumn{
+		{Name: "Oct 9", Label: "Oct 9", Advisor: 12.4, Worker: 7.6},
+		{Name: "Oct 10"},
+		{Name: "Oct 11", Worker: 5},
+	})
+	if g.ViewBox != "0 0 30 100" || !near(g.Width, 30) || !near(g.Max, 20) {
+		t.Fatalf("geometry = %q %v %v", g.ViewBox, g.Width, g.Max)
+	}
+	if len(g.Bars) != 3 {
+		t.Fatalf("bars = %d, want 2 for day one and 1 for day three; zero day has none", len(g.Bars))
+	}
+	advisor, worker := g.Bars[0], g.Bars[1]
+	if advisor.Series != "1" || worker.Series != "2" {
+		t.Errorf("series = %s, %s; advisor must be 1 at the bottom", advisor.Series, worker.Series)
+	}
+	if !near(advisor.Y+advisor.H, 100) || !near(worker.Y+worker.H, advisor.Y) {
+		t.Errorf("stack broken: advisor %+v, worker %+v", advisor, worker)
+	}
+	if !near(advisor.H+worker.H, 100) {
+		t.Errorf("heights sum to %v, want 100 at the peak day", advisor.H+worker.H)
+	}
+	if want := "Oct 9 · Opus advisor $12.40"; advisor.Title != want {
+		t.Errorf("title = %q, want %q", advisor.Title, want)
+	}
+	if got := g.Bars[2]; got.X != 21 || got.Series != "2" || !near(got.H, 25) {
+		t.Errorf("third column bar = %+v", got)
+	}
+	if len(g.Labels) != 3 || g.Labels[1] != "" {
+		t.Errorf("labels = %q", g.Labels)
+	}
+}
+
+func TestFoldThreads(t *testing.T) {
+	var totals []UsageTotal
+	for i := 10; i >= 1; i-- {
+		totals = append(totals, UsageTotal{Label: "t", AdvisorCost: float64(i), Cost: float64(i)})
+	}
+	folded := foldThreads(totals, 8)
+	if len(folded) != 9 {
+		t.Fatalf("folded = %d, want top 8 plus Other", len(folded))
+	}
+	other := folded[8]
+	if other.Label != "Other" || !near(other.AdvisorCost, 3) {
+		t.Errorf("Other = %+v, want the two smallest folded (2 + 1)", other)
+	}
+	if len(foldThreads(totals[:3], 8)) != 3 {
+		t.Error("threads under the limit must not fold")
+	}
+}
+
+func TestDayColumnsFillZeroDays(t *testing.T) {
+	since := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	days := []UsageTotal{{Key: "2026-10-07", AdvisorCost: 4}}
+	cols := dayColumns(days, since, 6)
+	if len(cols) != 7 {
+		t.Fatalf("7d columns = %d, want 7", len(cols))
+	}
+	if cols[0].Label != "Oct 5" || cols[0].Advisor != 0 || cols[2].Advisor != 4 {
+		t.Errorf("columns = %+v", cols)
+	}
+	cols = dayColumns(nil, since.AddDate(0, 0, -23), 29)
+	var labels []string
+	for _, c := range cols {
+		if c.Label != "" {
+			labels = append(labels, c.Label)
+		}
+	}
+	if len(cols) != 30 || len(labels) != 6 {
+		t.Errorf("30d columns = %d with %d labels, want 30 and every fifth (6)", len(cols), len(labels))
+	}
+}
+
 func TestHumanTokens(t *testing.T) {
 	for in, want := range map[int64]string{999: "999", 1500: "1.5K", 12_300_000: "12.3M", 2_000_000_000: "2.0B"} {
 		if got := humanTokens(in); got != want {
@@ -54,7 +135,7 @@ func TestTokensPageRenders(t *testing.T) {
 		return r
 	}
 	for _, w := range []string{"today", "7d", "30d"} {
-		if r := get("/tokens?w=" + w); r.Code != http.StatusOK || strings.Contains(r.Body.String(), "<table") {
+		if r := get("/tokens?w=" + w); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "No usage yet in this window.") {
 			t.Fatalf("empty %s = %d", w, r.Code)
 		}
 	}
@@ -89,7 +170,7 @@ func TestTokensPageRenders(t *testing.T) {
 		body := r.Body.String()
 		for _, want := range []string{
 			`href="/tokens"`, `>Tokens</a>`, `<span class="kpi-label">Cost</span>`, `<span class="kpi-label">Haiku share</span>`,
-			`data-tone="ok"`, `<span class="kpi-label">Peak Haiku parallel</span>`, `href="/work/TS-826"`,
+			`data-tone="ok"`, `<span class="kpi-label">Peak Haiku parallel</span>`, `data-series="2"`, `href="/work/TS-826"`,
 			`COS agent`, `2 rule actions`, `aria-pressed="true"`, `data-init="@get(&#39;/tokens/events?w=` + w,
 		} {
 			if !strings.Contains(body, want) {

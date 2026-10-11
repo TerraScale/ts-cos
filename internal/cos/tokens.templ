@@ -13,7 +13,7 @@ templ tokensPage(h chatHeader, d tokensPageData) {
 	</html>
 }
 
-// tokens is the live region: window switcher, KPIs, savings and tables.
+// tokens is the live region: window switcher, KPIs, chart, savings and tables.
 templ tokens(d tokensPageData) {
 	<section id="tokens" class="stack" aria-labelledby="tokens-heading">
 		<section class="panel" aria-labelledby="tokens-heading">
@@ -35,6 +35,7 @@ templ tokens(d tokensPageData) {
 				@tokenKPI("Saved", usd(d.Workers+d.Rules), "USD estimated", "")
 			</div>
 		</section>
+		@tokenChart(d)
 		@tokenSavingsCard(d)
 		if !d.Empty {
 			@tokenThreadTable(d.Threads)
@@ -53,6 +54,47 @@ templ tokenKPI(label, value, unit, tone string) {
 		<span class="kpi-value">{ value }</span>
 		<span class="kpi-unit">{ unit }</span>
 	</div>
+}
+
+// tokenChart is one stacked column per UTC day, or per thread for today.
+templ tokenChart(d tokensPageData) {
+	<figure class="chart">
+		<div class="chart-head">
+			<span class="chart-title">{ tokenChartTitle(d.Window) }</span>
+			<ul class="legend">
+				<li><span class="swatch" data-series="1"></span>Opus advisor</li>
+				<li><span class="swatch" data-series="2"></span>Haiku workers</li>
+			</ul>
+		</div>
+		<div class="chart-body">
+			if d.Empty {
+				<p class="chart-empty">No usage yet in this window.</p>
+			} else {
+				<div class="chart-y">
+					<span>{ money(d.Chart.Max) }</span>
+					<span>{ money(d.Chart.Max / 2) }</span>
+					<span>{ money(0) }</span>
+				</div>
+				<svg viewBox={ d.Chart.ViewBox } preserveAspectRatio="none" role="img" aria-label={ tokenChartTitle(d.Window) }>
+					<g class="chart-grid">
+						for _, y := range []float64{0, 50, 100} {
+							<line x1="0" y1={ svgNum(y) } x2={ svgNum(d.Chart.Width) } y2={ svgNum(y) }></line>
+						}
+					</g>
+					for _, b := range d.Chart.Bars {
+						<rect class="chart-bar" x={ svgNum(b.X) } y={ svgNum(b.Y) } width={ svgNum(b.W) } height={ svgNum(b.H) } data-series={ b.Series }>
+							<title>{ b.Title }</title>
+						</rect>
+					}
+				</svg>
+				<div class="chart-x bars">
+					for _, label := range d.Chart.Labels {
+						<span>{ label }</span>
+					}
+				</div>
+			}
+		</div>
+	</figure>
 }
 
 templ tokenSavingsCard(d tokensPageData) {

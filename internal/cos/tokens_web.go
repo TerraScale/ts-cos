@@ -1,10 +1,12 @@
 package cos
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,6 +17,12 @@ var tokenWindows = map[string]int{"today": 0, "7d": 6, "30d": 29}
 
 // usageOpus prices what Haiku workers would have cost on the advisor model.
 const usageOpus = "claude-opus-5-5"
+
+// Series names match the legend in tokens.templ.
+const (
+	seriesAdvisor = "Opus advisor"
+	seriesWorker  = "Haiku workers"
+)
 
 // tokensPageData is everything the Tokens page shows for one window.
 type tokensPageData struct {
@@ -30,6 +38,7 @@ type tokensPageData struct {
 	Tickets     []UsageTotal
 	Models      []UsageTotal
 	Days        []UsageTotal
+	Chart       chartGeometry
 }
 
 // tokenWindow reads ?w=, falling back to today for anything unknown.
@@ -66,8 +75,11 @@ func (w *Web) tokensData(ctx context.Context, window string, now time.Time) (tok
 	d.Models = SummarizeUsage(rows, live, "model")
 	d.Workers, d.Rules = tokenSavings(rows, actions)
 	d.AdvisorAvg = usageAdvisorAverage(rows)
-	if window != "today" {
+	if window == "today" {
+		d.Chart = barChart(threadColumns(foldThreads(d.Threads, 8)))
+	} else {
 		d.Days = SummarizeUsage(rows, live, "day")
+		d.Chart = barChart(dayColumns(d.Days, since, back))
 	}
 	return d, nil
 }
@@ -200,6 +212,130 @@ func usageAdvisorAverage(rows []UsageRow) float64 {
 	return cost / float64(messages)
 }
 
+// foldThreads keeps the n costliest threads (totals arrive sorted by cost) and sums the rest into Other.
+func foldThreads(totals []UsageTotal, n int) []UsageTotal {
+	if len(totals) <= n {
+		return totals
+	}
+	out := append([]UsageTotal{}, totals[:n]...)
+	other := UsageTotal{Key: "Other", Label: "Other"}
+	for _, t := range totals[n:] {
+		other.AdvisorCost += t.AdvisorCost
+		other.WorkerCost += t.WorkerCost
+	}
+	return append(out, other)
+}
+
+// dayColumns gives every UTC day of the window a column, zero days included.
+// 7d labels every day; 30d labels every fifth day.
+func dayColumns(days []UsageTotal, since time.Time, back int) []chartColumn {
+	byDay := make(map[string]UsageTotal, len(days))
+	for _, d := range days {
+		byDay[d.Key] = d
+	}
+	every := 1
+	if back > 6 {
+		every = 5
+	}
+	cols := make([]chartColumn, 0, back+1)
+	for i := 0; i <= back; i++ {
+		day := since.AddDate(0, 0, i)
+		name := day.Format("Jan 2")
+		t := byDay[day.Format("2006-01-02")]
+		col := chartColumn{Name: name, Advisor: t.AdvisorCost, Worker: t.WorkerCost}
+		if i%every == 0 {
+			col.Label = name
+		}
+		cols = append(cols, col)
+	}
+	return cols
+}
+
+// threadColumns labels each thread by its ticket when it has one, else a short name.
+func threadColumns(threads []UsageTotal) []chartColumn {
+	cols := make([]chartColumn, 0, len(threads))
+	for _, t := range threads {
+		cols = append(cols, chartColumn{Label: cmp.Or(t.Ticket, shortLabel(t.Label)), Name: t.Label, Advisor: t.AdvisorCost, Worker: t.WorkerCost})
+	}
+	return cols
+}
+
+func shortLabel(s string) string {
+	r := []rune(s)
+	if len(r) <= 10 {
+		return s
+	}
+	return string(r[:9]) + "…"
+}
+
+type chartColumn struct {
+	Label, Name     string
+	Advisor, Worker float64
+}
+
+type chartBar struct {
+	X, Y, W, H float64
+	Series     string
+	Title      string
+}
+
+// chartGeometry is a stacked column chart: 10 viewBox units per column, 100 units tall.
+type chartGeometry struct {
+	ViewBox string
+	Width   float64
+	Max     float64
+	Labels  []string
+	Bars    []chartBar
+}
+
+// barChart stacks advisor cost (series 1) at the bottom and worker cost (series 2) above it.
+func barChart(cols []chartColumn) chartGeometry {
+	var peak float64
+	for _, c := range cols {
+		peak = max(peak, c.Advisor+c.Worker)
+	}
+	top := niceMax(peak)
+	g := chartGeometry{Width: float64(len(cols)) * 10, Max: top}
+	g.ViewBox = fmt.Sprintf("0 0 %g 100", g.Width)
+	for i, c := range cols {
+		g.Labels = append(g.Labels, c.Label)
+		base := 100.0
+		for _, s := range []struct {
+			series, name string
+			cost         float64
+		}{{"1", seriesAdvisor, c.Advisor}, {"2", seriesWorker, c.Worker}} {
+			if s.cost <= 0 {
+				continue
+			}
+			h := s.cost / top * 100
+			base -= h
+			g.Bars = append(g.Bars, chartBar{X: float64(i)*10 + 1, Y: base, W: 8, H: h, Series: s.series, Title: c.Name + " · " + s.name + " " + money(s.cost)})
+		}
+	}
+	return g
+}
+
+// niceMax rounds up to 1, 2 or 5 times a power of ten.
+func niceMax(v float64) float64 {
+	if v <= 0 {
+		return 1
+	}
+	exp := math.Pow(10, math.Floor(math.Log10(v)))
+	for _, m := range []float64{1, 2, 5, 10} {
+		if m*exp >= v {
+			return m * exp
+		}
+	}
+	return 10 * exp
+}
+
+func tokenChartTitle(window string) string {
+	if window == "today" {
+		return "Cost per thread today (UTC)"
+	}
+	return "Cost per day (UTC)"
+}
+
 // shareTone is ok when Haiku wrote at least half of the output tokens.
 func shareTone(t UsageTotal) string {
 	switch {
@@ -224,5 +360,6 @@ func humanTokens(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
 
-func money(v float64) string { return fmt.Sprintf("$%.2f", v) }
-func usd(v float64) string   { return fmt.Sprintf("%.2f", v) }
+func money(v float64) string  { return fmt.Sprintf("$%.2f", v) }
+func usd(v float64) string    { return fmt.Sprintf("%.2f", v) }
+func svgNum(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
