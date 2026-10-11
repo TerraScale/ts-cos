@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -46,7 +47,7 @@ const (
 )
 
 var (
-	selfPathPattern     = regexp.MustCompile(`^/[A-Za-z0-9/_.?=&%-]{0,200}$`)
+	selfPathPattern     = regexp.MustCompile(`^/[A-Za-z0-9/_.?=&-]{0,200}$`)
 	selfTemplatePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,40}$`)
 )
 
@@ -138,18 +139,19 @@ func selfProbeCookie(ctx context.Context, js jetstream.JetStream) (string, func(
 
 func selfCheckSubject(host string) string { return "cos." + host + ".selfcheck" }
 
-// runSelfProbe answers acceptance-check requests for this node until ctx ends.
+// runSelfProbe answers acceptance-check requests for this node until ctx ends. It always
+// subscribes so a node without JetStream answers path checks with a failure, not silence.
 func runSelfProbe(ctx context.Context, cfg Config, bus *Bus) {
-	js, err := bus.JetStream()
-	if err != nil {
-		return
-	}
+	js, jsErr := bus.JetStream()
 	sub, err := bus.conn.Subscribe(selfCheckSubject(cfg.LocalHost), func(m *nats.Msg) {
 		r := selfCheckResult{Host: cfg.LocalHost}
 		var c selfCheck
 		err := json.Unmarshal(m.Data, &c)
 		if err == nil {
 			err = c.validate()
+		}
+		if err == nil && c.Path != "" && jsErr != nil {
+			err = errors.New("JetStream unavailable: " + jsErr.Error())
 		}
 		if err == nil {
 			run, cancel := context.WithTimeout(ctx, selfProbeTime)
@@ -164,6 +166,7 @@ func runSelfProbe(ctx context.Context, cfg Config, bus *Bus) {
 		_ = m.Respond(data)
 	})
 	if err != nil {
+		slog.Error("self-check probe not subscribed", "host", cfg.LocalHost, "error", err)
 		return
 	}
 	<-ctx.Done()
@@ -198,7 +201,7 @@ func runSelfCheck(ctx context.Context, bus *Bus, c selfCheck) (results []selfChe
 			m, err := bus.conn.RequestWithContext(call, selfCheckSubject(host), data)
 			switch {
 			case err == nil:
-				_ = json.Unmarshal(m.Data, &results[i])
+				results[i] = selfReply(host, m.Data)
 			case errors.Is(err, nats.ErrNoResponders):
 				results[i].Evidence = selfNotDeployed
 			}
@@ -210,6 +213,15 @@ func runSelfCheck(ctx context.Context, bus *Bus, c selfCheck) (results []selfChe
 		passed = passed && r.Pass
 	}
 	return results, passed, nil
+}
+
+// selfReply decodes one node's answer, pinned to the host we asked and clipped for chat.
+func selfReply(host string, data []byte) selfCheckResult {
+	r := selfCheckResult{Host: host, Evidence: "no answer"}
+	_ = json.Unmarshal(data, &r)
+	r.Host = host
+	r.Evidence = selfClip(r.Evidence)
+	return r
 }
 
 // failedEverywhere is the revert and pre-work condition: every node answered and none passed.
