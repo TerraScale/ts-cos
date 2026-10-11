@@ -336,6 +336,7 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "cluster.members", Stream: "TS-810", Smoke: true, Run: checkMembers},
 		E2ECheck{ID: "cluster.jetstream", Stream: "TS-810", Smoke: true, Run: checkJetStream},
 		E2ECheck{ID: "cluster.leader", Stream: "TS-810", Smoke: true, Run: checkLeader},
+		// Restarting cos.service restarts its embedded NATS server too (covers failure.nats-restart).
 		E2ECheck{ID: "cluster.restart", Stream: "TS-810", Chaos: true, Run: checkRestartCatchUp},
 		E2ECheck{ID: "cluster.partition", Stream: "TS-810", Chaos: true, Run: checkPartition},
 		E2ECheck{ID: "cluster.leader-freeze", Stream: "TS-810", Chaos: true, Run: checkLeaderFreeze},
@@ -366,6 +367,10 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "inbox.answer-closes", Stream: "TS-815", Run: inboxCheck(checkInboxAnswerCloses)},
 		E2ECheck{ID: "inbox.concurrent-answer", Stream: "TS-815", Run: inboxCheck(checkInboxConcurrentAnswer)},
 		E2ECheck{ID: "inbox.dedup", Stream: "TS-815", Run: inboxCheck(checkInboxDedup)},
+		E2ECheck{ID: "events.forgejo.valid", Stream: "TS-814", Run: checkForgejoValid},
+		E2ECheck{ID: "events.forgejo.bad-signature", Stream: "TS-814", Run: checkForgejoBadSignature},
+		E2ECheck{ID: "events.forgejo.replay", Stream: "TS-814", Run: checkForgejoReplay},
+		E2ECheck{ID: "events.forgejo.foreign-author", Stream: "TS-814", Run: checkForgejoForeignAuthor},
 		E2ECheck{ID: "tokens.budget-fyi", Stream: "TS-826", Run: checkBudgetFYI},
 		// The pause spends a few Opus tokens on a throwaway thread, so it runs only when named.
 		E2ECheck{ID: "tokens.budget-pause", Stream: "TS-826", OnDemand: true, Run: checkBudgetPause},

@@ -374,6 +374,7 @@ It finishes within 5 minutes, cleans up after itself and never touches real work
   ones, with `deploy.version` expecting the rolled-out revision.
 - `access.*`, `deploy.*` and `gate.*` are protected: a self-change may never break
   or remove them (`protected: true` in the report).
+- `events.forgejo.*` (TS-814): signed foreign-author pull_request probes with fresh delivery IDs, asserted at the ingest layer (COS_INGEST last sequence, hook status, consumer ack floor, COS_EVENTS scan). Never push events: a push on main triggers real work.
 - Per-request acceptance checks register with `RegisterE2E` from an
   `e2e_accept_*.go` init function, IDs `accept.<slug>.<name>`.
 - Full runs wait up to 5 min for the cluster to settle (no rollout, one build, every
