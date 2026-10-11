@@ -1,0 +1,332 @@
+/* Sections, stats, empty states, alerts, badges, and tabs. The layout is
+   flat: content sits on the canvas and sections are split by hairlines,
+   never boxed. */
+
+/* ui.Card renders a flat section: a heading row and its content. */
+.ts-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ts-s4);
+  min-width: 0;
+}
+
+/* Consecutive sections are divided by a hairline. */
+.ts-page > .ts-card + .ts-card,
+.ts-page > .ts-card + .ts-split,
+.ts-page > .ts-split + .ts-card,
+.ts-page > .ts-split + .ts-split,
+.ts-stack > .ts-card + .ts-card,
+.ts-stack-lg > .ts-card + .ts-card {
+  padding-top: var(--ts-s6);
+  border-top: 1px solid var(--ts-line);
+}
+
+.ts-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--ts-s3);
+}
+
+.ts-card-heading {
+  display: grid;
+  flex: 1 1 280px;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ts-card-title {
+  font-size: var(--ts-fs-lg);
+  font-weight: 600;
+}
+
+.ts-card-description {
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-sm);
+}
+
+.ts-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ts-s2);
+}
+
+.ts-card-actions-shrinkable {
+  min-width: 0;
+}
+
+/* Opt-in header: compact actions share the title row; wider actions wrap. */
+.ts-card-head-title-actions {
+  align-items: center;
+  gap: 2px var(--ts-s3);
+}
+
+.ts-card-head-title-actions > .ts-card-heading {
+  flex-basis: max-content;
+}
+
+.ts-card-head-title-actions > .ts-card-actions {
+  margin-left: auto;
+}
+
+.ts-card-head-title-actions > .ts-card-description {
+  flex: 0 0 100%;
+}
+
+.ts-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--ts-s4);
+  min-width: 0;
+}
+
+.ts-card-flush > .ts-card-body > .ts-pager {
+  padding-top: var(--ts-s3);
+  border-top: 1px solid var(--ts-line);
+}
+
+/* A hairline-divided part of a section. */
+.ts-card-section {
+  display: grid;
+  gap: var(--ts-s3);
+  padding-top: var(--ts-s4);
+  border-top: 1px solid var(--ts-line);
+}
+
+/* Headline numbers: flat rows split by vertical hairlines. Every stat has a
+   leading divider; the grid is shifted left and clipped so the first stat of
+   each row hides its divider and lines up with the page edge. */
+.ts-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  row-gap: var(--ts-s2);
+  margin-left: calc(-1 * var(--ts-s5));
+  overflow: hidden;
+  /* The bottom hairline starts where the content does, not at the shift. */
+  background: linear-gradient(var(--ts-line), var(--ts-line)) no-repeat right bottom / calc(100% - var(--ts-s5)) 1px;
+}
+
+.ts-stat {
+  display: grid;
+  align-content: start;
+  gap: var(--ts-s1);
+  min-width: 0;
+  margin-left: -1px;
+  padding: var(--ts-s1) var(--ts-s5) var(--ts-s6);
+  border-left: 1px solid var(--ts-line);
+}
+
+.ts-stat-label {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-s2);
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ts-stat-value {
+  overflow-wrap: anywhere;
+  color: var(--ts-ink);
+  font-size: var(--ts-fs-3xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+/* For stats whose values are words ("Not recorded") rather than numbers. */
+.ts-stats-compact .ts-stat-value {
+  font-size: var(--ts-fs-xl);
+}
+
+.ts-stat-detail {
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-sm);
+}
+
+@media (max-width: 47.99rem) {
+  .ts-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ts-stat {
+    padding: var(--ts-s3) var(--ts-s3) var(--ts-s3) var(--ts-s5);
+  }
+
+  .ts-stat-value {
+    font-size: var(--ts-fs-2xl);
+  }
+}
+
+/* Empty states. */
+.ts-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--ts-s2);
+  padding: var(--ts-s8) var(--ts-s6);
+  border-radius: var(--ts-radius);
+  background: var(--ts-surface);
+  text-align: center;
+}
+
+.ts-empty-title {
+  color: var(--ts-ink);
+  font-weight: 600;
+}
+
+.ts-empty-detail {
+  max-width: 52ch;
+  color: var(--ts-ink-3);
+  font-size: var(--ts-fs-sm);
+}
+
+.ts-empty > .ts-btn,
+.ts-empty > .ts-row {
+  margin-top: var(--ts-s2);
+}
+
+/* Alerts. */
+.ts-alert {
+  --alert: var(--ts-info);
+  display: grid;
+  gap: 2px;
+  padding: var(--ts-s3) var(--ts-s4);
+  border-left: 2px solid var(--alert);
+  border-radius: 0 var(--ts-radius-sm) var(--ts-radius-sm) 0;
+  background: color-mix(in oklab, var(--alert) 8%, transparent);
+  color: var(--ts-ink);
+  font-size: var(--ts-fs-sm);
+}
+
+.ts-alert-success { --alert: var(--ts-success); }
+.ts-alert-warning { --alert: var(--ts-warning); }
+.ts-alert-danger { --alert: var(--ts-danger); }
+
+.ts-alert-title {
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.ts-alert-body {
+  color: var(--ts-ink-2);
+}
+
+/* Badges. */
+.ts-badge {
+  --badge: var(--ts-ink-2);
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 var(--ts-s2);
+  border-radius: var(--ts-radius-sm);
+  background: color-mix(in oklab, var(--badge) 14%, transparent);
+  color: var(--badge);
+  font-size: var(--ts-fs-xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ts-badge-info { --badge: var(--ts-info); }
+.ts-badge-success { --badge: var(--ts-success); }
+.ts-badge-warning { --badge: var(--ts-warning); }
+.ts-badge-danger { --badge: var(--ts-danger); }
+.ts-badge-violet { --badge: #c4b5fd; }
+.ts-badge-tone { --badge: var(--tone); }
+.ts-badge-blue { --badge: #7ea6ff; }
+
+/* A leading status dot. */
+.ts-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ts-stat[data-tone] .ts-dot {
+  color: var(--tone);
+}
+
+.ts-badge > .ts-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* Tabs. Labels carry no side padding so the first one lines up with the
+   content edge; the underline spans the label. */
+.ts-tabs {
+  display: flex;
+  gap: var(--ts-s6);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--ts-line);
+  scrollbar-width: none;
+}
+
+.ts-toolbar .ts-tabs {
+  border-bottom: 0;
+}
+
+.ts-tab {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--ts-s2);
+  padding: var(--ts-s3) 0;
+  color: var(--ts-ink-3);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color var(--ts-fast) var(--ts-ease);
+}
+
+.ts-tab:hover {
+  color: var(--ts-ink);
+  text-decoration: none;
+}
+
+.ts-tab[aria-current="page"],
+.ts-tab[aria-selected="true"] {
+  color: var(--ts-ink);
+}
+
+.ts-tab[aria-current="page"]::after,
+.ts-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--tone);
+}
+
+.ts-tab-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: var(--ts-radius-pill);
+  background: var(--ts-surface-3);
+  color: var(--ts-ink-2);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.ts-card-actions > .ts-filters {
+  flex-wrap: nowrap;
+}
+
+.ts-measurement-loading {
+  display: none;
+}
+
+body.ts-nav-pending .ts-measurement-loading {
+  display: block;
+}
