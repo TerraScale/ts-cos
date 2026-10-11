@@ -231,6 +231,11 @@ func (s *Store) TicketEvents(ctx context.Context, ticket string, limit int) ([]E
 	return s.queryEvents(ctx, `SELECT payload FROM events WHERE ticket=? ORDER BY time DESC, seq DESC LIMIT ?`, strings.ToUpper(ticket), limit)
 }
 
+// EventsOfKind returns one kind's events since a time, oldest first.
+func (s *Store) EventsOfKind(ctx context.Context, kind EventKind, since time.Time) ([]Event, error) {
+	return s.queryEvents(ctx, `SELECT payload FROM events WHERE kind=? AND time>=? ORDER BY time`, string(kind), since.UTC().Format(eventTimeFormat))
+}
+
 // LatestEvents summarizes every ticket's events and the latest cluster-wide deploy.
 func (s *Store) LatestEvents(ctx context.Context) (map[string]BoardEventSpan, time.Time, error) {
 	events, err := s.queryEvents(ctx, `SELECT payload FROM events WHERE ticket<>'' ORDER BY time, seq`)
