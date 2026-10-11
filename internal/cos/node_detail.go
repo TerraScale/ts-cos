@@ -15,8 +15,8 @@ import (
 )
 
 // nodeDetailRoutes serves one page per node.
-func (w *Web) nodeDetailRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /nodes/{host}", w.nodeDetail)
+func (w *Web) nodeDetailRoutes() []webRoute {
+	return []webRoute{{"GET /nodes/{host}", scopeShared, w.nodeDetail}}
 }
 
 // nodeDetail shows one node. Unknown or synthetic hosts are 404; a web without a bus renders every node as unknown.

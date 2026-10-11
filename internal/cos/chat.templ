@@ -14,11 +14,15 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 					<a class="side-link" href="#pane-chat" title="Chat" data-on:click__prevent="$tab='chat'" data-attr:aria-current="$tab=='chat' ? 'page' : false">@icon("chat")<span>Chat</span></a>
 					<a class="side-link" href="#pane-inbox" title="Inbox" data-on:click__prevent="$tab='inbox'" data-attr:aria-current="$tab=='inbox' ? 'page' : false">@icon("inbox")<span>Inbox</span> @countBadge("side-inbox", "badge", h.Inbox)</a>
 					<a class="side-link" href="#pane-nodes" title="Nodes" data-on:click__prevent="$tab='nodes'" data-attr:aria-current="$tab=='nodes' ? 'page' : false">@icon("nodes")<span>Nodes</span></a>
-					<a class="side-link" href="#pane-work" title="Work" data-on:click__prevent="$tab='work'" data-attr:aria-current="$tab=='work' ? 'page' : false">@icon("work")<span>Work</span></a>
+					if h.Owner {
+						<a class="side-link" href="#pane-work" title="Work" data-on:click__prevent="$tab='work'" data-attr:aria-current="$tab=='work' ? 'page' : false">@icon("work")<span>Work</span></a>
+					}
 					<a class="side-link" href="/settings" title="Settings">@icon("settings")<span>Settings</span></a>
 				</nav>
 				<main class="app-main" id="pane-chat">
-					@kpiTiles(k)
+					if h.Owner {
+						@kpiTiles(k)
+					}
 					<div id="scroll" class="chat-log" data-signals="{stick:true,chatTick:0}" data-on:scroll="$stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80" data-effect="$chatTick; $stick && (el.scrollTop = el.scrollHeight)">
 						@chatMessages(entries)
 					</div>
@@ -31,14 +35,18 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b work
 				<aside class="app-aside" aria-label="Inbox, nodes and work">
 					<section id="pane-inbox" class="pane">@inbox(v)</section>
 					@nodesSummary(nodes, nodesOK)
-					@workPane(b, ok)
+					if h.Owner {
+						@workPane(b, ok)
+					}
 				</aside>
 			</div>
 			<nav class="tabbar" aria-label="Sections">
 				<a class="tab" href="#pane-chat" data-on:click__prevent="$tab='chat'" data-attr:aria-current="$tab=='chat' ? 'page' : false">@icon("chat")<span>Chat</span></a>
 				<a class="tab" href="#pane-inbox" data-on:click__prevent="$tab='inbox'" data-attr:aria-current="$tab=='inbox' ? 'page' : false">@icon("inbox")<span>Inbox</span> @countBadge("tab-inbox", "tab-badge", h.Inbox)</a>
 				<a class="tab" href="#pane-nodes" data-on:click__prevent="$tab='nodes'" data-attr:aria-current="$tab=='nodes' ? 'page' : false">@icon("nodes")<span>Nodes</span></a>
-				<a class="tab" href="#pane-work" data-on:click__prevent="$tab='work'" data-attr:aria-current="$tab=='work' ? 'page' : false">@icon("work")<span>Work</span></a>
+				if h.Owner {
+					<a class="tab" href="#pane-work" data-on:click__prevent="$tab='work'" data-attr:aria-current="$tab=='work' ? 'page' : false">@icon("work")<span>Work</span></a>
+				}
 			</nav>
 		</body>
 	</html>
@@ -168,7 +176,7 @@ templ kpiTiles(k kpiView) {
 	</section>
 }
 
-templ settingsPage(a AutopilotState, b budgetPanelData, push PushState, wakes []WakeRecord) {
+templ settingsPage(owner bool, a AutopilotState, b budgetPanelData, push PushState, wakes []WakeRecord) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("Settings · COS")
@@ -182,29 +190,33 @@ templ settingsPage(a AutopilotState, b budgetPanelData, push PushState, wakes []
 				</nav>
 			</header>
 			<main class="page page-narrow">
-				@autopilotPanel(a)
+				if owner {
+					@autopilotPanel(a)
+				}
 				@pushPanel(push)
-				@budgetSection(b)
-				<section class="panel" aria-labelledby="wakes-heading">
-					<header class="panel-head"><h2 id="wakes-heading">COS wakes</h2></header>
-					<table>
-						<thead>
-							<tr><th>Time (UTC)</th><th>Reason</th><th>Items</th><th>Input</th><th>Cached</th><th>Output</th></tr>
-						</thead>
-						<tbody>
-							for _, wk := range wakes {
-								<tr>
-									<td>{ wk.At.UTC().Format("15:04") }</td>
-									<td>{ wk.Reason }</td>
-									<td>{ integer(wk.Items) }</td>
-									<td>{ integer(wk.Input) }</td>
-									<td>{ integer(wk.CachedInput) }</td>
-									<td>{ integer(wk.Output) }</td>
-								</tr>
-							}
-						</tbody>
-					</table>
-				</section>
+				if owner {
+					@budgetSection(b)
+					<section class="panel" aria-labelledby="wakes-heading">
+						<header class="panel-head"><h2 id="wakes-heading">COS wakes</h2></header>
+						<table>
+							<thead>
+								<tr><th>Time (UTC)</th><th>Reason</th><th>Items</th><th>Input</th><th>Cached</th><th>Output</th></tr>
+							</thead>
+							<tbody>
+								for _, wk := range wakes {
+									<tr>
+										<td>{ wk.At.UTC().Format("15:04") }</td>
+										<td>{ wk.Reason }</td>
+										<td>{ integer(wk.Items) }</td>
+										<td>{ integer(wk.Input) }</td>
+										<td>{ integer(wk.CachedInput) }</td>
+										<td>{ integer(wk.Output) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</section>
+				}
 				<section class="panel" aria-labelledby="account-heading">
 					<header class="panel-head"><h2 id="account-heading">Account</h2></header>
 					<div class="row">
@@ -224,28 +236,34 @@ templ chatHead(h chatHeader) {
 	<header id="chat-head" class="topbar">
 		<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
 		<ul class="topbar-stats" aria-label="Status">
-			<!-- TS-813 heartbeat state -->
-			<li id="heartbeat-slot" class="stat">
-				if h.Autopilot.Interval > 0 {
-					<a href="/settings">
-						Heartbeat { integer(h.Autopilot.Interval) } min ·
-						if next := h.Autopilot.NextBeatTime(); next.IsZero() {
-							after the leader's first check
-						} else {
-							next @when(next)
-						}
-					</a>
-				}
-			</li>
-			<li class="stat">{ integer(h.Running) } running</li>
-			<li class="stat">{ integer(h.PRs) } PRs waiting</li>
+			if h.Owner {
+				<!-- TS-813 heartbeat state -->
+				<li id="heartbeat-slot" class="stat">
+					if h.Autopilot.Interval > 0 {
+						<a href="/settings">
+							Heartbeat { integer(h.Autopilot.Interval) } min ·
+							if next := h.Autopilot.NextBeatTime(); next.IsZero() {
+								after the leader's first check
+							} else {
+								next @when(next)
+							}
+						</a>
+					}
+				</li>
+				<li class="stat">{ integer(h.Running) } running</li>
+				<li class="stat">{ integer(h.PRs) } PRs waiting</li>
+			}
 		</ul>
 		<nav class="topbar-nav" aria-label="Main">
 			<a class="navlink" href="/">Chat</a>
-			<a class="navlink hide-sm" href="/work">Work</a>
+			if h.Owner {
+				<a class="navlink hide-sm" href="/work">Work</a>
+			}
 			<a id="inbox-slot" class="navlink" href="/inbox">Inbox <span class="badge badge-accent">{ integer(h.Inbox) }</span></a>
 			<a class="navlink" href="/nodes">Nodes</a>
-			<a class="navlink hide-sm" href="/tokens">Tokens</a>
+			if h.Owner {
+				<a class="navlink hide-sm" href="/tokens">Tokens</a>
+			}
 			<a class="navlink" href="/settings">Settings</a>
 		</nav>
 	</header>

@@ -354,6 +354,7 @@ func TestChatSSEPatches(t *testing.T) {
 	defer store.Close()
 	web := NewWeb(store, nil)
 	u := chatTestUser()
+	web.ownerID.Store(&u.ID) // the owner's stream also patches the node-T3 header, KPIs and Work
 	// Seed one entry first: an append needs a non-empty client view, otherwise the stream repaints.
 	web.Chat.apply(chatTestPut(t, u.Key("0000000000000001-seed"), "seed"))
 	web.Chat.apply(nil)

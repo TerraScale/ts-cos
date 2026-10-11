@@ -160,8 +160,7 @@ func TestPushUserTestGoesToSignedInUser(t *testing.T) {
 	f.subscribe(t, bob, "/bob")
 	w := &Web{}
 	w.push.Store(f.p)
-	mux := http.NewServeMux()
-	w.pushRoutes(mux)
+	mux := w.routes()
 
 	req := httptest.NewRequest(http.MethodPost, "/push/test", nil)
 	rw := httptest.NewRecorder()

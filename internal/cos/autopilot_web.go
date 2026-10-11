@@ -7,29 +7,31 @@ import (
 	"strconv"
 )
 
-func (w *Web) autopilotRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /autopilot/interval/{minutes}", func(rw http.ResponseWriter, r *http.Request) {
-		if !w.autopilotRequest(rw, r) {
-			return
-		}
-		minutes, _ := strconv.Atoi(r.PathValue("minutes"))
-		if err := w.Autopilot.SetInterval(r.Context(), minutes); err != nil {
-			autopilotNotice(rw, publicError(err))
-			return
-		}
-		autopilotNotice(rw, fmt.Sprintf("Heartbeat set to every %d minutes on every node.", minutes))
-	})
-	mux.HandleFunc("POST /autopilot/run", func(rw http.ResponseWriter, r *http.Request) {
-		if !w.autopilotRequest(rw, r) {
-			return
-		}
-		host, err := w.Autopilot.RunNow(r.Context())
-		if err != nil {
-			autopilotNotice(rw, err.Error())
-			return
-		}
-		autopilotNotice(rw, "Heartbeat started on the leader, "+host+".")
-	})
+func (w *Web) autopilotRoutes() []webRoute {
+	return []webRoute{
+		{"POST /autopilot/interval/{minutes}", scopeOwner, func(rw http.ResponseWriter, r *http.Request) {
+			if !w.autopilotRequest(rw, r) {
+				return
+			}
+			minutes, _ := strconv.Atoi(r.PathValue("minutes"))
+			if err := w.Autopilot.SetInterval(r.Context(), minutes); err != nil {
+				autopilotNotice(rw, publicError(err))
+				return
+			}
+			autopilotNotice(rw, fmt.Sprintf("Heartbeat set to every %d minutes on every node.", minutes))
+		}},
+		{"POST /autopilot/run", scopeOwner, func(rw http.ResponseWriter, r *http.Request) {
+			if !w.autopilotRequest(rw, r) {
+				return
+			}
+			host, err := w.Autopilot.RunNow(r.Context())
+			if err != nil {
+				autopilotNotice(rw, err.Error())
+				return
+			}
+			autopilotNotice(rw, "Heartbeat started on the leader, "+host+".")
+		}},
+	}
 }
 
 // autopilotRequest rejects cross-site form posts: browsers cannot send the

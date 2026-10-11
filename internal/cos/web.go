@@ -25,6 +25,7 @@ type Web struct {
 	watchDone   chan struct{}
 	inbox       atomic.Pointer[Inbox]
 	push        atomic.Pointer[Push]
+	ownerID     atomic.Pointer[string] // the first admin's ID, cached once the bootstrap marker reads
 	Chat        *Chat
 	KPI         *KPIBoard
 	Bus         *Bus
@@ -48,40 +49,117 @@ func (w *Web) Handler() http.Handler {
 	return w.auth.Protect(w.routes(), w.Hooks)
 }
 
-// routes are the dashboard pages behind sign-in.
+// routeScope says who may call a dashboard route; routes() enforces it for every route.
+type routeScope int
+
+const (
+	scopeUser   routeScope = iota // the signed-in user's own data
+	scopeShared                   // cluster data every signed-in user may see
+	scopeOwner                    // node-T3 data: only the first admin
+	scopeAdmin                    // admins only, never cos-probe; no routes yet
+)
+
+// webRoute is one dashboard route behind sign-in.
+type webRoute struct {
+	pattern string
+	scope   routeScope
+	handler http.HandlerFunc
+}
+
+// routes registers every webRoutes entry through one scope check.
 func (w *Web) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", w.chatHome)
-	mux.HandleFunc("GET /chat/events", w.chatEvents)
-	mux.HandleFunc("POST /chat", w.chatPost)
-	mux.HandleFunc("POST /chat/answer", w.chatAnswer)
-	mux.HandleFunc("GET /settings", w.settings)
-	mux.HandleFunc("POST /settings/budgets", w.budgetSave)
-	mux.HandleFunc("GET /inbox", w.inboxPage)
-	mux.HandleFunc("GET /inbox/events", w.inboxEvents)
-	mux.HandleFunc("GET /tokens", w.tokensPage)
-	mux.HandleFunc("GET /tokens/events", w.tokensEvents)
-	mux.HandleFunc("GET /release", clusterRelease.events)
-	mux.HandleFunc("GET /version", clusterRelease.version)
-	mux.HandleFunc("GET /work", w.workPage)
-	mux.HandleFunc("GET /work/events", w.workEvents)
-	mux.HandleFunc("GET /work/{ticket}", w.workTicket)
-	w.autopilotRoutes(mux)
-	w.pushRoutes(mux)
-	w.nodesRoutes(mux)
-	w.nodeDetailRoutes(mux)
-	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
-		v, err := View(r.Context(), w.Store)
-		if err != nil {
-			http.Error(rw, "Cannot read COS state", 500)
+	for _, route := range w.webRoutes() {
+		mux.HandleFunc(route.pattern, w.scoped(route.scope, route.handler))
+	}
+	return mux
+}
+
+// webRoutes is the table of every dashboard route behind sign-in. A new route is added here with its scope.
+func (w *Web) webRoutes() []webRoute {
+	routes := []webRoute{
+		{"GET /{$}", scopeUser, w.chatHome},
+		{"GET /chat/events", scopeUser, w.chatEvents},
+		{"POST /chat", scopeUser, w.chatPost},
+		{"POST /chat/answer", scopeUser, w.chatAnswer},
+		{"GET /settings", scopeUser, w.settings},
+		{"POST /settings/budgets", scopeOwner, w.budgetSave},
+		{"GET /inbox", scopeUser, w.inboxPage},
+		{"GET /inbox/events", scopeUser, w.inboxEvents},
+		{"POST /inbox/{id}/{action}", scopeUser, w.InboxAction},
+		{"GET /tokens", scopeOwner, w.tokensPage},
+		{"GET /tokens/events", scopeOwner, w.tokensEvents},
+		{"GET /work", scopeOwner, w.workPage},
+		{"GET /work/events", scopeOwner, w.workEvents},
+		{"GET /work/{ticket}", scopeOwner, w.workTicket},
+		{"GET /status", scopeOwner, w.status},
+		{"GET /release", scopeShared, clusterRelease.events},
+		{"GET /version", scopeShared, clusterRelease.version},
+	}
+	routes = append(routes, w.autopilotRoutes()...)
+	routes = append(routes, w.pushRoutes()...)
+	routes = append(routes, w.nodesRoutes()...)
+	return append(routes, w.nodeDetailRoutes()...)
+}
+
+// scoped runs h only when the caller may use scope; otherwise the route does not exist for them.
+func (w *Web) scoped(scope routeScope, h http.HandlerFunc) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		if !w.allowed(r.Context(), scope) {
+			http.NotFound(rw, r)
 			return
 		}
-		rw.Header().Set("Content-Type", "application/json")
-		rw.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(rw).Encode(v)
-	})
-	mux.HandleFunc("POST /inbox/{id}/{action}", w.InboxAction)
-	return mux
+		h(rw, r)
+	}
+}
+
+// allowed is the scope check: owner routes need the first admin, admin routes need an admin other than cos-probe.
+func (w *Web) allowed(ctx context.Context, scope routeScope) bool {
+	switch scope {
+	case scopeOwner:
+		return w.owner(ctx)
+	case scopeAdmin:
+		u, err := UserFrom(ctx)
+		return err == nil && u.Role == roleAdmin && u.ID != probeUserID
+	}
+	return true
+}
+
+// owner reports whether ctx is the first admin, who owns every node T3. It fails closed: before the bootstrap,
+// or when the marker cannot be read, nobody is the owner.
+func (w *Web) owner(ctx context.Context) bool {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return false
+	}
+	if id := w.ownerID.Load(); id != nil {
+		return u.ID == *id
+	}
+	if w.auth == nil || w.auth.nc == nil {
+		return false
+	}
+	id, ok, err := firstAdmin(ctx, w.auth.nc)
+	if err != nil {
+		logErr(ctx, slog.LevelWarn, "read first admin", err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+	w.ownerID.Store(&id)
+	return u.ID == id
+}
+
+// status is the JSON view of the whole COS state, owner only.
+func (w *Web) status(rw http.ResponseWriter, r *http.Request) {
+	v, err := View(r.Context(), w.Store)
+	if err != nil {
+		http.Error(rw, "Cannot read COS state", 500)
+		return
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	rw.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(rw).Encode(v)
 }
 
 // InboxAction answers or dismisses an item from any node; the bucket's

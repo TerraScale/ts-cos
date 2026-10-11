@@ -28,7 +28,7 @@ func TestRepoAcceptanceChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	h := NewWeb(store, nil).routes()
+	h := ownerRoutes(NewWeb(store, nil))
 	files, _ := fs.Glob(checks.Files, "*.json")
 	if len(files) == 0 {
 		t.Fatal("no acceptance checks embedded")

@@ -7,9 +7,11 @@ import (
 )
 
 // nodesRoutes serves the overview and its live patches.
-func (w *Web) nodesRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /nodes", w.nodesPage)
-	mux.HandleFunc("GET /nodes/events", w.nodesEvents)
+func (w *Web) nodesRoutes() []webRoute {
+	return []webRoute{
+		{"GET /nodes", scopeShared, w.nodesPage},
+		{"GET /nodes/events", scopeShared, w.nodesEvents},
+	}
 }
 
 func (w *Web) nodesPage(rw http.ResponseWriter, r *http.Request) {

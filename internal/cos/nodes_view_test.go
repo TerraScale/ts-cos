@@ -107,8 +107,7 @@ func TestNodesPageRender(t *testing.T) {
 
 func TestNodeRoutesWithoutBus(t *testing.T) {
 	w := &Web{}
-	mux := http.NewServeMux()
-	w.nodesRoutes(mux)
+	mux := w.routes()
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		rec := httptest.NewRecorder()

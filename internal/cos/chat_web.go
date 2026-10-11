@@ -23,11 +23,28 @@ import (
 type chatHeader struct {
 	Running, PRs, Inbox int
 	Autopilot           AutopilotState
+	Owner               bool // node-T3 counts and links show only for the first admin
+}
+
+// viewFor is the dashboard ctx may see: node-T3 state for the owner, and the caller's own Inbox for everyone.
+func (w *Web) viewFor(ctx context.Context) (Dashboard, error) {
+	if w.owner(ctx) {
+		v, err := View(ctx, w.Store)
+		v.Owner = true
+		return v, err
+	}
+	var v Dashboard
+	var err error
+	if v.Inbox, v.History, err = inboxFor(ctx, w.Store); err != nil {
+		return Dashboard{}, err
+	}
+	v.History = v.History[:min(len(v.History), inboxHistoryMax)]
+	return v, nil
 }
 
 // state reads the dashboard once per patch; a failed read renders what is known, logged.
 func (w *Web) state(ctx context.Context) Dashboard {
-	v, err := View(ctx, w.Store)
+	v, err := w.viewFor(ctx)
 	if err != nil {
 		logErr(ctx, slog.LevelError, "read COS state", err)
 	}
@@ -38,7 +55,7 @@ func (w *Web) state(ctx context.Context) Dashboard {
 func (w *Web) header(ctx context.Context) chatHeader { return headerOf(w.state(ctx)) }
 
 func headerOf(v Dashboard) chatHeader {
-	return chatHeader{Running: v.Running, PRs: len(v.Live.PRs), Inbox: len(v.Inbox), Autopilot: v.Autopilot}
+	return chatHeader{Running: v.Running, PRs: len(v.Live.PRs), Inbox: len(v.Inbox), Autopilot: v.Autopilot, Owner: v.Owner}
 }
 
 // kpiView is what the KPI tiles show: the header's live counts plus this node's KPI mirror.
@@ -46,10 +63,11 @@ type kpiView struct {
 	Running, PRs int
 	Autopilot    AutopilotState
 	K            KPIs
+	Owner        bool
 }
 
 func (w *Web) kpis(h chatHeader) kpiView {
-	return kpiView{Running: h.Running, PRs: h.PRs, Autopilot: h.Autopilot, K: w.KPI.Snapshot()}
+	return kpiView{Running: h.Running, PRs: h.PRs, Autopilot: h.Autopilot, K: w.KPI.Snapshot(), Owner: h.Owner}
 }
 
 func e2eTone(k KPIs) string {
@@ -156,31 +174,42 @@ func (w *Web) agentState(ctx context.Context) (AgentState, error) {
 	return st, json.Unmarshal(e.Value(), &st)
 }
 
-// settings hosts the heartbeat presets (TS-813), token budgets (TS-826) and the COS wakes; account settings join it here.
+// settings hosts the heartbeat presets (TS-813), token budgets (TS-826) and the COS wakes for the owner; push and account settings are everyone's.
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
-	w.renderSettings(rw, r, http.StatusOK, w.budgetPanel(r.Context(), time.Now()))
+	var d budgetPanelData
+	if w.owner(r.Context()) {
+		d = w.budgetPanel(r.Context(), time.Now())
+	}
+	w.renderSettings(rw, r, http.StatusOK, d)
 }
 
 // renderSettings writes the Settings page with the Budgets section d, at status.
 func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int, d budgetPanelData) {
-	v, err := View(r.Context(), w.Store)
+	v, err := w.viewFor(r.Context())
 	if err != nil {
 		http.Error(rw, "Cannot read COS state", 500)
 		return
 	}
-	st, err := w.agentState(r.Context())
-	if err != nil {
-		slog.Error("read COS agent state", "error", err)
+	var wakes []WakeRecord
+	if v.Owner {
+		st, err := w.agentState(r.Context())
+		if err != nil {
+			slog.Error("read COS agent state", "error", err)
+		}
+		wakes = st.recentWakes(20)
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(status)
-	if err := settingsPage(v.Autopilot, d, w.pushState(r.Context()), st.recentWakes(20)).Render(r.Context(), rw); err != nil {
+	if err := settingsPage(v.Owner, v.Autopilot, d, w.pushState(r.Context()), wakes).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render settings", err)
 	}
 }
 
-// homeBoard reads the Work summary for the home aside; a failed read is logged and reports false.
+// homeBoard reads the Work summary for the owner's home aside; a failed read is logged and reports false.
 func (w *Web) homeBoard(ctx context.Context) (workBoard, bool) {
+	if !w.owner(ctx) {
+		return workBoard{}, false
+	}
 	data, err := loadBoard(ctx, w.Store)
 	if err != nil {
 		logErr(ctx, slog.LevelError, "read work board", err)
@@ -262,8 +291,10 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		if err := patchElements(ctx, rw, chatHead(h)); err != nil {
 			return err
 		}
-		if err := patchElements(ctx, rw, kpiTiles(w.kpis(h))); err != nil {
-			return err
+		if h.Owner {
+			if err := patchElements(ctx, rw, kpiTiles(w.kpis(h))); err != nil {
+				return err
+			}
 		}
 		if err := patchElements(ctx, rw, countBadge("side-inbox", "badge", h.Inbox)); err != nil {
 			return err
@@ -274,9 +305,11 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		if err := patchNodes(); err != nil {
 			return err
 		}
-		b, ok := w.homeBoard(ctx)
-		if err := patchElements(ctx, rw, workPane(b, ok)); err != nil {
-			return err
+		if h.Owner {
+			b, ok := w.homeBoard(ctx)
+			if err := patchElements(ctx, rw, workPane(b, ok)); err != nil {
+				return err
+			}
 		}
 		return patchElements(ctx, rw, inbox(v))
 	}
@@ -376,7 +409,9 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 			err = home(w.state(ctx))
 		case <-kpiWake:
 			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			err = patchElements(ctx, rw, kpiTiles(w.kpis(last)))
+			if last.Owner {
+				err = patchElements(ctx, rw, kpiTiles(w.kpis(last)))
+			}
 		case <-nodesTick.C:
 			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err = patchNodes()
@@ -433,7 +468,7 @@ func toolSummary(tools []string) string {
 
 // inboxPage shows TS-815's Inbox under the shared chat header.
 func (w *Web) inboxPage(rw http.ResponseWriter, r *http.Request) {
-	v, err := View(r.Context(), w.Store)
+	v, err := w.viewFor(r.Context())
 	if err != nil {
 		http.Error(rw, "Cannot read COS state", 500)
 		return
@@ -456,7 +491,7 @@ func (w *Web) inboxEvents(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Set("Content-Type", "text/event-stream")
 	rw.Header().Set("X-Accel-Buffering", "no")
 	patch := func() error {
-		v, err := View(ctx, w.Store)
+		v, err := w.viewFor(ctx)
 		if err != nil {
 			return err
 		}

@@ -182,7 +182,7 @@ func TestAutopilotWebRequiresDatastar(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	server := httptest.NewServer(NewWeb(store, nil).routes())
+	server := httptest.NewServer(ownerRoutes(NewWeb(store, nil)))
 	defer server.Close()
 	post := func(path string, datastar bool) *http.Response {
 		req, _ := http.NewRequest("POST", server.URL+path, nil)

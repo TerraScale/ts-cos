@@ -25,7 +25,7 @@ func TestBudgetSaveStoresBothLimits(t *testing.T) {
 	w := NewWeb(store, nil)
 	kv := &fakeKV{data: map[string][]byte{}}
 	w.Autopilot = &Autopilot{settings: kv}
-	rec := budgetPostForm(t, w.routes(), " 15M ", "500k")
+	rec := budgetPostForm(t, ownerRoutes(w), " 15M ", "500k")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/settings#budgets" {
 		t.Fatalf("save = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -39,7 +39,7 @@ func TestBudgetSaveRejectsBadInputWithoutWriting(t *testing.T) {
 	w := NewWeb(store, nil)
 	kv := &fakeKV{data: map[string][]byte{}}
 	w.Autopilot = &Autopilot{settings: kv}
-	h := w.routes()
+	h := ownerRoutes(w)
 	for _, bad := range []string{"abc", "0", "-5", "99999999999999M", "1000001M", ""} {
 		rec := budgetPostForm(t, h, bad, "10M")
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `role="alert"`) || !strings.Contains(rec.Body.String(), "Per thread, per day:") {
@@ -60,7 +60,7 @@ func TestBudgetSaveRejectsBadInputWithoutWriting(t *testing.T) {
 
 func TestBudgetSaveWithoutKVIsUnavailable(t *testing.T) {
 	w := NewWeb(openTestStore(t), nil)
-	rec := budgetPostForm(t, w.routes(), "10M", "100M")
+	rec := budgetPostForm(t, ownerRoutes(w), "10M", "100M")
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), budgetUnavailable) {
 		t.Fatalf("no KV = %d", rec.Code)
 	}
@@ -94,7 +94,7 @@ func TestSettingsBudgetPanelRenders(t *testing.T) {
 	w := NewWeb(store, nil)
 	w.Autopilot = &Autopilot{settings: kv}
 	rec := httptest.NewRecorder()
-	w.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	ownerRoutes(w).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
 	body := rec.Body.String()
 	for _, want := range []string{
 		`id="budgets"`, `name="thread" type="text" inputmode="numeric" required value="10M"`,
@@ -115,7 +115,7 @@ func TestSettingsBudgetPanelRenders(t *testing.T) {
 func TestSettingsBudgetPanelWithoutKV(t *testing.T) {
 	w := NewWeb(openTestStore(t), nil)
 	rec := httptest.NewRecorder()
-	w.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	ownerRoutes(w).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
 	body := rec.Body.String()
 	if rec.Code != http.StatusOK || !strings.Contains(body, budgetUnavailable) || !strings.Contains(body, `value="10M"`) || !strings.Contains(body, `value="100M"`) {
 		t.Fatalf("settings without KV = %d", rec.Code)

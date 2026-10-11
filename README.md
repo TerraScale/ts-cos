@@ -99,6 +99,15 @@ The file is never rewritten and the hash is never logged.
 - Cross-site form posts are rejected; pages are `no-store` and cannot be framed.
   Requests from outside loopback and Tailscale are refused.
 
+**Users and isolation.** Every per-user store key starts `u.<ULID>.` and is
+written through `UserKV`, which fails closed without a user. Dashboard routes sit
+in one table (`webRoutes` in `web.go`) with a scope: `user` (the signed-in user's
+own data), `shared` (the Nodes and release feed), `owner` (node T3 data: the
+first admin only, others get 404) and `admin` (admins other than cos-probe; no
+routes yet). `TestEveryRouteIsolatesUsers` walks every route as another user. Per-user
+CLI commands need `cos --user <name|ULID>`. A shell on a cluster node, with its
+NATS credentials, is the operator boundary: it reads every user's data.
+
 ### Webhook ingress
 
 Forgejo POSTs to `https://cos.terrascale.tech/hooks/forgejo` (also served on
