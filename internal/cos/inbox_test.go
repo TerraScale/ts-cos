@@ -168,10 +168,17 @@ func TestInboxClusterLifecycle(t *testing.T) {
 	}
 
 	// A worker.needs_user event from T3 ingestion is filed by the leader's consumer.
-	busTestReady(t, "needs-user consumer", func() bool {
+	consumerReady := func() bool {
 		_, err := delta.inbox.js.Consumer(ctx, EventsStream, "cos-inbox-needs-user")
 		return err == nil
-	})
+	}
+	deadline := time.Now().Add(45 * time.Second)
+	for !consumerReady() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for needs-user consumer")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	needsUser, _ := json.Marshal(map[string]any{"title": "TS-816 e2e worker", "question": "Run the slow suite?", "options": []string{"Yes", "No"}, "why": "CI time."})
 	if _, err := PublishEvent(ctx, beta.inbox.js, Event{ID: "t3:run-1:needs-user:0", Source: SourceT3, Kind: KindNeedsUser, Time: time.Now(),
 		Severity: SeverityUrgent, Summary: "NEEDS-USER Run the slow suite?", Host: "beta", Thread: "thread-event", Data: needsUser}); err != nil {
