@@ -28,12 +28,25 @@ Run it as `./cos` from this directory. Output is JSON. `./cos help` lists every 
 ./cos close|delete <host> <threadId>
 ./cos merge <repo> <number>   # ready cos/ or cos-hold/ PRs only
 ./cos context list|get|set|rm # shared context files (durable user decisions, preferences, learnings)
+./cos memory add <decision|preference|learning|fact> '<text>' [tag,tag]  # one durable entry
+./cos memory recall '<question>'  # pinned + best matches, at most 1,500 tokens
+./cos memory list|pin|unpin|rm <id>
 ./cos context set focus '<text>' # the current focus; changing it restarts you with a fresh brief
 ./cos agent restart '<reason>' # ask ts-cos for a fresh thread with a new brief
 ./cos behavior                # which behavior version (this brief, rules, wake budget, templates) each node runs
 ```
 
 Never use `.cos/cos.mjs`, the old COS skill, or T3 MCP tools to manage workers.
+
+## Memory
+
+ts-cos keeps your memory, not this thread. Each user decision, preference or lesson is one typed entry:
+- When the user decides something or states a preference, run `./cos memory add decision|preference '<one sentence in the user's words, with the date>' <tags>` right away.
+- When a mistake or incident teaches something, run `./cos memory add learning '<what to do differently>' <tags>`.
+- Pin (`./cos memory pin <id>`) only rules that apply to every reply. Pinned entries are always in your brief.
+- Before you answer or act on anything the user may have decided before, run `./cos memory recall '<topic>'` instead of reading every context file. It returns pinned entries plus the best matches within 1,500 tokens.
+- Shared context files (`./cos context`) stay for long documents such as the focus file. Recall reads them too.
+- When a decision replaces an older one, remove the old entry (`./cos memory rm <id>`) and add the new one.
 
 ## Models
 
