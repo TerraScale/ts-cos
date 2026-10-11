@@ -20,11 +20,13 @@ const (
 
 // NodeCard is one host's current state for the overview, K's home panel and the detail header.
 type NodeCard struct {
-	Host   string
-	State  string     // up (< 30 s), degraded (30–60 s), down (> 60 s), unknown (no sample)
-	Sample NodeSample // newest raw sample (zero when unknown)
-	Age    time.Duration
-	CPU    []float64 // last hour of CPU from the 1m stream, for the tile's sparkline
+	Host        string
+	State       string     // up (< 30 s), degraded (30–60 s), down (> 60 s), unknown (no sample)
+	Sample      NodeSample // newest raw sample (zero when unknown)
+	Age         time.Duration
+	CPU         []float64     // last hour of CPU from the 1m stream, for the tile's sparkline
+	Restarts    []NodeRestart // last seven days of service starts
+	restartsErr bool          // the restart record could not be read
 }
 
 // nodeCardCache shares one read of every card across all open dashboards.
@@ -122,6 +124,7 @@ func readHostCards(hosts []string, read func(host string) NodeCard) []NodeCard {
 // readNodeCard reads a host's newest sample and its last hour. A host without a readable sample is unknown, not an error.
 func readNodeCard(ctx context.Context, js jetstream.JetStream, host string, now time.Time) NodeCard {
 	c := NodeCard{Host: host, State: "unknown"}
+	c.Restarts, c.restartsErr = recentRestarts(ctx, js, host, now)
 	s, err := NodeLatest(ctx, js, host)
 	if err != nil {
 		return c
