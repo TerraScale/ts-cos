@@ -43,8 +43,8 @@ func validateLocal(command string, args []string) error {
 			return errors.New("command arguments cannot be empty")
 		}
 	}
-	if command == "send" && len(args) == 3 && args[2] != "queue" {
-		return errors.New("send mode must be queue")
+	if command == "send" && len(args) == 3 && !sendArgPattern.MatchString(args[2]) {
+		return errors.New("send mode must be queue, user, or deliver:<messageId>")
 	}
 	if command == "thread" && len(args) == 2 {
 		if n, err := strconv.Atoi(args[1]); err != nil || n < 1 || n > 50 {
@@ -163,18 +163,12 @@ func localCommand(ctx context.Context, open func(context.Context) (*T3, error), 
 		if runs == nil {
 			runs = []ThreadRun{}
 		}
-		out := map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": p.PendingRequests(), "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}
+		out := map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "projectId": p.Thread.ProjectID, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": p.PendingRequests(), "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}
 		if len(args) == 2 {
 			n, _ := strconv.Atoi(args[1])
 			out["replies"] = lastReplies(p, n)
 		}
 		return out, nil
-	case "send":
-		mode := SendSteer
-		if len(args) == 3 {
-			mode = SendQueue
-		}
-		return c.Send(ctx, id, args[1], mode)
 	case "compact":
 		focus := ""
 		if len(args) == 2 {
@@ -458,6 +452,10 @@ func (c *T3) Tidy(ctx context.Context) (TreeResult, error) {
 	}
 	return out, nil
 }
+
+// handoffCompactTokens is the context use above which a handoff compacts the thread first.
+const handoffCompactTokens = 20000
+
 func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief string) (any, error) {
 	p, err := c.WaitIdle(ctx, id, 20*time.Minute)
 	if err != nil {
@@ -466,7 +464,7 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief s
 	usage := ContextOf(p)
 	steps := []any{map[string]any{"before": usage}}
 	// Every later turn re-sends the whole context; the target model only needs a summary.
-	if usage.UsedTokens > 20000 {
+	if usage.UsedTokens > handoffCompactTokens {
 		focus := fmt.Sprintf("Handing over to %v for the review-fix phase. Keep only: the PR's purpose and design, decisions made (incl. user decisions), files changed and why, open reviewer findings and their status, what was tried and failed, and the exact next step. Drop tool output, file dumps and resolved discussions.", sel["model"])
 		compacted, err := c.Compact(ctx, id, focus)
 		if err != nil {

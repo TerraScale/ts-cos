@@ -87,6 +87,7 @@ type Agent struct {
 	KV, Context     jetstream.KeyValue
 	Memory          jetstream.KeyValue
 	Savings         jetstream.KeyValue
+	Limits          jetstream.KeyValue
 	T3              func(context.Context) (agentT3, error)
 	Remote          func(ctx context.Context, host, command string, args []string, out any) error
 	js              jetstream.JetStream
@@ -173,6 +174,9 @@ func (a *Agent) Run(ctx context.Context, bus *Bus) {
 		}
 		if err == nil {
 			a.Savings, err = openKV(ctx, bus, savingsBucket)
+		}
+		if err == nil {
+			a.Limits, err = openLimits(ctx, bus)
 		}
 		if err == nil {
 			a.js, err = bus.JetStream()
@@ -333,6 +337,11 @@ func (a *Agent) Step(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read COS view: %w", err)
 	}
+	if held, err := a.agentHeld(ctx); err != nil {
+		return err
+	} else if held {
+		return a.mirrorOnly(ctx, c, &st, rev)
+	}
 	failover := st.ThreadID == "" && strings.Contains(st.Restart, "failover from")
 	if b := CurrentBehavior(); b.Hash != st.Behavior {
 		if st.ThreadID != "" {
@@ -478,6 +487,32 @@ func (a *Agent) Step(ctx context.Context) error {
 		return fmt.Errorf("save COS state: %w", err)
 	}
 	return nil
+}
+
+// agentHeld reports whether COS's model has no headroom now.
+func (a *Agent) agentHeld(ctx context.Context) (bool, error) {
+	s, err := readLimits(ctx, a.Limits)
+	if err != nil {
+		return false, err
+	}
+	pol := CurrentBehavior().Models
+	model, _ := pol.Advisor(pol.Leader, false)["model"].(string)
+	ok, _, _ := s.Headroom(model, time.Now())
+	return !ok, nil
+}
+
+// mirrorOnly reflects the COS thread's output while its model is limited; nothing is sent, launched or consumed.
+func (a *Agent) mirrorOnly(ctx context.Context, c agentT3, st *AgentState, rev uint64) error {
+	if st.ThreadID != "" {
+		var p agentProjection
+		if err := c.RPC(ctx, "orchestration.getThreadProjection", map[string]any{"threadId": st.ThreadID}, &p); err != nil {
+			return fmt.Errorf("read COS thread: %w", err)
+		}
+		if err := a.mirror(ctx, st, p); err != nil {
+			return fmt.Errorf("mirror COS thread: %w", err)
+		}
+	}
+	return a.save(ctx, *st, rev)
 }
 
 // restart replaces the COS thread with a fresh one whose first message is a new brief.

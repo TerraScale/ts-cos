@@ -389,7 +389,7 @@ func (in *Inbox) forward(ctx context.Context, item InboxItem) InboxItem {
 		return item
 	}
 	text := "USER ANSWER (COS Inbox " + claimed.ID + "): " + claimed.Title + "\n" + answerText(claimed.Answer)
-	sendErr := in.bus.Call(ctx, claimed.Host, "send", []string{claimed.Thread, text}, nil)
+	sendErr := in.bus.Call(ctx, claimed.Host, "send", []string{claimed.Thread, text, "user"}, nil)
 	if sendErr == nil {
 		return claimed
 	}

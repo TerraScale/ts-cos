@@ -238,7 +238,9 @@ func (c *Compactor) saved(ctx context.Context, tokens int) {
 // report logs one action, or its failure, against the thread it touched.
 func (c *Compactor) report(ctx context.Context, host, thread, action, reason string, err error) {
 	e := AutopilotEntry{Kind: "act", Target: host + "/" + thread, Action: action, Reason: reason}
-	if err != nil {
+	if heldErr(err) {
+		e = AutopilotEntry{Kind: "record", Target: host + "/" + thread, Action: action, Reason: err.Error()}
+	} else if err != nil {
 		e = AutopilotEntry{Kind: "error", Target: host + "/" + thread, Action: action, Reason: err.Error()}
 	}
 	c.Publish(ctx, e)
