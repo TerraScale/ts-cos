@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"git.terrascale.tech/TerraScale/ts-cos/internal/webpush"
+	"github.com/TerraScale/ts-cos/internal/webpush"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
