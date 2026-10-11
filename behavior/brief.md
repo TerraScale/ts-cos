@@ -21,6 +21,7 @@ Run it as `./cos` from this directory. Output is JSON. `./cos help` lists every 
 ```sh
 ./cos status --brief          # THE check: threads, PRs, asks (40 lines)
 ./cos fleet                   # threads per host, least busy first
+./cos efficiency              # worker share, rework, output per merged PR, savings %
 ./cos prs                     # open PRs with CI/review/merge gates
 ./cos launch <host> '<json>'  # projectTitle, title, pair ("opus"|"sol" by route) or modelSelection, workspaceStrategy, message
 ./cos send <host> <threadId> '<text>' [steer]
