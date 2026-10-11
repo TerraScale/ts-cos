@@ -346,6 +346,9 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "inbox.answer-closes", Stream: "TS-815", Run: inboxCheck(checkInboxAnswerCloses)},
 		E2ECheck{ID: "inbox.concurrent-answer", Stream: "TS-815", Run: inboxCheck(checkInboxConcurrentAnswer)},
 		E2ECheck{ID: "inbox.dedup", Stream: "TS-815", Run: inboxCheck(checkInboxDedup)},
+		E2ECheck{ID: "tokens.budget-fyi", Stream: "TS-826", Run: checkBudgetFYI},
+		// The pause spends a few Opus tokens on a throwaway thread, so it runs only when named.
+		E2ECheck{ID: "tokens.budget-pause", Stream: "TS-826", OnDemand: true, Run: checkBudgetPause},
 		// Last, so the 100 s wait only starts after the rest of the suite has run.
 		E2ECheck{ID: "nodes.collector-missing", Stream: "TS-825", Run: checkNodeCollectorMissing},
 		// Runs only when named, because it spends an Opus probe run.

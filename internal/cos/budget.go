@@ -122,6 +122,11 @@ func budgetRaiseKey(day, scope string) string {
 // budgetAppliedKey marks an answered budget item whose raise is stored. Inbox IDs are hex.
 func budgetAppliedKey(id string) string { return "budget.applied." + id }
 
+// budgetExceededKey is the Inbox key of a scope's exceeded item; budgetRaise reads its day, scope and limit back.
+func budgetExceededKey(day, scope string, limit int64) string {
+	return fmt.Sprintf("budget:%s:%s:100:%d", day, scope, limit)
+}
+
 // budgetHuman formats a token count for a summary: 8.1M, 500k, 42.
 func budgetHuman(n int64) string {
 	v, unit := float64(n), ""
@@ -203,7 +208,7 @@ func budgetDecisions(e Event, live Live, owner *FleetThread) []Decision {
 		return []Decision{{Class: ClassRecord, Rule: "budget-warn", Reason: e.Summary, Host: e.Host, Thread: thread, Ticket: e.Ticket,
 			Inbox: inbox("fyi", nil, fmt.Sprintf("budget:%s:%s:%d", b.Day, b.Scope, budgetWarnPercent))}}
 	}
-	key := fmt.Sprintf("budget:%s:%s:100:%d", b.Day, b.Scope, b.Limit)
+	key := budgetExceededKey(b.Day, b.Scope, b.Limit)
 	switch {
 	case b.Scope == budgetDaily:
 		return budgetPauseFleet(e, b, live, key)
@@ -433,18 +438,58 @@ func budgetUsage(ctx context.Context, store *Store, now time.Time) (budgetState,
 
 // runBudgets is leader-only: it publishes today's budget events and applies answers.
 func runBudgets(ctx context.Context, bus *Bus, store *Store) {
-	tick := time.NewTicker(usageScanEvery)
-	defer tick.Stop()
+	failures := 0
 	for {
-		if err := budgetSweep(ctx, bus, store); err != nil && ctx.Err() == nil {
-			slog.Error("token budgets", "error", err)
+		wait := usageScanEvery
+		if err := budgetSweep(ctx, bus, store); err == nil {
+			failures = 0
+		} else {
+			failures, wait = budgetSweepFailed(ctx, err, failures)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case <-time.After(wait):
 		}
 	}
+}
+
+// budgetRetry starts the wait after a transient sweep failure; it doubles to budgetRetryMax.
+const (
+	budgetRetry      = 5 * time.Second
+	budgetRetryMax   = 60 * time.Second
+	budgetErrorAfter = 5
+)
+
+// budgetBackoff is the wait after the nth consecutive transient failure and how loudly to log it.
+func budgetBackoff(failures int) (time.Duration, slog.Level) {
+	wait := min(budgetRetry<<min(max(failures-1, 0), 4), budgetRetryMax)
+	if failures < budgetErrorAfter {
+		return wait, slog.LevelWarn
+	}
+	return wait, slog.LevelError
+}
+
+// budgetTransient is a sweep failure that clears on its own: NATS is not answering yet, or the
+// settings bucket is not there yet right after a restart.
+func budgetTransient(err error) bool {
+	return transientUsageErr(err) || errors.Is(err, jetstream.ErrBucketNotFound)
+}
+
+// budgetSweepFailed logs a failed sweep and returns the consecutive transient failure count and
+// the wait before the next sweep. A shutdown logs nothing, and a non-transient error is logged at once.
+func budgetSweepFailed(ctx context.Context, err error, failures int) (int, time.Duration) {
+	switch {
+	case ctx.Err() != nil:
+		return failures, 0
+	case !budgetTransient(err):
+		slog.Error("token budgets", "error", err)
+		return 0, usageScanEvery
+	}
+	failures++
+	wait, level := budgetBackoff(failures)
+	slog.Log(ctx, level, "token budgets not ready; retrying", "error", err, "in", wait, "failures", failures)
+	return failures, wait
 }
 
 func budgetSweep(ctx context.Context, bus *Bus, store *Store) error {
@@ -495,7 +540,8 @@ func budgetApply(ctx context.Context, bus *Bus, settings jetstream.KeyValue, st 
 		if _, err := settings.Put(ctx, applied, []byte(st.Day)); err != nil {
 			return err
 		}
-		if !raised || item.Thread != "" {
+		// Only the fleet raise resumes every thread; a thread-less scope raise must not message live work.
+		if !raised || item.Thread != "" || key != budgetRaiseKey(st.Day, budgetDaily) {
 			continue
 		}
 		text := fmt.Sprintf("RESUMED: budget raised to %d tokens today. Continue where you stopped.", value)

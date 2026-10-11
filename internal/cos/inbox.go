@@ -364,6 +364,11 @@ func (in *Inbox) Dismiss(ctx context.Context, id string) (InboxItem, error) {
 	return in.close(ctx, id, "dismissed", nil, "Dismissed by the user")
 }
 
+// purge removes an item's KV entry for good; the mirror drops it on the delete the purge leaves.
+func (in *Inbox) purge(ctx context.Context, id string) error {
+	return in.kv.Purge(ctx, id)
+}
+
 func answerText(a *AnswerData) string {
 	if a == nil {
 		return ""
