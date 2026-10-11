@@ -39,7 +39,7 @@ func TestLocalArgumentParsing(t *testing.T) {
 			}
 		})
 	}
-	if err := validateLocal("send", []string{"id", "text", "steer"}); err != nil {
+	if err := validateLocal("send", []string{"id", "text", "queue"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateLocal("send", []string{"id", "text", "unknown"}); err == nil {
@@ -109,9 +109,9 @@ func TestLaunchMissingProjectIsSafePublicError(t *testing.T) {
 func TestCloseTreeAndTidySkipActive(t *testing.T) {
 	for _, command := range []string{"close", "delete", "tidy"} {
 		t.Run(command, func(t *testing.T) {
-			snapshot := `{"threads":[{"id":"root","title":"root","status":"idle"},{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"root"}},{"id":"active","title":"active","status":"running","lineage":{"parentThreadId":"root"}},{"id":"orphan","title":"orphan","status":"idle","lineage":{"parentThreadId":"absent"}}]}`
+			snapshot := `{"schemaVersion":2,"threads":[{"id":"root","title":"root","status":"idle"},{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"root"}},{"id":"active","title":"active","status":"running","lineage":{"parentThreadId":"root"}},{"id":"orphan","title":"orphan","status":"idle","lineage":{"parentThreadId":"absent"}}]}`
 			if command == "tidy" {
-				snapshot = `{"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"absent"}},{"id":"active","title":"active","status":"running","lineage":{"parentThreadId":"absent"}}]}`
+				snapshot = `{"schemaVersion":2,"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"absent"}},{"id":"active","title":"active","status":"running","lineage":{"parentThreadId":"absent"}}]}`
 			}
 			var got []string
 			server := newT3TestServer(t, snapshot, func(tag string, payload map[string]any) any {
@@ -160,25 +160,25 @@ func TestTidySettlesOrphanSubtreesSafely(t *testing.T) {
 	}{
 		{
 			name:       "reversed multi-level chain",
-			snapshot:   `{"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"child"}},{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"parent"}},{"id":"parent","title":"parent","status":"idle","lineage":{"parentThreadId":"absent"}}]}`,
+			snapshot:   `{"schemaVersion":2,"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"child"}},{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"parent"}},{"id":"parent","title":"parent","status":"idle","lineage":{"parentThreadId":"absent"}}]}`,
 			wantClosed: []string{"parent", "child", "grandchild"},
 			wantCalls:  []string{"parent", "child", "grandchild"},
 		},
 		{
 			name:        "active middle blocks descendants",
-			snapshot:    `{"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"middle"}},{"id":"middle","title":"middle","status":"running","lineage":{"parentThreadId":"absent"}}]}`,
+			snapshot:    `{"schemaVersion":2,"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"middle"}},{"id":"middle","title":"middle","status":"running","lineage":{"parentThreadId":"absent"}}]}`,
 			wantSkipped: []map[string]string{{"id": "middle", "reason": "active run"}},
 		},
 		{
 			name:        "failed parent blocks descendants",
-			snapshot:    `{"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"parent"}},{"id":"parent","title":"parent","status":"idle","lineage":{"parentThreadId":"absent"}}]}`,
+			snapshot:    `{"schemaVersion":2,"threads":[{"id":"grandchild","title":"grandchild","status":"idle","lineage":{"parentThreadId":"parent"}},{"id":"parent","title":"parent","status":"idle","lineage":{"parentThreadId":"absent"}}]}`,
 			failID:      "parent",
 			wantSkipped: []map[string]string{{"id": "parent", "reason": "settle failed"}},
 			wantCalls:   []string{"parent"},
 		},
 		{
 			name:     "orphan cycle is bounded",
-			snapshot: `{"threads":[{"id":"a","title":"a","status":"idle","lineage":{"parentThreadId":"b"}},{"id":"b","title":"b","status":"idle","lineage":{"parentThreadId":"a"}}]}`,
+			snapshot: `{"schemaVersion":2,"threads":[{"id":"a","title":"a","status":"idle","lineage":{"parentThreadId":"b"}},{"id":"b","title":"b","status":"idle","lineage":{"parentThreadId":"a"}}]}`,
 		},
 	}
 	for _, tt := range tests {
@@ -265,6 +265,15 @@ func serveT3TestRPC(t *testing.T, w http.ResponseWriter, r *http.Request, respon
 		return
 	}
 	result := respond(request.Tag, request.Payload)
+	if m, ok := result.(map[string]any); ok && request.Tag == "orchestration.getThreadProjection" {
+		// Mocks name only the fields under test; T3 always sends the rest.
+		defaults := map[string]any{"thread": map[string]any{"id": request.Payload["threadId"]}, "runs": []any{}, "messages": []any{}, "runtimeRequests": []any{}, "providerTurns": []any{}, "turnItems": []any{}}
+		for k, v := range defaults {
+			if _, ok := m[k]; !ok {
+				m[k] = v
+			}
+		}
+	}
 	exit := map[string]any{"_tag": "Success", "value": result}
 	if failure, ok := result.(rpcTestFailure); ok {
 		exit = map[string]any{"_tag": "Failure", "cause": string(failure)}
@@ -287,9 +296,9 @@ func TestThreadCleanupFailuresUseFixedSkipReasons(t *testing.T) {
 		name, command, snapshot, wantReason string
 		failType                            string
 	}{
-		{"close settle", "close", `{"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"missing"}}]}`, "settle failed", "thread.settle"},
-		{"delete", "delete", `{"threads":[{"id":"child","title":"child","status":"idle","settledAt":"now","lineage":{"parentThreadId":"missing"}}]}`, "delete failed", "thread.delete"},
-		{"tidy settle", "tidy", `{"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"missing"}}]}`, "settle failed", "thread.settle"},
+		{"close settle", "close", `{"schemaVersion":2,"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"missing"}}]}`, "settle failed", "thread.settle"},
+		{"delete", "delete", `{"schemaVersion":2,"threads":[{"id":"child","title":"child","status":"idle","settledAt":"now","lineage":{"parentThreadId":"missing"}}]}`, "delete failed", "thread.delete"},
+		{"tidy settle", "tidy", `{"schemaVersion":2,"threads":[{"id":"child","title":"child","status":"idle","lineage":{"parentThreadId":"missing"}}]}`, "settle failed", "thread.settle"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -328,7 +337,7 @@ func TestThreadCleanupFailuresUseFixedSkipReasons(t *testing.T) {
 }
 
 func TestEmptyThreadResultsKeepLegacyFields(t *testing.T) {
-	server := newT3TestServer(t, `{"threads":[]}`, func(string, map[string]any) any { t.Error("unexpected mutation"); return nil })
+	server := newT3TestServer(t, `{"schemaVersion":2,"threads":[]}`, func(string, map[string]any) any { t.Error("unexpected mutation"); return nil })
 	defer server.Close()
 	client := &T3{Config: Config{HTTP: server.Client()}, Host: "test", BaseURL: server.URL}
 	for _, command := range []string{"close", "delete", "tidy"} {

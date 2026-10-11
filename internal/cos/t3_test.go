@@ -19,6 +19,7 @@ func TestT3RPCWireProtocol(t *testing.T) {
 	type frame struct {
 		text string
 		pong bool
+		ack  bool
 	}
 	tests := []struct {
 		name        string
@@ -34,7 +35,7 @@ func TestT3RPCWireProtocol(t *testing.T) {
 		{
 			name: "batch ignores unrelated exit and answers ping",
 			frames: []frame{
-				{text: `[{"_tag":"Exit","requestId":"other","exit":{"_tag":"Success","value":{"answer":"wrong"}}},{"_tag":"Chunk","requestId":"1","values":[]},{"_tag":"Ping"}]`, pong: true},
+				{text: `[{"_tag":"Exit","requestId":"other","exit":{"_tag":"Success","value":{"answer":"wrong"}}},{"_tag":"Chunk","requestId":"1","values":[]},{"_tag":"Ping"}]`, ack: true, pong: true},
 				{text: `[{"_tag":"Exit","requestId":"1","exit":{"_tag":"Success","value":{"answer":"ok"}}}]`},
 			},
 		},
@@ -53,7 +54,7 @@ func TestT3RPCWireProtocol(t *testing.T) {
 		{
 			name:        "failure exit hides cause",
 			frames:      []frame{{text: `{"_tag":"Exit","requestId":"1","exit":{"_tag":"Failure","cause":{"_tag":"Fail","error":"LOCAL-T3-TOKEN OTHER-PROVIDER-SECRET PRIVATE-BRIEF INTERNAL-FAILURE-CODE"}}}`}},
-			errContains: "T3 test RPC failed",
+			errContains: "T3 test RPC failed: test.rpc",
 		},
 		{
 			name:        "malformed batch",
@@ -128,6 +129,15 @@ func TestT3RPCWireProtocol(t *testing.T) {
 							if err := ws.Write(ctx, websocket.MessageText, []byte(frame.text)); err != nil {
 								return err
 							}
+							if frame.ack {
+								_, data, err := ws.Read(ctx)
+								if err != nil {
+									return err
+								}
+								if string(data) != `{"_tag":"Ack","requestId":"1"}` {
+									return fmt.Errorf("chunk acknowledgement = %s", data)
+								}
+							}
 							if frame.pong {
 								kind, data, err := ws.Read(ctx)
 								if err != nil {
@@ -181,8 +191,8 @@ func TestT3RPCWireProtocol(t *testing.T) {
 						}
 					}
 					var public interface{ PublicMessage() string }
-					if errors.As(err, &public) {
-						t.Errorf("RPC() failure unexpectedly has public message %q", public.PublicMessage())
+					if !errors.As(err, &public) || public.PublicMessage() != err.Error() {
+						t.Errorf("RPC() failure must publish its safe message, got %v", err)
 					}
 				}
 			}

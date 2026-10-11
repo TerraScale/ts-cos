@@ -19,7 +19,7 @@ var localCommands = map[string]commandSpec{
 	"projects": {0, 0, "projects <host>"}, "shell": {0, 0, "shell <host>"}, "asks-host": {0, 0, "asks-host <host>"}, "tidy": {0, 0, "tidy <host>"},
 	"launch": {1, 1, "launch <host> '<json>'"}, "dispatch": {1, 1, "dispatch <host> '<json>'"},
 	"thread": {1, 1, "thread <host> <threadId>"}, "ctx": {1, 1, "ctx <host> <threadId>"}, "settle": {1, 1, "settle <host> <threadId>"}, "archive": {1, 1, "archive <host> <threadId>"}, "close": {1, 1, "close <host> <threadId>"}, "delete": {1, 1, "delete <host> <threadId>"},
-	"send": {2, 3, "send <host> <threadId> '<text>' [steer]"}, "fork": {1, 2, "fork <host> <threadId> ['<title>']"}, "watch": {2, 2, "watch <host> <threadId> <prUrl>"}, "model": {2, 2, "model <host> <threadId> '<modelSelection json>'"}, "rename": {2, 2, "rename <host> <threadId> '<title>'"},
+	"send": {2, 3, "send <host> <threadId> '<text>' [queue]"}, "compact": {1, 2, "compact <host> <threadId> ['<focus>']"}, "fork": {1, 2, "fork <host> <threadId> ['<title>']"}, "watch": {2, 2, "watch <host> <threadId> <prUrl>"}, "model": {2, 2, "model <host> <threadId> '<modelSelection json>'"}, "rename": {2, 2, "rename <host> <threadId> '<title>'"},
 	"handoff": {2, 3, "handoff <host> <threadId> '<modelSelection json>' ['<brief>']"}, "respond": {3, 3, "respond <host> <threadId> <requestId> '<answers json>'"},
 }
 
@@ -36,8 +36,8 @@ func validateLocal(command string, args []string) error {
 			return errors.New("command arguments cannot be empty")
 		}
 	}
-	if command == "send" && len(args) == 3 && args[2] != "steer" {
-		return errors.New("send mode must be steer")
+	if command == "send" && len(args) == 3 && args[2] != "queue" {
+		return errors.New("send mode must be queue")
 	}
 	return nil
 }
@@ -120,16 +120,6 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 				reply = string(r)
 			}
 		}
-		pending := []any{}
-		for _, r := range p.RuntimeRequests {
-			if r.Status == "pending" {
-				payload := r.Payload
-				if payload == nil {
-					payload = r.Request
-				}
-				pending = append(pending, map[string]any{"requestId": r.ID, "kind": r.Kind, "payload": payload})
-			}
-		}
 		runs := p.Runs
 		if len(runs) > 3 {
 			runs = runs[len(runs)-3:]
@@ -137,9 +127,19 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 		if runs == nil {
 			runs = []ThreadRun{}
 		}
-		return map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": pending, "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}, nil
+		return map[string]any{"host": c.Host, "title": p.Thread.Title, "branch": p.Thread.Branch, "worktreePath": p.Thread.WorktreePath, "archived": p.Thread.ArchivedAt != nil, "settled": p.Thread.SettledAt != nil, "deleted": p.Thread.DeletedAt != nil, "runStatus": status, "runs": runs, "pendingRequests": p.PendingRequests(), "lineage": p.Thread.Lineage, "subagents": len(p.Subagents), "lastReply": reply}, nil
 	case "send":
-		return c.Send(ctx, id, args[1], len(args) == 3)
+		mode := SendSteer
+		if len(args) == 3 {
+			mode = SendQueue
+		}
+		return c.Send(ctx, id, args[1], mode)
+	case "compact":
+		focus := ""
+		if len(args) == 2 {
+			focus = args[1]
+		}
+		return c.Compact(ctx, id, focus)
 	case "close", "delete":
 		return c.CloseTree(ctx, id, command == "delete")
 	case "handoff":
@@ -377,21 +377,14 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief s
 	}
 	usage := ContextOf(p)
 	steps := []any{map[string]any{"before": usage}}
+	// Every later turn re-sends the whole context; the target model only needs a summary.
 	if usage.UsedTokens > 20000 {
-		text := fmt.Sprintf("/compact Handing over to %v for the review-fix phase. Keep only: the PR's purpose and design, decisions made (incl. user decisions), files changed and why, open reviewer findings and their status, what was tried and failed, and the exact next step. Drop tool output, file dumps and resolved discussions.", sel["model"])
-		if _, err := c.Send(ctx, id, text, false); err != nil {
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
-		p, err = c.WaitIdle(ctx, id, 15*time.Minute)
+		focus := fmt.Sprintf("Handing over to %v for the review-fix phase. Keep only: the PR's purpose and design, decisions made (incl. user decisions), files changed and why, open reviewer findings and their status, what was tried and failed, and the exact next step. Drop tool output, file dumps and resolved discussions.", sel["model"])
+		compacted, err := c.Compact(ctx, id, focus)
 		if err != nil {
 			return nil, err
 		}
-		usage = ContextOf(p)
+		usage = compacted.After
 		steps = append(steps, map[string]any{"afterCompact": usage})
 	}
 	if usage.UsedTokens > budget {
@@ -401,7 +394,7 @@ func (c *T3) Handoff(ctx context.Context, id string, sel map[string]any, brief s
 		return nil, err
 	}
 	if brief != "" {
-		if _, err := c.Send(ctx, id, brief, false); err != nil {
+		if _, err := c.Send(ctx, id, brief, SendQueue); err != nil {
 			return nil, err
 		}
 	}

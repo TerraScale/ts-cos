@@ -32,7 +32,7 @@ type OperationHandler func(context.Context, string, []string) (any, error)
 var busCommands = []string{
 	"projects", "launch", "thread", "send", "handoff", "asks-host", "ctx", "shell",
 	"archive", "fork", "watch", "model", "settle", "rename", "tidy", "close",
-	"delete", "dispatch", "respond", "asks",
+	"delete", "dispatch", "respond", "asks", "compact",
 }
 
 const (
@@ -51,7 +51,7 @@ func validBusRequestID(id string) bool {
 }
 
 func busOperationTimeout(command string) time.Duration {
-	if command == "handoff" {
+	if command == "handoff" || command == "compact" {
 		return 40 * time.Minute
 	}
 	return time.Minute

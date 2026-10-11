@@ -2,7 +2,6 @@ package cos
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"regexp"
 	"slices"
@@ -169,14 +168,8 @@ func (c *T3) Asks(ctx context.Context) ([]Ask, error) {
 			asks = append(asks, Ask{Host: c.Host, ThreadID: t.ID, Title: t.Title, Error: "thread projection failed"})
 			continue
 		}
-		for _, r := range p.RuntimeRequests {
-			if r.Status == "pending" {
-				payload := r.Payload
-				if payload == nil {
-					payload = r.Request
-				}
-				asks = append(asks, Ask{Host: c.Host, ThreadID: t.ID, Title: t.Title, Kind: "request", RequestID: r.ID, RequestKind: r.Kind, Payload: payload})
-			}
+		for _, r := range p.PendingRequests() {
+			asks = append(asks, Ask{Host: c.Host, ThreadID: t.ID, Title: t.Title, Kind: "request", RequestID: r["requestId"].(string), RequestKind: r["kind"].(string), Payload: r["payload"]})
 		}
 		if len(p.Messages) == 0 || p.Messages[len(p.Messages)-1].Role != "assistant" {
 			continue
@@ -294,24 +287,4 @@ func sortedKeys(m map[string]any) []string {
 	}
 	slices.Sort(keys)
 	return keys
-}
-
-func (c *T3) WaitIdle(ctx context.Context, id string, limit time.Duration) (Projection, error) {
-	ctx, cancel := context.WithTimeout(ctx, limit)
-	defer cancel()
-	for {
-		p, err := c.Projection(ctx, id)
-		if err != nil {
-			return Projection{}, err
-		}
-		_, status := p.Run()
-		if !active(status) {
-			return p, nil
-		}
-		select {
-		case <-ctx.Done():
-			return Projection{}, fmt.Errorf("thread still busy: %w", ctx.Err())
-		case <-time.After(15 * time.Second):
-		}
-	}
 }

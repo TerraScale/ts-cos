@@ -132,7 +132,9 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos projects <host>` | T3 project IDs, titles, and roots |
 | `cos launch <host> '<json>'` | Same launch fields as the old CLI; `projectTitle` can replace `projectId` |
 | `cos thread <host> <id>` / `cos ctx <host> <id>` | Thread summary or context usage |
-| `cos send <host> <id> '<text>' [steer]` | Queue behind an active run, or steer it |
+| `cos send <host> <id> '<text>' [queue]` | Steer the running run (default), or queue behind it |
+| `cos compact <host> <id> ['<focus>']` | Wait for idle, `/compact` with focus, return context before/after |
+| `cos stream <host> [<id>]` | Live thread (or host thread-list) events as JSON lines, from any node |
 | `cos handoff <host> <id> '<modelSelection>' ['<brief>']` | Wait for idle, compact if needed, check half the target context window, switch, send |
 | `cos asks` / `cos asks-host <host>` | Unanswered NEEDS-USER markers and pending runtime requests |
 | `cos respond <host> <id> <requestId> '<answers>'` | Answer a T3 runtime request |
@@ -148,6 +150,24 @@ or mariogk-dev; thread IDs are the full T3 IDs.
 | `cos merge <repo> <number>` | Squash a ready COS PR at the checked head SHA |
 | `cos version` | Git revision the running binary was built from |
 | `cos e2e [--smoke] [prefix...]` | Live checks against the deployed cluster (see below) |
+
+### T3 client (internal/cos/t3*.go)
+
+`T3` talks to the local T3 server (`127.0.0.1:3773`, WS RPC protocol 2). Other nodes reach it
+through NATS: request/reply commands on `cos.<host>.<command>` and live streams on
+`cos.<host>.stream`.
+
+- `SubscribeThread(ctx, id, fn)` / `SubscribeShell(ctx, fn)`: live `ThreadEvent` / `ShellEvent`
+  on this host. The first event is a snapshot; resubscribe after an error. Thread events carry
+  T3's event `ID` and `Sequence` plus decoded `Run` (turn state), `Message`, `Request` (pending
+  questions/approvals), `Item` (question text) and `Context` (used/max tokens).
+- `Bus.StreamThread(ctx, host, id, fn)` / `Bus.StreamShell(ctx, host, fn)`: the same events from
+  any host. An offline host is a clear `COS node <host> unavailable` error.
+- `Launch`, `Send(…, SendSteer|SendQueue)`, `Interrupt`, `Compact`, `WaitIdle`, `WaitMessage`,
+  `CloseTree`, `Projection(…).PendingRequests()`, `ContextOf`.
+- T3's RPC is internal. Decoding checks the fields COS relies on and fails with
+  `T3SchemaError` ("T3 schema changed on <host>: …") instead of returning empty data.
+  `testdata/t3` holds recorded real responses; re-record them after a T3 upgrade.
 
 Merge requires a mariogk-authored open PR, a `cos/` or `cos-hold/` branch,
 mergeability, successful checks, reviewer approval, and no requested changes.

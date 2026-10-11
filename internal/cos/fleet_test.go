@@ -11,7 +11,7 @@ import (
 )
 
 func TestAsksKeepsHealthyThreadsAroundProjectionFailure(t *testing.T) {
-	snapshot := `{"threads":[{"id":"before","title":"TS-1","status":"idle"},{"id":"deleted","title":"TS-2","status":"idle"},{"id":"after","title":"TS-3","status":"idle"}]}`
+	snapshot := `{"schemaVersion":2,"threads":[{"id":"before","title":"TS-1","status":"idle"},{"id":"deleted","title":"TS-2","status":"idle"},{"id":"after","title":"TS-3","status":"idle"}]}`
 	visited := make(chan string, 3)
 	server := newT3TestServer(t, snapshot, func(_ string, payload map[string]any) any {
 		id := payload["threadId"].(string)
@@ -48,7 +48,7 @@ func TestAsksKeepsHealthyThreadsAroundProjectionFailure(t *testing.T) {
 func TestAsksAbortsCollectionOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	snapshot := `{"threads":[{"id":"before","status":"idle"},{"id":"cancel","status":"idle"},{"id":"after","status":"idle"}]}`
+	snapshot := `{"schemaVersion":2,"threads":[{"id":"before","status":"idle"},{"id":"cancel","status":"idle"},{"id":"after","status":"idle"}]}`
 	server := newT3TestServer(t, snapshot, func(_ string, payload map[string]any) any {
 		if payload["threadId"] != "before" {
 			t.Error("projection continued after cancellation", payload)
