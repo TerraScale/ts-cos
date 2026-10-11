@@ -356,7 +356,7 @@ func (c *Chat) CreateTab(ctx context.Context, name, focus string) (ChatTab, erro
 		return t, err
 	}
 	c.mu.Lock()
-	kv := c.kv
+	kv, ready := c.kv, c.ready
 	open := 0
 	for _, o := range c.tabs {
 		if !o.Closed {
@@ -364,9 +364,10 @@ func (c *Chat) CreateTab(ctx context.Context, name, focus string) (ChatTab, erro
 		}
 	}
 	c.mu.Unlock()
-	if kv == nil {
+	if kv == nil || !ready {
 		return t, errors.New("chat store is starting; try again in a few seconds")
 	}
+	// shortcut: two concurrent creates can exceed chatMaxTabs by one; the cap is a soft guard, upgrade to a CAS count if it matters.
 	if open >= chatMaxTabs {
 		return t, fmt.Errorf("at most %d chat tabs; close one first", chatMaxTabs)
 	}
@@ -384,6 +385,13 @@ func (c *Chat) CreateTab(ctx context.Context, name, focus string) (ChatTab, erro
 
 // UpdateTab writes t only if it has not changed since it was read, so a rename never resurrects a closed tab.
 func (c *Chat) UpdateTab(ctx context.Context, t ChatTab) error {
+	if t.ID == "" || t.ID == chatMainTab {
+		return fmt.Errorf("tab %q cannot be updated", t.ID)
+	}
+	// rev 0 would make kv.Update create the key, so a tab that was never read (or was deleted) must not be written.
+	if t.rev == 0 {
+		return errors.New("tab was never read or was deleted; reload it before updating")
+	}
 	if err := validTab(t); err != nil {
 		return err
 	}
@@ -410,6 +418,9 @@ func (c *Chat) UpdateTab(ctx context.Context, t ChatTab) error {
 
 // DeleteTab removes the tab's cached entries, then its key.
 func (c *Chat) DeleteTab(ctx context.Context, id string) error {
+	if id == "" || id == chatMainTab {
+		return fmt.Errorf("tab %q cannot be deleted", id)
+	}
 	c.mu.Lock()
 	kv := c.kv
 	ids := []string{}

@@ -75,6 +75,60 @@ func TestValidTab(t *testing.T) {
 	}
 }
 
+// TestChatTabGuards checks the refusals that need no bucket: the main tab, an empty id, a never-read tab and a store still starting.
+func TestChatTabGuards(t *testing.T) {
+	ctx := context.Background()
+	c := NewChat()
+	c.apply(chatTestPut(t, "0000000000000007-b", "main"))
+
+	if err := c.DeleteTab(ctx, chatMainTab); err == nil {
+		t.Fatal("main tab was deleted")
+	}
+	if err := c.DeleteTab(ctx, ""); err == nil {
+		t.Fatal("empty tab id was deleted")
+	}
+	if got := c.Entries(chatMainTab); len(got) != 1 {
+		t.Fatal("main entries swept by a refused delete", got)
+	}
+
+	kv := &fakeKV{data: map[string][]byte{}}
+	c.kv = kv
+	if err := c.UpdateTab(ctx, ChatTab{ID: chatMainTab, Name: "COS", rev: 3}); err == nil {
+		t.Fatal("main tab was updated")
+	}
+	if err := c.UpdateTab(ctx, ChatTab{ID: "0000000000000005-t", Name: "Deploys"}); err == nil {
+		t.Fatal("tab without a revision was updated")
+	}
+	if len(kv.data) != 0 {
+		t.Fatal("refused update created a key", kv.data)
+	}
+
+	if _, err := c.CreateTab(ctx, "Deploys", ""); err == nil {
+		t.Fatal("tab created before the store was ready")
+	}
+}
+
+// closeFailT3 is an agent whose T3 cannot close the COS thread.
+type closeFailT3 struct{ *agentTestT3 }
+
+func (closeFailT3) CloseTree(context.Context, string, bool) (TreeResult, error) {
+	return TreeResult{}, errors.New("T3 offline")
+}
+
+func TestAgentCloseSurfacesT3Error(t *testing.T) {
+	ctx := context.Background()
+	state, err := json.Marshal(AgentState{Host: "delta", ThreadID: "thread-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{Host: "delta", Tab: mainTab, Chat: NewChat(), KV: &fakeKV{data: map[string][]byte{"state": state}},
+		T3: func(context.Context) (agentT3, error) { return closeFailT3{&agentTestT3{}}, nil }}
+	err = a.close(ctx)
+	if err == nil || !strings.Contains(err.Error(), "settle COS thread thread-1") || !strings.Contains(err.Error(), "T3 offline") {
+		t.Fatal(err)
+	}
+}
+
 // TestChatTabStore covers the replicated tab bucket: the open-tab limit, revision fencing and deleting a tab with its entries.
 func TestChatTabStore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

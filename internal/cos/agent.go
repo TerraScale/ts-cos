@@ -246,19 +246,28 @@ func (a *Agent) close(ctx context.Context) error {
 				return fmt.Errorf("open T3: %w", err)
 			}
 			res, err := c.CloseTree(ctx, st.ThreadID, false)
-			if err != nil || len(res.Skipped) > 0 {
+			if err != nil {
+				return fmt.Errorf("settle COS thread %s: %w", st.ThreadID, err)
+			}
+			if len(res.Skipped) > 0 {
 				return fmt.Errorf("settle COS thread %s: still running", st.ThreadID)
 			}
 		} else {
 			var out TreeResult
-			if err := a.Remote(ctx, st.Host, "close", []string{st.ThreadID}, &out); err != nil || len(out.Skipped) > 0 {
+			if err := a.Remote(ctx, st.Host, "close", []string{st.ThreadID}, &out); err != nil {
+				return fmt.Errorf("settle COS thread %s on %s: %w", st.ThreadID, st.Host, err)
+			}
+			if len(out.Skipped) > 0 {
 				return fmt.Errorf("settle COS thread %s on %s: still running", st.ThreadID, st.Host)
 			}
 		}
 	}
 	for _, o := range st.Orphans {
 		var out TreeResult
-		if err := a.Remote(ctx, o.Host, "delete", []string{o.ThreadID}, &out); err != nil || len(out.Skipped) > 0 {
+		if err := a.Remote(ctx, o.Host, "delete", []string{o.ThreadID}, &out); err != nil {
+			return fmt.Errorf("delete COS orphan %s on %s: %w", o.ThreadID, o.Host, err)
+		}
+		if len(out.Skipped) > 0 {
 			return fmt.Errorf("delete COS orphan %s on %s: still running", o.ThreadID, o.Host)
 		}
 	}
