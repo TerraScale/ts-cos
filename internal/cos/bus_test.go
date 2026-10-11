@@ -81,9 +81,10 @@ func busTestConfig(t *testing.T, host string, port, routePort int, peers []int) 
 		peers: func(context.Context) ([]string, error) { return addresses, nil }}
 }
 
+// busTestReady waits 45 s: 3-node test clusters share the gate host with other sessions' test runs, and 10 s timed out under load.
 func busTestReady(t *testing.T, description string, check func() bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
