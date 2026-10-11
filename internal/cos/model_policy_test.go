@@ -249,7 +249,7 @@ func TestRulesEnginePolicy(t *testing.T) {
 func TestRulesEnginePolicySkipsUnreadableNudge(t *testing.T) {
 	ctx := context.Background()
 	rec := &rulesRecorder{}
-	r := policyEngine(t, rec, &failingKV{fakeKV{data: map[string][]byte{}}})
+	r := policyEngine(t, rec, &readFailingKV{fakeKV{data: map[string][]byte{}}})
 	now := time.Now()
 	row := UsageRow{Day: now.UTC().Format("2006-01-02"), Host: "beta", Project: "p", Session: "s", Branch: "cos/ts-1-x",
 		Model: "claude-opus-5-5", Output: 30000, First: now.Add(-2 * time.Hour), Last: now, Messages: 1}
@@ -264,10 +264,10 @@ func TestRulesEnginePolicySkipsUnreadableNudge(t *testing.T) {
 	}
 }
 
-// failingKV fails every read with an error other than not-found, as a KV outage would.
-type failingKV struct{ fakeKV }
+// readFailingKV fails every read with an error other than not-found, as a KV outage would.
+type readFailingKV struct{ fakeKV }
 
-func (kv *failingKV) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
+func (kv *readFailingKV) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
 	return nil, errors.New("nats: timeout")
 }
 

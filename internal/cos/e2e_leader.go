@@ -233,20 +233,35 @@ func checkHeartbeatLeader(ctx context.Context, e *E2EEnv) (string, error) {
 		return "", err
 	}
 	defer bus.Close()
-	leader, err := leaderOf(ctx, bus)
-	if err != nil {
-		return "", err
+	// A leader handover makes one attempt fail, so poll for up to 20 s before reporting the last error.
+	deadline := time.Now().Add(20 * time.Second)
+	var lastErr error
+	for {
+		leader, err := leaderOf(ctx, bus)
+		if err != nil {
+			lastErr = err
+		} else {
+			call, cancel := context.WithTimeout(ctx, 5*time.Second)
+			holder, err := autopilotRunNow(call, bus.conn)
+			cancel()
+			switch {
+			case err != nil && !errors.Is(err, errAutopilotBusy):
+				lastErr = fmt.Errorf("autopilot did not answer from the cluster leader %s: %w", leader, err)
+			case holder != leader:
+				lastErr = fmt.Errorf("autopilot heartbeat runs on %s but the cluster leader is %s", holder, leader)
+			default:
+				return "autopilot heartbeat runs on the cluster leader " + leader, nil
+			}
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return "", lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return "", lastErr
+		case <-time.After(2 * time.Second):
+		}
 	}
-	call, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	holder, err := autopilotRunNow(call, bus.conn)
-	if err != nil && !errors.Is(err, errAutopilotBusy) {
-		return "", fmt.Errorf("autopilot did not answer from the cluster leader %s: %w", leader, err)
-	}
-	if holder != leader {
-		return "", fmt.Errorf("autopilot heartbeat runs on %s but the cluster leader is %s", holder, leader)
-	}
-	return "autopilot heartbeat runs on the cluster leader " + leader, nil
 }
 
 const e2eFreeze = 25 * time.Second // longer than the 15 s lease TTL plus one 5 s refresh

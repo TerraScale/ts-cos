@@ -21,8 +21,9 @@ import (
 // a synthetic turn.failed would duplicate the real one under a different event ID and
 // count as a second failure for same-failure escalation.
 const (
-	reconcileKey      = "reconcile" // COS_AUTOPILOT KV key holding the fingerprints
-	reconcileBaseline = "baseline"  // set by the first beat; until then nothing is emitted
+	reconcileKey      = "reconcile"      // COS_AUTOPILOT KV key holding the fingerprints
+	reconcileBaseline = "baseline"       // set by the first beat; until then nothing is emitted
+	reconcileDropped  = "Replay dropped" // feed action for an event the stream already held (24 h dedup)
 )
 
 // reconcileEvents compares live PR state with the fingerprints seen on the previous beat and
@@ -41,8 +42,8 @@ func reconcileEvents(live Live, seen map[string]string, now time.Time) (events [
 		if !p.Cos {
 			continue
 		}
-		key := "pr:" + p.Repo + "#" + strconv.Itoa(p.Number)
-		fp := p.SHA + "|" + p.CI + "|" + strconv.FormatBool(p.Mergeable) + "|" + strconv.FormatBool(p.ChangesRequested) + "|" + strconv.FormatBool(p.BotApproved)
+		key := reconcileKeyOf(p)
+		fp := reconcileFingerprint(p)
 		next[key] = fp
 		if !baselined || seen[key] == fp {
 			continue
@@ -85,9 +86,15 @@ func reconcileSynthetic(ctx context.Context, js jetstream.JetStream, kv jetstrea
 		return []AutopilotEntry{{Kind: "error", Action: "Read reconciler state", Reason: err.Error()}}
 	}
 	events, next := reconcileEvents(live, seen, time.Now().UTC())
+	var dropped []AutopilotEntry
 	for _, e := range events {
-		if _, err := PublishEvent(ctx, js, e); err != nil {
+		dup, err := PublishEvent(ctx, js, e)
+		if err != nil {
 			return []AutopilotEntry{{Kind: "error", Action: "Publish reconciled event", Target: e.ID, Reason: err.Error()}}
+		}
+		if dup {
+			dropped = append(dropped, AutopilotEntry{Kind: "record", Action: reconcileDropped, Event: e.ID,
+				Reason: "same state was published within the 24 h dedup window"})
 		}
 	}
 	data, err := json.Marshal(next)
@@ -100,14 +107,22 @@ func reconcileSynthetic(ctx context.Context, js jetstream.JetStream, kv jetstrea
 	if len(events) == 0 {
 		return nil
 	}
-	return []AutopilotEntry{{Kind: "record", Action: "Reconciler",
-		Reason: fmt.Sprintf("%d synthetic events", len(events))}}
+	return append(dropped, AutopilotEntry{Kind: "record", Action: "Reconciler",
+		Reason: fmt.Sprintf("%d synthetic events", len(events))})
 }
 
 // reconcileHash is the fingerprint of a value: its SHA-256 in hex.
 func reconcileHash(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// reconcileKeyOf is the fingerprint key of a PR: pr:<repo>#<number>.
+func reconcileKeyOf(p PR) string { return "pr:" + p.Repo + "#" + strconv.Itoa(p.Number) }
+
+// reconcileFingerprint is what the reconciler compares between beats: SHA, CI, mergeable and review state.
+func reconcileFingerprint(p PR) string {
+	return p.SHA + "|" + p.CI + "|" + strconv.FormatBool(p.Mergeable) + "|" + strconv.FormatBool(p.ChangesRequested) + "|" + strconv.FormatBool(p.BotApproved)
 }
 
 // reconcileShort keeps 16 hex digits of a fingerprint for the event ID.
