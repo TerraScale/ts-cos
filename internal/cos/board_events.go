@@ -15,10 +15,13 @@ import (
 )
 
 const (
-	boardEventsKeep = 30 * 24 * time.Hour
-	boardLiveTTL    = 30 * time.Second
-	mirrorRetry     = 5 * time.Second
-	kindDeployDone  = "deploy.completed"
+	boardEventsKeep  = 30 * 24 * time.Hour
+	boardLiveTTL     = 30 * time.Second
+	mirrorRetry      = 5 * time.Second
+	mirrorRetryMax   = 30 * time.Second
+	mirrorErrorAfter = 5
+	mirrorHealthy    = time.Minute
+	kindDeployDone   = "deploy.completed"
 
 	// Fixed width so SQLite's text order matches time order.
 	eventTimeFormat = "2006-01-02T15:04:05.000000000Z"
@@ -26,10 +29,11 @@ const (
 
 // eventMirror copies COS_EVENTS into the events table and attributes each event to a ticket.
 type eventMirror struct {
-	store *Store
-	live  Live
-	prs   map[string]string // repo#number -> ticket; keeps merged PRs that left the open list
-	at    time.Time
+	store   *Store
+	live    Live
+	prs     map[string]string // repo#number -> ticket; keeps merged PRs that left the open list
+	at      time.Time
+	handled int // messages mirrored by the current run
 }
 
 // RunEventMirror keeps the events table in step with COS_EVENTS so the board never calls T3 or Forgejo.
@@ -51,15 +55,35 @@ func RunEventMirror(ctx context.Context, bus *Bus, store *Store) {
 			}
 		}
 	})
+	var failures int
 	for ctx.Err() == nil {
-		if err := m.run(ctx, bus); err != nil && ctx.Err() == nil {
-			slog.Error("mirror events", "error", err)
+		m.handled = 0
+		start := time.Now()
+		err := m.run(ctx, bus)
+		if m.handled > 0 || time.Since(start) >= mirrorHealthy {
+			failures = 0
+		}
+		wait := mirrorRetry
+		if err != nil && ctx.Err() == nil {
+			failures++
+			var level slog.Level
+			wait, level = mirrorBackoff(failures)
+			slog.Log(ctx, level, "mirror events failed; retrying", "error", err, "in", wait, "failures", failures)
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(mirrorRetry):
+		case <-time.After(wait):
 		}
 	}
+}
+
+// mirrorBackoff is the wait after the nth consecutive mirror failure and how loudly to log it.
+func mirrorBackoff(failures int) (time.Duration, slog.Level) {
+	wait := min(mirrorRetry<<min(max(failures-1, 0), 3), mirrorRetryMax)
+	if failures < mirrorErrorAfter {
+		return wait, slog.LevelWarn
+	}
+	return wait, slog.LevelError
 }
 
 func (m *eventMirror) run(ctx context.Context, bus *Bus) error {
@@ -129,7 +153,11 @@ func (m *eventMirror) handle(ctx context.Context, msg jetstream.Msg) error {
 	if err != nil {
 		return err
 	}
-	return m.store.insertEvent(ctx, int64(md.Sequence.Stream), e, ticket)
+	if err := m.store.insertEvent(ctx, int64(md.Sequence.Stream), e, ticket); err != nil {
+		return err
+	}
+	m.handled++
+	return nil
 }
 
 func (m *eventMirror) ticket(ctx context.Context, e Event) (string, error) {
