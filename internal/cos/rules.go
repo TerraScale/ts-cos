@@ -58,7 +58,7 @@ func init() {
 // queueLimitResume queues the one resume a thread gets after a provider limit. The send gate delivers it once the
 // model has headroom; it never says "continue" and never changes the model.
 func queueLimitResume(ctx context.Context, bus *Bus, host, thread, title, model string) error {
-	text, err := wakeText("wake_limit", limitWake{Model: model})
+	text, err := wakeText("wake_limit", limitWake{Model: model}, model)
 	if err != nil {
 		return err
 	}
