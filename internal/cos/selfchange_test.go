@@ -96,8 +96,11 @@ func TestSelfCheckValidate(t *testing.T) {
 
 func TestSelfRequestAndGuard(t *testing.T) {
 	r, err := selfRequest(`{"request":"rename the header","summary":"Header reads Fleet","check":{"summary":"h","path":"/","contains":["Fleet"]}}`)
-	if err != nil || r.State != selfQueued || r.Debug {
+	if err != nil || r.State != selfQueued {
 		t.Fatal(r, err)
+	}
+	if selfModel["model"] != "claude-opus-5-5" {
+		t.Fatal("self-change worker is not Opus")
 	}
 	for _, raw := range []string{`{}`, `{"request":"x","summary":"a\nb","check":{"summary":"h","path":"/","contains":["F"]}}`, `{"request":"x","summary":"s","check":{}}`, `{"request":"x","summary":"s","check":{"summary":"h","path":"/","contains":["F"]},"skipGate":true}`} {
 		if _, err := selfRequest(raw); err == nil {

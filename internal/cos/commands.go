@@ -65,6 +65,9 @@ func LocalCommand(ctx context.Context, cfg Config, command string, args []string
 	if err := validateLocal(command, args); err != nil {
 		return nil, OperationError(err.Error())
 	}
+	if err := threadModelGuard(command, args); err != nil {
+		return nil, err
+	}
 	c, err := OpenT3(ctx, cfg, cfg.LocalHost)
 	if err != nil {
 		return nil, err

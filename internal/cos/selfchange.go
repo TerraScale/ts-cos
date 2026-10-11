@@ -44,16 +44,13 @@ const (
 	selfBlocked  = "blocked" // a guardrail stopped it; needs the user
 )
 
-var selfModels = map[bool]map[string]any{
-	false: {"instanceId": "claudeAgent", "model": "claude-haiku-5-5"},
-	true:  {"instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": []map[string]string{{"id": "effort", "value": "high"}}},
-}
+// Self-change workers are Opus 5.5 managers; Haiku 5.5 only runs as their delegate_task subagents.
+var selfModel = map[string]any{"instanceId": "claudeAgent", "model": "claude-opus-5-5", "options": []map[string]string{{"id": "effort", "value": "high"}}}
 
 type selfRecord struct {
 	ID         string    `json:"id"`
 	Request    string    `json:"request"`
 	Summary    string    `json:"summary"`
-	Debug      bool      `json:"debug,omitempty"`
 	Check      selfCheck `json:"check"`
 	Reverts    string    `json:"reverts,omitempty"`
 	RevertedBy string    `json:"revertedBy,omitempty"`
@@ -171,7 +168,6 @@ func selfRequest(raw string) (selfRecord, error) {
 	var in struct {
 		Request string    `json:"request"`
 		Summary string    `json:"summary"`
-		Debug   bool      `json:"debug"`
 		Check   selfCheck `json:"check"`
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -189,7 +185,7 @@ func selfRequest(raw string) (selfRecord, error) {
 		return selfRecord{}, err
 	}
 	now := time.Now().UTC()
-	return selfRecord{ID: selfID(now), Request: in.Request, Summary: in.Summary, Debug: in.Debug, Check: in.Check, State: selfQueued, CreatedAt: now}, nil
+	return selfRecord{ID: selfID(now), Request: in.Request, Summary: in.Summary, Check: in.Check, State: selfQueued, CreatedAt: now}, nil
 }
 
 // selfUndo queues a revert of target (default: the newest live change not yet reverted).
@@ -574,7 +570,7 @@ func (d *selfDriver) launchWorker(ctx context.Context, r selfRecord, brief strin
 		return "", "", err
 	}
 	input, _ := json.Marshal(map[string]any{
-		"projectTitle": "ts-cos", "title": r.Ticket + " · ts-cos: " + r.Summary, "modelSelection": selfModels[r.Debug], "message": brief,
+		"projectTitle": "ts-cos", "title": r.Ticket + " · ts-cos: " + r.Summary, "modelSelection": selfModel, "message": brief,
 		"workspaceStrategy": map[string]any{"type": "worktree", "baseRef": r.Branch, "branch": r.Branch, "startFromOrigin": true},
 	})
 	var last error = errors.New("no COS host can launch a worker")
@@ -594,7 +590,7 @@ func (d *selfDriver) launchWorker(ctx context.Context, r selfRecord, brief strin
 
 // selfCLI implements `cos self change|undo|log`; the COS agent is its main caller.
 func selfCLI(ctx context.Context, cfg Config, args []string, w io.Writer) error {
-	usage := errors.New("usage: cos self change '<json: request, summary, debug, check>' | undo [ticket] | log [all]")
+	usage := errors.New("usage: cos self change '<json: request, summary, check>' | undo [ticket] | log [all]")
 	if len(args) == 0 {
 		return usage
 	}
@@ -665,5 +661,5 @@ func selfLog(records []selfRecord, today bool, now time.Time) map[string]any {
 }
 
 func init() {
-	cliCommands["self"] = cliCommand{Usage: "self change '<json: request, summary, debug, check>' | undo [ticket] | log [all]", Run: selfCLI}
+	cliCommands["self"] = cliCommand{Usage: "self change '<json: request, summary, check>' | undo [ticket] | log [all]", Run: selfCLI}
 }

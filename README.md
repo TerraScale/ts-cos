@@ -228,8 +228,8 @@ appear or disappear. The cluster leader then drives it with no further input:
 
 1. Ku ticket under TS-769, branch `cos/<ticket>-self` whose first commit is
    `checks/<ticket>.json`; the check must fail on all 3 live nodes.
-2. Worker thread on the least busy host (Haiku 5.5, or Opus 5.5 high when
-   `debug` is true) with a brief rendered from `behavior/templates/selfbrief.tmpl`.
+2. Opus 5.5 worker thread (effort high; Haiku 5.5 only as its delegate_task
+   subagents) on the least busy host with a brief rendered from `behavior/templates/selfbrief.tmpl`.
 3. Gate: every CI context green (CI runs every `checks/*.json` against the PR
    build); ts-reviewer must finish but only security/data-loss findings block.
    PRs that touch login, deploy/rollback, CI, e2e, the self-change code or
