@@ -69,6 +69,10 @@ func mergeCommand(ctx context.Context, cfg Config, args []string, w io.Writer) e
 	if err := order.Validate(); err != nil {
 		return err
 	}
+	// Every merge is recorded for a user, so the user is checked before anything reaches Forgejo.
+	if err := needUser(ctx, "merge"); err != nil {
+		return err
+	}
 	v, err := (Forgejo{Config: cfg}).Merge(ctx, args[0], n, order)
 	if err != nil {
 		return err
@@ -125,10 +129,6 @@ func recordMergeOrder(ctx context.Context, cfg Config, repo string, number int, 
 	}
 	entry := ChatEntry{ID: chatID(now), At: now, Role: "system",
 		Text: fmt.Sprintf("Merged %s#%d with %s: %s", full, number, strings.Join(flags, " "), reason)}
-	entryData, err := json.Marshal(entry)
-	if err != nil {
-		return err
-	}
-	_, err = kv.Put(ctx, entry.ID, entryData)
+	_, err = putChatEntry(ctx, kv, entry)
 	return err
 }

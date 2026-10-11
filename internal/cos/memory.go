@@ -62,16 +62,27 @@ var memoryStopwords = map[string]bool{
 
 func init() {
 	cliCommands["memory"] = cliCommand{Usage: "memory list | add <decision|preference|learning|fact> '<text>' [tag,tag] | pin <id> | unpin <id> | rm <id> | recall '<query>'", Run: func(ctx context.Context, cfg Config, args []string, w io.Writer) error {
+		if err := needUser(ctx, "memory"); err != nil {
+			return err
+		}
 		bus, err := ConnectBus(ctx, cfg)
 		if err != nil {
 			return err
 		}
 		defer bus.Close()
-		mem, err := openKV(ctx, bus, memoryBucket)
+		shared, err := openKV(ctx, bus, memoryBucket)
 		if err != nil {
 			return err
 		}
-		ctxKV, err := openKV(ctx, bus, contextBucket)
+		mem, err := UserKV(ctx, shared)
+		if err != nil {
+			return err
+		}
+		sharedCtx, err := openKV(ctx, bus, contextBucket)
+		if err != nil {
+			return err
+		}
+		ctxKV, err := UserKV(ctx, sharedCtx)
 		if err != nil {
 			return err
 		}

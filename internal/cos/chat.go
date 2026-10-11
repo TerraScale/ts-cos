@@ -39,6 +39,7 @@ type ChatEntry struct {
 	Streaming bool      `json:"streaming,omitempty"`
 	Ask       *ChatAsk  `json:"ask,omitempty"`
 	rev       uint64
+	owner     string // ULID of the user whose key this entry is stored under; not serialized
 }
 
 // ChatAsk is a pending T3 question from the COS thread; any node can answer it over NATS.
@@ -60,6 +61,16 @@ type ChatQuestion struct {
 // chatID sorts by creation time; KV keys allow only [-/_=.a-zA-Z0-9].
 func chatID(at time.Time) string {
 	return fmt.Sprintf("%016x-%s", at.UnixNano(), uuid()[:8])
+}
+
+// splitChatKey reads a stored "u.<ULID>.<chatID>" key; ok is false for legacy keys, which wait for migrateToUser.
+func splitChatKey(key string) (owner, id string, ok bool) {
+	rest, ok := strings.CutPrefix(key, "u.")
+	if !ok {
+		return "", "", false
+	}
+	owner, id, ok = strings.Cut(rest, ".")
+	return owner, id, ok && ulidPattern.MatchString(owner) && id != ""
 }
 
 // openKV binds a replicated bucket. Only the JetStream meta leader creates it:
@@ -110,9 +121,12 @@ type Chat struct {
 }
 
 // chatSub collects changed keys between wake-ups so a slow SSE client never misses one.
+// A per-user sub sees its owner's entries by bare chatID; an all-users sub (system consumers) sees full keys.
 type chatSub struct {
-	wake chan struct{}
-	keys map[string]bool
+	wake  chan struct{}
+	keys  map[string]bool
+	owner string // user ULID; "" when the subscriber had no user, so it only wakes on repaints
+	all   bool
 }
 
 func NewChat() *Chat {
@@ -220,6 +234,10 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 		c.notify("")
 		return
 	}
+	owner, id, ok := splitChatKey(u.Key())
+	if !ok { // a legacy key; migrateToUser moves it under its owner
+		return
+	}
 	if u.Operation() != jetstream.KeyValuePut {
 		delete(c.entries, u.Key())
 	} else {
@@ -228,8 +246,8 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 			slog.Error("invalid chat entry", "key", u.Key())
 			return
 		}
-		e.ID, e.rev = u.Key(), u.Revision()
-		c.entries[e.ID] = e
+		e.ID, e.owner, e.rev = id, owner, u.Revision()
+		c.entries[u.Key()] = e
 	}
 	if c.ready {
 		c.notify(u.Key())
@@ -238,7 +256,11 @@ func (c *Chat) apply(u jetstream.KeyValueEntry) {
 
 // notify records a changed key ("" repaints everything) and wakes every subscriber.
 func (c *Chat) notify(key string) {
+	owner, _, _ := splitChatKey(key)
 	for s := range c.subs {
+		if key != "" && !s.all && s.owner != owner {
+			continue
+		}
 		s.keys[key] = true
 		select {
 		case s.wake <- struct{}{}:
@@ -247,20 +269,42 @@ func (c *Chat) notify(key string) {
 	}
 }
 
-func (c *Chat) Subscribe() (*chatSub, func()) {
-	s := &chatSub{wake: make(chan struct{}, 1), keys: map[string]bool{}}
+// Subscribe wakes on changes to the user in ctx; with no user it only wakes on repaints.
+func (c *Chat) Subscribe(ctx context.Context) (*chatSub, func()) {
+	s := &chatSub{}
+	if u, err := UserFrom(ctx); err == nil {
+		s.owner = u.ID
+	}
+	return c.subscribe(s)
+}
+
+// SubscribeAll wakes on every user's changes; system consumers only, since it spans users.
+func (c *Chat) SubscribeAll() (*chatSub, func()) {
+	return c.subscribe(&chatSub{all: true})
+}
+
+func (c *Chat) subscribe(s *chatSub) (*chatSub, func()) {
+	s.wake, s.keys = make(chan struct{}, 1), map[string]bool{}
 	c.mu.Lock()
 	c.subs[s] = struct{}{}
 	c.mu.Unlock()
 	return s, func() { c.mu.Lock(); delete(c.subs, s); c.mu.Unlock() }
 }
 
-// Changed returns and clears the keys changed since the last call.
+// Changed returns and clears the keys changed since the last call; a per-user sub gets bare chatIDs.
 func (c *Chat) Changed(s *chatSub) []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	keys := sortedKeysBool(s.keys)
 	clear(s.keys)
+	if s.all {
+		return keys
+	}
+	for i, key := range keys {
+		if _, id, ok := splitChatKey(key); ok {
+			keys[i] = id
+		}
+	}
 	return keys
 }
 
@@ -273,13 +317,19 @@ func sortedKeysBool(m map[string]bool) []string {
 	return keys
 }
 
-// Entries returns the newest chatShown entries, oldest first.
-func (c *Chat) Entries() []ChatEntry {
+// Entries returns the newest chatShown entries of the user in ctx, oldest first; no user means none.
+func (c *Chat) Entries(ctx context.Context) []ChatEntry {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]ChatEntry, 0, len(c.entries))
-	for _, e := range c.entries {
-		out = append(out, e)
+	for key, e := range c.entries {
+		if strings.HasPrefix(key, u.Key("")) {
+			out = append(out, e)
+		}
 	}
 	slices.SortFunc(out, func(a, b ChatEntry) int { return strings.Compare(a.ID, b.ID) })
 	if len(out) > chatShown {
@@ -288,11 +338,31 @@ func (c *Chat) Entries() []ChatEntry {
 	return out
 }
 
-func (c *Chat) Entry(id string) (ChatEntry, bool) {
+// Entry returns the user's entry with chatID id; another user's entry is not found.
+func (c *Chat) Entry(ctx context.Context, id string) (ChatEntry, bool) {
+	key, err := UserKey(ctx, id)
+	if err != nil {
+		return ChatEntry{}, false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[id]
+	e, ok := c.entries[key]
 	return copyEntry(e), ok
+}
+
+// entryByKey reads an entry by its full stored key, for system consumers that span users.
+func (c *Chat) entryByKey(key string) (ChatEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	return copyEntry(e), ok
+}
+
+// entriesAll is every user's entries keyed by full key, for system consumers that span users.
+func (c *Chat) entriesAll() map[string]ChatEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return maps.Clone(c.entries)
 }
 
 // copyEntry clones what callers edit, so they never mutate the shared cache.
@@ -316,8 +386,11 @@ func (c *Chat) Ready() bool {
 	return c.ready
 }
 
-// Put writes an entry to the replicated bucket; ID and At are filled for new entries.
+// Put writes the user's entry to the replicated bucket; ID and At are filled for new entries.
 func (c *Chat) Put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
+	if _, err := UserFrom(ctx); err != nil {
+		return e, err
+	}
 	c.mu.Lock()
 	kv := c.kv
 	c.mu.Unlock()
@@ -327,8 +400,12 @@ func (c *Chat) Put(ctx context.Context, e ChatEntry) (ChatEntry, error) {
 	return putChatEntry(ctx, kv, e)
 }
 
-// putChatEntry fills ID and time and writes e to the chat bucket.
+// putChatEntry fills ID and time and writes e under the user in ctx; no user writes nothing.
 func putChatEntry(ctx context.Context, kv jetstream.KeyValue, e ChatEntry) (ChatEntry, error) {
+	scoped, err := UserKV(ctx, kv)
+	if err != nil {
+		return e, err
+	}
 	if e.At.IsZero() {
 		e.At = time.Now().UTC()
 	}
@@ -339,11 +416,11 @@ func putChatEntry(ctx context.Context, kv jetstream.KeyValue, e ChatEntry) (Chat
 	if err != nil {
 		return e, err
 	}
-	_, err = kv.Put(ctx, e.ID, data)
+	_, err = scoped.Put(ctx, e.ID, data)
 	return e, err
 }
 
-// PutChat posts an entry from any component (e.g. a leader worker) without the dashboard's Chat;
+// PutChat posts an entry for the user in ctx from any component (e.g. a leader worker) without the dashboard's Chat;
 // every node's Chat.Run watcher shows it.
 func PutChat(ctx context.Context, b *Bus, e ChatEntry) (ChatEntry, error) {
 	kv, err := openKV(ctx, b, chatBucket)
@@ -366,26 +443,34 @@ func (c *Chat) Respond(ctx context.Context, host, thread, request, answers strin
 	return b.Call(ctx, host, "respond", []string{thread, request, answers}, nil)
 }
 
-// Replace writes e only if nobody changed it since it was read, so concurrent answers are not lost.
+// Replace writes the user's e only if nobody changed it since it was read, so concurrent answers are not lost.
 func (c *Chat) Replace(ctx context.Context, e ChatEntry) error {
+	u, err := UserFrom(ctx)
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
 	kv := c.kv
 	c.mu.Unlock()
 	if kv == nil {
 		return errors.New("chat store is starting; try again in a few seconds")
 	}
+	scoped, err := UserKV(ctx, kv)
+	if err != nil {
+		return err
+	}
 	data, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
-	rev, err := kv.Update(ctx, e.ID, data, e.rev)
+	rev, err := scoped.Update(ctx, e.ID, data, e.rev)
 	if err != nil {
 		return err
 	}
 	// Cache the write now, so an answer to the next question does not fence on a stale revision.
 	c.mu.Lock()
-	e.rev = rev
-	c.entries[e.ID] = copyEntry(e)
+	e.rev, e.owner = rev, u.ID
+	c.entries[u.Key(e.ID)] = copyEntry(e)
 	c.mu.Unlock()
 	return nil
 }

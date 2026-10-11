@@ -13,6 +13,7 @@ func TestE2EChatProbe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	buses, _ := chatTestCluster(t, ctx)
+	user := probeUser
 	webs := make([]*Web, len(buses))
 	for i, bus := range buses {
 		store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
@@ -28,7 +29,7 @@ func TestE2EChatProbe(t *testing.T) {
 	bases := make([]string, len(buses))
 	for i, web := range webs {
 		chatTestAwait(t, web.Chat, "chat ready", web.Chat.Ready)
-		server := httptest.NewServer(web.routes())
+		server := httptest.NewServer(asUserHandler(user, web.routes()))
 		t.Cleanup(server.Close)
 		bases[i] = server.URL
 	}

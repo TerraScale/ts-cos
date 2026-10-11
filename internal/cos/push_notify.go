@@ -176,12 +176,12 @@ func noticeFor(e Event) (Notice, bool) {
 
 // chatReplies pushes each COS reply once, when it lands final in the chat mirror. Replies already final at start are not pushed.
 func (p *Push) chatReplies(ctx context.Context) {
-	sub, unsubscribe := p.chat.Subscribe()
+	sub, unsubscribe := p.chat.SubscribeAll()
 	defer unsubscribe()
 	seen := map[string]bool{}
-	for _, e := range p.chat.Entries() {
+	for key, e := range p.chat.entriesAll() {
 		if !e.Streaming {
-			seen[e.ID] = true
+			seen[key] = true
 		}
 	}
 	for {
@@ -191,12 +191,12 @@ func (p *Push) chatReplies(ctx context.Context) {
 		case <-sub.wake:
 		}
 		for _, key := range p.chat.Changed(sub) {
-			e, ok := p.chat.Entry(key)
+			e, ok := p.chat.entryByKey(key)
 			if !ok || e.Role != "cos" || e.Streaming || seen[key] || time.Since(e.At) > pushReplyWindow {
 				continue
 			}
 			seen[key] = true
-			if _, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: firstLine(e.Text), URL: "/#m-" + key, Tag: "chat"}); err != nil {
+			if _, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: firstLine(e.Text), URL: "/#m-" + e.ID, Tag: "chat"}); err != nil {
 				logErr(ctx, slog.LevelError, "push COS reply", err)
 			}
 		}

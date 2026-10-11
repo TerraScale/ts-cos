@@ -23,10 +23,11 @@ func TestChatTrimRemovesWindowedOut(t *testing.T) {
 	}
 	defer store.Close()
 	web := NewWeb(store, nil)
+	u := chatTestUser()
 	const oldest = "0000000000000000-oldest"
-	web.Chat.apply(chatTestPut(t, oldest, "oldest"))
+	web.Chat.apply(chatTestPut(t, u.Key(oldest), "oldest"))
 	web.Chat.apply(nil)
-	server := httptest.NewServer(web.routes())
+	server := httptest.NewServer(asUserHandler(u, web.routes()))
 	defer server.Close()
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/chat/events", nil)
 	response, err := server.Client().Do(req)
@@ -58,7 +59,7 @@ func TestChatTrimRemovesWindowedOut(t *testing.T) {
 	readUntil(`id="m-` + oldest + `"`)
 
 	for i := 1; i <= chatShown; i++ {
-		web.Chat.apply(chatTestPut(t, fmt.Sprintf("%016x-new", i), "new"))
+		web.Chat.apply(chatTestPut(t, u.Key(fmt.Sprintf("%016x-new", i)), "new"))
 	}
 	removed := readUntil("selector #m-" + oldest + "\n")
 	if !strings.Contains(removed, "data: mode remove\n") {
@@ -67,8 +68,8 @@ func TestChatTrimRemovesWindowedOut(t *testing.T) {
 
 	// The cache still holds the trimmed entry; an edit must not bring it back into the log.
 	const after = "ffffffffffffffff-after"
-	web.Chat.apply(chatTestPut(t, oldest, "edited"))
-	web.Chat.apply(chatTestPut(t, after, "after"))
+	web.Chat.apply(chatTestPut(t, u.Key(oldest), "edited"))
+	web.Chat.apply(chatTestPut(t, u.Key(after), "after"))
 	if seen := readUntil(`id="m-` + after + `"`); strings.Contains(seen, `id="m-`+oldest+`"`) {
 		t.Fatal("trimmed entry re-appended on edit:\n" + seen)
 	}

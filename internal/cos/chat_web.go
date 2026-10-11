@@ -205,7 +205,7 @@ func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
 	h := headerOf(v)
 	b, ok := w.homeBoard(r.Context())
 	nodes, nodesOK := w.homeNodes(r.Context())
-	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(), b, ok, nodes, nodesOK).Render(r.Context(), rw); err != nil {
+	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(r.Context()), b, ok, nodes, nodesOK).Render(r.Context(), rw); err != nil {
 		logErr(r.Context(), slog.LevelError, "render chat", err)
 	}
 }
@@ -237,7 +237,7 @@ func patchElements(ctx context.Context, rw io.Writer, c templ.Component, fields 
 func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	controller := http.NewResponseController(rw)
-	sub, stop := w.Chat.Subscribe()
+	sub, stop := w.Chat.Subscribe(ctx)
 	defer stop()
 	kpiWake, stopKPI := w.KPI.Subscribe()
 	defer stopKPI()
@@ -281,7 +281,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 		return patchElements(ctx, rw, inbox(v))
 	}
 	repaint := func() error {
-		entries := w.Chat.Entries()
+		entries := w.Chat.Entries(ctx)
 		clear(sent)
 		for _, e := range entries {
 			sent[e.ID] = true
@@ -294,7 +294,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	// window is the IDs the log shows now; the cache keeps trimmed entries, so an edit must not re-append them.
 	window := func() map[string]bool {
 		ids := map[string]bool{}
-		for _, e := range w.Chat.Entries() {
+		for _, e := range w.Chat.Entries(ctx) {
 			ids[e.ID] = true
 		}
 		return ids
@@ -302,7 +302,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	update := func(keys []string) error {
 		shown := window()
 		for _, key := range keys {
-			e, ok := w.Chat.Entry(key)
+			e, ok := w.Chat.Entry(ctx, key)
 			switch {
 			case key == "" || (ok && len(sent) == 0):
 				return repaint()
@@ -502,9 +502,14 @@ func (w *Web) chatAnswer(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	e, ok := w.Chat.Entry(query.Get("e"))
+	// Another user's entry is not found: it does not exist for this caller.
+	e, ok := w.Chat.Entry(r.Context(), query.Get("e"))
+	if !ok {
+		http.Error(rw, "Unknown question", http.StatusNotFound)
+		return
+	}
 	option, err := strconv.Atoi(query.Get("o"))
-	if !ok || e.Ask == nil || e.Ask.Done || err != nil {
+	if e.Ask == nil || e.Ask.Done || err != nil {
 		http.Error(rw, "This question is no longer open", http.StatusConflict)
 		return
 	}
@@ -533,7 +538,7 @@ func (w *Web) chatAnswer(rw http.ResponseWriter, r *http.Request) {
 		if err := w.Chat.Respond(r.Context(), e.Ask.Host, e.Ask.ThreadID, e.Ask.RequestID, string(answers)); err != nil {
 			logErr(r.Context(), slog.LevelError, "answer COS question", err, "host", e.Ask.Host)
 			// Undo the recorded answer so the question shows its buttons again.
-			if cur, ok := w.Chat.Entry(e.ID); ok && cur.Ask != nil {
+			if cur, ok := w.Chat.Entry(r.Context(), e.ID); ok && cur.Ask != nil {
 				delete(cur.Ask.Answers, question)
 				if err := w.Chat.Replace(context.WithoutCancel(r.Context()), cur); err != nil {
 					logErr(context.WithoutCancel(r.Context()), slog.LevelError, "roll back COS answer", err, "entry", e.ID)

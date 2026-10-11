@@ -11,13 +11,15 @@ func TestPutChatShowsOnEveryNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	buses, _ := authTestCluster(t, ctx)
+	u := chatTestUser()
+	uctx := WithUser(ctx, u)
 	// The bucket is created by the JetStream leader, so retry from each node until one succeeds.
 	var posted ChatEntry
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		var err error
 		for _, b := range buses {
-			if posted, err = PutChat(ctx, b, ChatEntry{Role: "cos", Text: "Updated: x (abc1234)"}); err == nil {
+			if posted, err = PutChat(uctx, b, ChatEntry{Role: "cos", Text: "Updated: x (abc1234)"}); err == nil {
 				break
 			}
 		}
@@ -33,7 +35,7 @@ func TestPutChatShowsOnEveryNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := kv.Get(ctx, posted.ID)
+	entry, err := kv.Get(ctx, u.Key(posted.ID))
 	if err != nil {
 		t.Fatalf("entry %s not readable from another node: %v", posted.ID, err)
 	}
