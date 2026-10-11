@@ -157,7 +157,7 @@ func RunPush(ctx context.Context, bus *Bus, chat *Chat, ready func(*Push)) {
 		p, err = OpenPush(attempt, bus)
 		stop()
 		if err != nil {
-			slog.Warn("COS push not ready", "error", err)
+			logErr(ctx, slog.LevelWarn, "COS push not ready", err)
 			select {
 			case <-ctx.Done():
 				return

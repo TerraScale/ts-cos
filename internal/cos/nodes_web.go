@@ -34,7 +34,7 @@ func (w *Web) nodesEvents(rw http.ResponseWriter, r *http.Request) {
 	patch := func() error {
 		cards, err := NodeCards(ctx, w.Bus)
 		if err != nil {
-			slog.Error("read node cards", "error", err)
+			logErr(ctx, slog.LevelError, "read node cards", err)
 			return err // end the stream so the browser reconnects instead of freezing
 		}
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))

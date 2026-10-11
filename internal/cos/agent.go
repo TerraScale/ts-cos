@@ -146,7 +146,7 @@ func (a *Agent) Run(ctx context.Context, bus *Bus) {
 		for {
 			if a.Chat.Ready() {
 				if err := a.Step(ctx); err != nil && ctx.Err() == nil {
-					slog.Warn("COS agent step", "error", err)
+					logErr(ctx, slog.LevelWarn, "COS agent step", err)
 				}
 			}
 			select {

@@ -285,7 +285,7 @@ func (l *BehaviorLoader) report(ctx context.Context, kv jetstream.KeyValue, host
 	}
 	data, _ := json.Marshal(node)
 	if _, err := kv.Put(ctx, "node."+host, data); err != nil {
-		slog.Warn("behavior status not recorded", "error", err)
+		logErr(ctx, slog.LevelWarn, "behavior status not recorded", err)
 	}
 }
 
@@ -312,7 +312,7 @@ func RunBehavior(ctx context.Context, cfg Config, bus *Bus, l *BehaviorLoader) {
 	defer func() { <-lead }()
 	for ctx.Err() == nil {
 		if err := watchBehavior(ctx, cfg.LocalHost, js, l); err != nil && ctx.Err() == nil && !errors.Is(err, jetstream.ErrBucketNotFound) {
-			slog.Warn("behavior watch restarting", "error", err)
+			logErr(ctx, slog.LevelWarn, "behavior watch restarting", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -348,7 +348,7 @@ func watchBehavior(ctx context.Context, host string, js jetstream.JetStream, l *
 				continue
 			}
 			if b, err := l.Load(e.Value()); err != nil {
-				slog.Error("behavior rejected; keeping previous", "error", err)
+				logErr(ctx, slog.LevelError, "behavior rejected; keeping previous", err)
 			} else {
 				slog.Info("behavior loaded", "version", b.Version, "hash", b.Hash[:12])
 			}
@@ -379,13 +379,13 @@ func publishLoop(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStre
 		if kv == nil {
 			if kv, err = behaviorBucketKV(ctx, js, true); err != nil {
 				kv = nil
-				slog.Warn("behavior bucket unavailable", "error", err)
+				logErr(ctx, slog.LevelWarn, "behavior bucket unavailable", err)
 				continue
 			}
 		}
 		sha, err := publishBehavior(ctx, Forgejo{Config: cfg}, kv, published)
 		if err != nil {
-			slog.Warn("behavior publish failed", "error", err)
+			logErr(ctx, slog.LevelWarn, "behavior publish failed", err)
 		}
 		published = sha
 	}

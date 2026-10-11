@@ -149,7 +149,7 @@ func init() { serveWorkers = append(serveWorkers, RunT3Events) }
 func RunT3Events(ctx context.Context, cfg Config, bus *Bus) {
 	js, err := bus.JetStream()
 	if err != nil {
-		slog.Error("COS T3 events unavailable", "error", err)
+		logErr(ctx, slog.LevelError, "COS T3 events unavailable", err)
 		return
 	}
 	publish := func(ctx context.Context, e Event) error {
@@ -177,7 +177,7 @@ func runT3Events(ctx context.Context, host string, open func(context.Context) (*
 		if time.Since(started) > time.Minute {
 			backoff = t3BackoffMin
 		}
-		slog.Warn("COS T3 event stream reconnecting", "host", host, "error", err, "in", backoff)
+		logErr(ctx, slog.LevelWarn, "COS T3 event stream reconnecting", err, "host", host, "in", backoff)
 		select {
 		case <-ctx.Done():
 		case <-time.After(backoff):
@@ -205,12 +205,12 @@ func ingestT3(ctx context.Context, tracker *t3Tracker, open func(context.Context
 				if p, err := c.Projection(ctx, row.ID); err == nil {
 					events = append(events, tracker.ended(row, p, time.Now())...)
 				} else if ctx.Err() == nil {
-					slog.Warn("COS T3 projection failed; context and NEEDS-USER events skipped", "host", tracker.host, "thread", row.ID, "error", err)
+					logErr(ctx, slog.LevelWarn, "COS T3 projection failed; context and NEEDS-USER events skipped", err, "host", tracker.host, "thread", row.ID)
 				}
 			}
 			for _, e := range events {
 				if err := e.Validate(); err != nil {
-					slog.Error("COS T3 event dropped", "id", e.ID, "error", err)
+					logErr(ctx, slog.LevelError, "COS T3 event dropped", err, "id", e.ID)
 					continue
 				}
 				// Holding the T3 Ack while JetStream is unavailable keeps the event.

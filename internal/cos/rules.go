@@ -377,9 +377,9 @@ func (r *RulesEngine) Run(ctx context.Context) {
 		}
 		failures++
 		if failures == 5 {
-			slog.Error("rules engine consumer keeps failing", "error", err, "attempt", failures)
+			logErr(ctx, slog.LevelError, "rules engine consumer keeps failing", err, "attempt", failures)
 		} else {
-			slog.Warn("rules engine consumer restarting", "error", err, "attempt", failures)
+			logErr(ctx, slog.LevelWarn, "rules engine consumer restarting", err, "attempt", failures)
 		}
 		select {
 		case <-ctx.Done():

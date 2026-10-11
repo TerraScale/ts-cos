@@ -329,7 +329,7 @@ func usageHostKey(host string) string {
 func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Error("COS usage disabled", "error", err)
+		logErr(ctx, slog.LevelError, "COS usage disabled", err)
 		return
 	}
 	retry := time.NewTicker(2 * time.Second)
@@ -342,7 +342,7 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 		if err == nil {
 			break
 		}
-		slog.Warn("COS usage not ready", "error", err)
+		logErr(ctx, slog.LevelWarn, "COS usage not ready", err)
 		select {
 		case <-ctx.Done():
 			return
@@ -384,7 +384,7 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 	for {
 		rows, err := scanner.Scan(root, host, time.Now())
 		if err != nil && ctx.Err() == nil {
-			slog.Error("scan usage", "error", err)
+			logErr(ctx, slog.LevelError, "scan usage", err)
 		}
 		n, err := publishUsage(ctx, kv, rows, published)
 		if ctx.Err() != nil {
@@ -393,7 +393,7 @@ func RunUsage(ctx context.Context, bus *Bus, host string, store *Store) {
 		if err != nil {
 			failed++
 			if failed == usageErrorScans {
-				slog.Error("publish usage failing", "scans", failed, "error", err)
+				logErr(ctx, slog.LevelError, "publish usage failing", err, "scans", failed)
 			}
 		} else {
 			if failed >= usageErrorScans {

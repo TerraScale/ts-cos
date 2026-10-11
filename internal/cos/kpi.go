@@ -85,7 +85,7 @@ func (b *KPIBoard) Snapshot() KPIs {
 func (b *KPIBoard) Run(ctx context.Context, bus *Bus) {
 	js, err := bus.JetStream()
 	if err != nil {
-		slog.Error("KPI events unavailable", "error", err)
+		logErr(ctx, slog.LevelError, "KPI events unavailable", err)
 		return
 	}
 	e2eDone := make(chan struct{})
@@ -133,7 +133,7 @@ func (b *KPIBoard) follow(ctx context.Context, js jetstream.JetStream, cfg jetst
 				err = errors.New("KPI consumer stopped")
 			}
 		}
-		slog.Warn("KPI events not ready", "error", err)
+		logErr(ctx, slog.LevelWarn, "KPI events not ready", err)
 		select {
 		case <-ctx.Done():
 		case <-time.After(2 * time.Second):
@@ -145,7 +145,7 @@ func (b *KPIBoard) follow(ctx context.Context, js jetstream.JetStream, cfg jetst
 func (b *KPIBoard) watchUsage(ctx context.Context, js jetstream.JetStream) {
 	for ctx.Err() == nil {
 		err := b.bindUsage(ctx, js)
-		slog.Warn("KPI usage not ready", "error", err)
+		logErr(ctx, slog.LevelWarn, "KPI usage not ready", err)
 		select {
 		case <-ctx.Done():
 		case <-time.After(2 * time.Second):

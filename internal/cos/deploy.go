@@ -466,7 +466,7 @@ func RunRollouts(ctx context.Context, cfg Config, bus *Bus) {
 				return
 			}
 			if err != nil && ctx.Err() == nil {
-				slog.Warn("rollout step failed", "error", err)
+				logErr(ctx, slog.LevelWarn, "rollout step failed", err)
 			}
 		}
 		select {
@@ -566,7 +566,7 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 		// Open tabs reload into the new build once every node runs it.
 		release, _ := json.Marshal(Release{Revision: r.To, Change: r.Change})
 		if _, err := kv.Put(ctx, releaseKey, release); err != nil {
-			slog.Warn("release not recorded", "error", err)
+			logErr(ctx, slog.LevelWarn, "release not recorded", err)
 		}
 		publishDeploy(ctx, js, r, rolloutEvent{Kind: KindDeployCompleted})
 	case phaseSuperseded:
@@ -583,7 +583,7 @@ func driveRollout(ctx context.Context, cfg Config, bus *Bus, js jetstream.JetStr
 		slog.Warn("rollout rolled back", "revision", r.To, "reason", r.Failure, "next", f.outlook())
 		if f.Permanent {
 			if err := rolledBackFYI(ctx, bus, cfg.LocalHost, r); err != nil {
-				slog.Warn("deploy rollback not added to the Inbox", "error", err)
+				logErr(ctx, slog.LevelWarn, "deploy rollback not added to the Inbox", err)
 			}
 		}
 	}

@@ -37,7 +37,7 @@ func (p *Push) notify(ctx context.Context) {
 	defer replies.Wait()
 	for ctx.Err() == nil {
 		if err := p.consume(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("push notifier", "error", err)
+			logErr(ctx, slog.LevelError, "push notifier", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -90,7 +90,7 @@ func (p *Push) consume(ctx context.Context) error {
 		}
 		n.Close = closed
 		if _, err := p.Send(ctx, n); err != nil {
-			slog.Error("push notice", "event", e.ID, "error", err)
+			logErr(ctx, slog.LevelError, "push notice", err, "event", e.ID)
 			_ = m.NakWithDelay(30 * time.Second)
 			continue
 		}
@@ -148,7 +148,7 @@ func (p *Push) chatReplies(ctx context.Context) {
 			}
 			seen[key] = true
 			if _, err := p.Send(ctx, Notice{Category: "chat", Title: "COS", Body: firstLine(e.Text), URL: "/#m-" + key, Tag: "chat"}); err != nil {
-				slog.Error("push COS reply", "error", err)
+				logErr(ctx, slog.LevelError, "push COS reply", err)
 			}
 		}
 	}

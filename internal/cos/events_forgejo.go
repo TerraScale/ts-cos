@@ -287,7 +287,7 @@ func (f Forgejo) mergeability(ctx context.Context, repo string, focus int, now t
 func RunForgejoEvents(ctx context.Context, cfg Config, bus *Bus) {
 	js, err := bus.JetStream()
 	if err != nil {
-		slog.Error("COS Forgejo events unavailable", "error", err)
+		logErr(ctx, slog.LevelError, "COS Forgejo events unavailable", err)
 		return
 	}
 	var consumer jetstream.Consumer
@@ -307,7 +307,7 @@ func RunForgejoEvents(ctx context.Context, cfg Config, bus *Bus) {
 	f := Forgejo{Config: cfg}
 	publish := func(e Event) {
 		if err := e.Validate(); err != nil {
-			slog.Error("COS Forgejo event dropped", "id", e.ID, "error", err)
+			logErr(ctx, slog.LevelError, "COS Forgejo event dropped", err, "id", e.ID)
 			return
 		}
 		retry(ctx, "COS Forgejo event publish", func() error { _, err := PublishEvent(ctx, js, e); return err })
@@ -337,7 +337,7 @@ func RunForgejoEvents(ctx context.Context, cfg Config, bus *Bus) {
 			}
 			events, err := f.mergeability(ctx, p.Repository.FullName, focus, time.Now())
 			if err != nil {
-				slog.Warn("COS Forgejo mergeability recheck failed; the heartbeat reconciler covers it", "repo", p.Repository.FullName, "error", err)
+				logErr(ctx, slog.LevelWarn, "COS Forgejo mergeability recheck failed; the heartbeat reconciler covers it", err, "repo", p.Repository.FullName)
 			}
 			for _, e := range events {
 				publish(e)
@@ -348,7 +348,7 @@ func RunForgejoEvents(ctx context.Context, cfg Config, bus *Bus) {
 		}
 	})
 	if err != nil {
-		slog.Error("COS Forgejo ingest consumer failed", "error", err)
+		logErr(ctx, slog.LevelError, "COS Forgejo ingest consumer failed", err)
 		return
 	}
 	<-ctx.Done()

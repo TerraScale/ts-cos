@@ -442,7 +442,7 @@ func init() { serveWorkers = append(serveWorkers, runNodes) }
 func runNodes(ctx context.Context, cfg Config, bus *Bus) {
 	js, err := bus.JetStream()
 	if err != nil {
-		slog.Error("COS node samples unavailable", "error", err)
+		logErr(ctx, slog.LevelError, "COS node samples unavailable", err)
 		return
 	}
 	retry(ctx, "COS node streams", func() error {
@@ -488,7 +488,7 @@ func publishNode(ctx context.Context, js jetstream.JetStream, res string, s Node
 	}
 	if !failing[res] {
 		failing[res] = true
-		slog.Warn("COS node sample publish failed", "resolution", res, "error", err)
+		logErr(ctx, slog.LevelWarn, "COS node sample publish failed", err, "resolution", res)
 	}
 }
 

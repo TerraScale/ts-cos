@@ -139,14 +139,14 @@ func (w *Web) Watch(ctx context.Context) error {
 				if !ok {
 					return
 				}
-				slog.Error("watch state", "error", err)
+				logErr(ctx, slog.LevelError, "watch state", err)
 			case _, ok := <-changes:
 				if !ok {
 					return
 				}
 				next, err := w.Store.Revision(ctx)
 				if err != nil && ctx.Err() == nil {
-					slog.Error("read revision", "error", err)
+					logErr(ctx, slog.LevelError, "read revision", err)
 					continue
 				}
 				if ctx.Err() != nil {
@@ -172,12 +172,12 @@ func (w *Web) Poll(ctx context.Context, cfg Config, bus *Bus) {
 	refresh := func() {
 		old, err := w.Store.Live(ctx)
 		if err != nil {
-			slog.Error("read live state", "error", err)
+			logErr(ctx, slog.LevelError, "read live state", err)
 			return
 		}
 		live := Refresh(ctx, cfg, bus, old)
 		if err := w.Store.SaveLive(ctx, live); err != nil && ctx.Err() == nil {
-			slog.Error("save live state", "error", err)
+			logErr(ctx, slog.LevelError, "save live state", err)
 		}
 	}
 	refresh()

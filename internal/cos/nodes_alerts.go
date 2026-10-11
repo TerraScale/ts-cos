@@ -35,7 +35,7 @@ func runNodeAlerts(ctx context.Context, _ Config, bus *Bus) {
 func watchNodes(ctx context.Context, bus *Bus) {
 	js, err := bus.JetStream()
 	if err != nil {
-		slog.Error("COS node alerts unavailable", "error", err)
+		logErr(ctx, slog.LevelError, "COS node alerts unavailable", err)
 		return
 	}
 	var mu sync.Mutex
@@ -51,7 +51,7 @@ func watchNodes(ctx context.Context, bus *Bus) {
 		mu.Unlock()
 	})
 	if err != nil {
-		slog.Error("COS node alert subscription", "error", err)
+		logErr(ctx, slog.LevelError, "COS node alert subscription", err)
 		return
 	}
 	defer sub.Unsubscribe()
@@ -59,7 +59,7 @@ func watchNodes(ctx context.Context, bus *Bus) {
 	start := time.Now()
 	hosts, err := bus.Hosts(ctx)
 	if err != nil {
-		slog.Warn("COS node alert hosts", "error", err)
+		logErr(ctx, slog.LevelWarn, "COS node alert hosts", err)
 	}
 	for host, s := range seedNodeLatest(ctx, js, hosts, start) {
 		mu.Lock()
@@ -87,7 +87,7 @@ func watchNodes(ctx context.Context, bus *Bus) {
 				continue
 			}
 			if _, err := PublishEvent(ctx, js, e); err != nil {
-				slog.Error("COS node alert publish", "event", e.ID, "error", err)
+				logErr(ctx, slog.LevelError, "COS node alert publish", err, "event", e.ID)
 				continue
 			}
 			alerted[e.ID] = true
@@ -110,7 +110,7 @@ func watchNodes(ctx context.Context, bus *Bus) {
 func seedNodeLatest(ctx context.Context, js jetstream.JetStream, hosts []string, start time.Time) map[string]NodeSample {
 	stored, err := nodeRawHosts(ctx, js)
 	if err != nil {
-		slog.Warn("COS node alert stored hosts", "error", err)
+		logErr(ctx, slog.LevelWarn, "COS node alert stored hosts", err)
 	}
 	known := map[string]bool{}
 	for _, host := range append(stored, hosts...) {

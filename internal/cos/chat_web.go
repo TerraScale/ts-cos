@@ -27,7 +27,7 @@ type chatHeader struct {
 func (w *Web) state(ctx context.Context) Dashboard {
 	v, err := View(ctx, w.Store)
 	if err != nil {
-		slog.Error("read COS state", "error", err)
+		logErr(ctx, slog.LevelError, "read COS state", err)
 	}
 	return v
 }
@@ -149,7 +149,7 @@ func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int
 func (w *Web) homeBoard(ctx context.Context) (workBoard, bool) {
 	data, err := loadBoard(ctx, w.Store)
 	if err != nil {
-		slog.Error("read work board", "error", err)
+		logErr(ctx, slog.LevelError, "read work board", err)
 		return workBoard{}, false
 	}
 	return newWorkBoard(data, ""), true

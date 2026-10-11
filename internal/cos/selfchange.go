@@ -328,7 +328,7 @@ func runSelfChanges(ctx context.Context, cfg Config, bus *Bus) {
 	bus.Lead(ctx, func(ctx context.Context) {
 		store, err := openSelfStore(ctx, bus, true)
 		if err != nil {
-			slog.Warn("self-change store unavailable", "error", err)
+			logErr(ctx, slog.LevelWarn, "self-change store unavailable", err)
 			return
 		}
 		d := newSelfDriver(cfg, bus, store)
@@ -376,7 +376,7 @@ func (d *selfDriver) step(ctx context.Context) {
 		next, err := d.advance(ctx, cur, rolling)
 		if err != nil {
 			next.Note = "retrying: " + selfClip(err.Error())
-			slog.Warn("self-change step failed", "id", cur.ID, "state", cur.State, "error", err)
+			logErr(ctx, slog.LevelWarn, "self-change step failed", err, "id", cur.ID, "state", cur.State)
 		}
 		if reflect.DeepEqual(next, cur) {
 			continue

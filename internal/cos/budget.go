@@ -483,7 +483,7 @@ func budgetSweepFailed(ctx context.Context, err error, failures int) (int, time.
 	case ctx.Err() != nil:
 		return failures, 0
 	case !budgetTransient(err):
-		slog.Error("token budgets", "error", err)
+		logErr(ctx, slog.LevelError, "token budgets", err)
 		return 0, usageScanEvery
 	}
 	failures++
@@ -550,7 +550,7 @@ func budgetApply(ctx context.Context, bus *Bus, settings jetstream.KeyValue, st 
 				continue
 			}
 			if err := bus.Call(ctx, t.Host, "send", []string{t.Thread, text}, nil); err != nil {
-				slog.Error("resume paused thread", "host", t.Host, "thread", t.Thread, "error", err)
+				logErr(ctx, slog.LevelError, "resume paused thread", err, "host", t.Host, "thread", t.Thread)
 			}
 		}
 	}

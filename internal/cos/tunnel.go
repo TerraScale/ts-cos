@@ -22,7 +22,7 @@ func runTunnel(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		slog.Error("COS tunnel connector stopped; restarting", "error", err)
+		logErr(ctx, slog.LevelError, "COS tunnel connector stopped; restarting", err)
 		select {
 		case <-ctx.Done():
 			return

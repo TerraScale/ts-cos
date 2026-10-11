@@ -156,7 +156,7 @@ func (c *Chat) Run(ctx context.Context, b *Bus) {
 				err = errors.New("chat watcher stopped")
 			}
 		}
-		slog.Warn("chat store not ready", "error", err)
+		logErr(ctx, slog.LevelWarn, "chat store not ready", err)
 		select {
 		case <-ctx.Done():
 			return

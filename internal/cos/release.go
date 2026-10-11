@@ -415,7 +415,7 @@ func (b *Bus) serveReleases(ctx context.Context, cfg Config, probe func(context.
 			}
 			// Failed deploys never commit, so prune here too to keep the last three builds.
 			if err := r.prune(); err != nil {
-				slog.Warn("pruning old builds failed", "error", err)
+				logErr(ctx, slog.LevelWarn, "pruning old builds failed", err)
 			}
 			return CurrentBuild(cfg), true, nil
 		}),
@@ -424,7 +424,7 @@ func (b *Bus) serveReleases(ctx context.Context, cfg Config, probe func(context.
 				return nil, false, err
 			}
 			if err := r.prune(); err != nil {
-				slog.Warn("pruning old builds failed", "error", err)
+				logErr(ctx, slog.LevelWarn, "pruning old builds failed", err)
 			}
 			return CurrentBuild(cfg), false, nil
 		}),

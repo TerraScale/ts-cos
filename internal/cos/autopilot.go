@@ -272,7 +272,7 @@ func (a *Autopilot) lead(ctx context.Context) {
 // announce writes this host as the leader so every node's panel can show it; false when the write failed.
 func (a *Autopilot) announce(ctx context.Context) bool {
 	if _, err := a.settings.Put(ctx, "leader", []byte(a.Host)); err != nil {
-		slog.Warn("autopilot leader announce", "error", err)
+		logErr(ctx, slog.LevelWarn, "autopilot leader announce", err)
 		return false
 	}
 	return true
@@ -285,7 +285,7 @@ func (a *Autopilot) holdsLease(ctx context.Context) bool {
 	holder, err := a.leaseHolder(leaseCtx)
 	if err != nil {
 		if ctx.Err() == nil {
-			slog.Warn("autopilot lease check failed", "error", err)
+			logErr(ctx, slog.LevelWarn, "autopilot lease check failed", err)
 		}
 		return false
 	}
@@ -322,7 +322,7 @@ func (a *Autopilot) beat(ctx context.Context, reason string) {
 	defer func() { a.mu.Lock(); a.beating = false; a.mu.Unlock() }()
 	// Record the beat first so a failover leader does not repeat it.
 	if _, err := a.settings.Put(ctx, "lastBeat", []byte(time.Now().UTC().Format(time.RFC3339))); err != nil {
-		slog.Error("autopilot beat", "error", err)
+		logErr(ctx, slog.LevelError, "autopilot beat", err)
 		return
 	}
 	a.publish(ctx, AutopilotEntry{Kind: "beat", Action: "Heartbeat", Reason: reason})
@@ -335,13 +335,13 @@ func (a *Autopilot) beat(ctx context.Context, reason string) {
 	}
 	if live, err := a.store.Live(ctx); err != nil {
 		if a.engine != nil && ctx.Err() == nil {
-			slog.Warn("autopilot rules beat skipped", "error", err)
+			logErr(ctx, slog.LevelWarn, "autopilot rules beat skipped", err)
 		}
 	} else if ctx.Err() == nil {
 		a.compactor.Beat(ctx, live)
 		if a.engine != nil {
 			if err := a.engine.Beat(ctx, live); err != nil {
-				slog.Warn("autopilot rules beat skipped", "error", err)
+				logErr(ctx, slog.LevelWarn, "autopilot rules beat skipped", err)
 			}
 			a.engine.Policy(ctx, live)
 		}
@@ -357,7 +357,7 @@ func (a *Autopilot) publish(ctx context.Context, e AutopilotEntry) {
 	e.Host = a.Host
 	data, err := json.Marshal(e)
 	if err != nil {
-		slog.Error("autopilot log", "error", err, "action", e.Action)
+		logErr(ctx, slog.LevelError, "autopilot log", err, "action", e.Action)
 		return
 	}
 	subject := "cos.autopilot.log." + e.Kind
@@ -370,7 +370,7 @@ func (a *Autopilot) publish(ctx context.Context, e AutopilotEntry) {
 			case <-time.After(autopilotLogBackoff[min(attempt-1, len(autopilotLogBackoff)-1)]):
 			}
 			if attempt == 1 {
-				slog.Warn("autopilot log retry", "action", e.Action, "error", err)
+				logErr(ctx, slog.LevelWarn, "autopilot log retry", err, "action", e.Action)
 			}
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, autopilotLogTimeout)
@@ -384,7 +384,7 @@ func (a *Autopilot) publish(ctx context.Context, e AutopilotEntry) {
 		slog.Info("autopilot log dropped", "reason", ctx.Err(), "action", e.Action)
 		return
 	}
-	slog.Error("autopilot log", "error", err, "action", e.Action)
+	logErr(ctx, slog.LevelError, "autopilot log", err, "action", e.Action)
 }
 
 func (a *Autopilot) handleRun(ctx context.Context) nats.MsgHandler {
@@ -465,7 +465,7 @@ func (a *Autopilot) follow(ctx context.Context) {
 	})
 	for ctx.Err() == nil {
 		if err := a.followLog(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("autopilot log mirror", "error", err)
+			logErr(ctx, slog.LevelError, "autopilot log mirror", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -549,7 +549,7 @@ func (a *Autopilot) mirror(ctx context.Context, apply func(*AutopilotState)) {
 	a.mirrorMu.Lock()
 	defer a.mirrorMu.Unlock()
 	if err := a.store.updateAutopilot(ctx, apply); err != nil && ctx.Err() == nil {
-		slog.Error("autopilot state", "error", err)
+		logErr(ctx, slog.LevelError, "autopilot state", err)
 	}
 }
 

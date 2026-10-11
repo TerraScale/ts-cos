@@ -46,7 +46,7 @@ func RunEventMirror(ctx context.Context, bus *Bus, store *Store) {
 		defer tick.Stop()
 		for {
 			if err := store.pruneEvents(ctx, time.Now()); err != nil && ctx.Err() == nil {
-				slog.Error("prune events", "error", err)
+				logErr(ctx, slog.LevelError, "prune events", err)
 			}
 			select {
 			case <-ctx.Done():
