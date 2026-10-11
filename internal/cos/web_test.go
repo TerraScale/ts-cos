@@ -64,6 +64,9 @@ func TestChatSSEHeaderFollowsState(t *testing.T) {
 			t.Fatal(event)
 		}
 	}
+	if work := readEvent(); !strings.Contains(work, `id="pane-work"`) {
+		t.Fatal(work)
+	}
 	if inboxPane := readEvent(); !strings.Contains(inboxPane, `id="inbox"`) {
 		t.Fatal(inboxPane)
 	}
@@ -219,5 +222,22 @@ func TestPartialHostFailuresKeepCachedWork(t *testing.T) {
 	fresh := mergeFleet(next, []HostFleet{{Host: "delta", Threads: []FleetThread{}}})
 	if fresh[0].Stale || len(fresh[0].Threads) != 0 {
 		t.Fatal(fresh)
+	}
+}
+
+func TestHomeRendersKPIProbe(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "cos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	w := NewWeb(store, nil)
+	w.KPI.k.fold(Event{ID: "cos:kpi-probe:mariogk:1", Kind: KindKPIProbe})
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	w.routes().ServeHTTP(r, req)
+	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `data-probe="cos:kpi-probe:mariogk:1"`) {
+		t.Fatalf("GET / = %d without the probe on #kpis", r.Code)
 	}
 }

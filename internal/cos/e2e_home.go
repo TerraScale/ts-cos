@@ -1,10 +1,13 @@
 package cos
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // checkHomeKPIs signs in on base and checks the chat-first home renders the KPI tiles.
@@ -21,4 +24,69 @@ func checkHomeKPIs(ctx context.Context, base string, u *e2eUser) (string, error)
 		return "", fmt.Errorf("GET %s/: HTTP %d without six KPI tiles", base, status)
 	}
 	return "home on " + base + " renders six KPI tiles", nil
+}
+
+// checkKPIsLive publishes a kpi.probe and checks that base's open /chat/events stream repaints #kpis with it within 2 s.
+func checkKPIsLive(ctx context.Context, e *E2EEnv, host, base string, u *e2eUser) (string, error) {
+	cookie, status, _, err := signIn(ctx, base, u.name, u.password)
+	if err != nil || status != http.StatusSeeOther {
+		return "", fmt.Errorf("login on %s: HTTP %d %v", base, status, err)
+	}
+	stream, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(stream, "GET", base+"/chat/events", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("GET %s/chat/events: %w", base, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s/chat/events: HTTP %d", base, res.StatusCode)
+	}
+	sc := bufio.NewScanner(res.Body)
+	if !scanFor(sc, `id="kpis"`) {
+		return "", fmt.Errorf("no initial #kpis repaint on %s/chat/events", base)
+	}
+	bus, err := ConnectBus(ctx, e.cfg)
+	if err != nil {
+		return "", err
+	}
+	defer bus.Close()
+	js, err := bus.JetStream()
+	if err != nil {
+		return "", err
+	}
+	runner, now := e.LocalHost(), time.Now()
+	id := NewEventID(SourceCOS, "kpi-probe", runner, strconv.FormatInt(now.UnixNano(), 10))
+	if _, err := PublishEvent(ctx, js, Event{ID: id, Source: SourceCOS, Kind: KindKPIProbe, Time: now, Severity: SeverityInfo,
+		Summary: "KPI liveness probe", Host: runner, Synthetic: true}); err != nil {
+		return "", err
+	}
+	// The timer cancels the stream, so a probe that is not repainted in time ends the scan.
+	deadline := time.AfterFunc(2*time.Second, cancel)
+	defer deadline.Stop()
+	seen := scanFor(sc, `data-probe="`+id+`"`)
+	elapsed := time.Since(now)
+	switch {
+	case !seen:
+		return "", fmt.Errorf("probe from %s not seen on %s within 2 s", runner, base)
+	case elapsed > 2*time.Second:
+		return "", fmt.Errorf("probe from %s seen on %s after %d ms, want within 2 s", runner, base, elapsed.Milliseconds())
+	}
+	return fmt.Sprintf("probe from %s on %s after %d ms", runner, host, elapsed.Milliseconds()), nil
+}
+
+// scanFor reports whether a line from sc contains marker before the input ends.
+func scanFor(sc *bufio.Scanner, marker string) bool {
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), marker) {
+			return true
+		}
+	}
+	return false
 }

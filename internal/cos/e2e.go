@@ -298,6 +298,11 @@ func e2eChecks() []E2ECheck {
 			E2ECheck{ID: "home.kpis." + h, Stream: "TS-824", Run: accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
 				return checkHomeKPIs(ctx, urls[slices.Index(e2eHosts, h)], u)
 			})},
+			E2ECheck{ID: "home.kpis.live." + h, Stream: "TS-824", Run: func(ctx context.Context, e *E2EEnv) (string, error) {
+				return accessCheck(func(ctx context.Context, urls []string, u *e2eUser) (string, error) {
+					return checkKPIsLive(ctx, e, h, urls[slices.Index(e2eHosts, h)], u)
+				})(ctx, e)
+			}},
 		)
 	}
 	for _, h := range e2eHosts {

@@ -142,11 +142,22 @@ func (w *Web) renderSettings(rw http.ResponseWriter, r *http.Request, status int
 	}
 }
 
+// homeBoard reads the Work summary for the home aside; a failed read is logged and reports false.
+func (w *Web) homeBoard(ctx context.Context) (workBoard, bool) {
+	data, err := loadBoard(ctx, w.Store)
+	if err != nil {
+		slog.Error("read work board", "error", err)
+		return workBoard{}, false
+	}
+	return newWorkBoard(data, ""), true
+}
+
 func (w *Web) chatHome(rw http.ResponseWriter, r *http.Request) {
 	v := w.state(r.Context())
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	h := headerOf(v)
-	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries()).Render(r.Context(), rw); err != nil {
+	b, ok := w.homeBoard(r.Context())
+	if err := chatPage(h, w.kpis(h), v, w.Chat.Entries(), b, ok).Render(r.Context(), rw); err != nil {
 		slog.Error("render chat", "error", err)
 	}
 }
@@ -191,7 +202,7 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Set("X-Accel-Buffering", "no")
 	sent := map[string]bool{}
 	var last chatHeader
-	// home patches the header, KPI tiles and Inbox from one state read.
+	// home patches the header, KPI tiles, Work summary and Inbox from one state read.
 	home := func(v Dashboard) error {
 		h := headerOf(v)
 		last = h
@@ -205,6 +216,10 @@ func (w *Web) chatEvents(rw http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if err := patchElements(ctx, rw, countBadge("tab-inbox", "tab-badge", h.Inbox)); err != nil {
+			return err
+		}
+		b, ok := w.homeBoard(ctx)
+		if err := patchElements(ctx, rw, workPane(b, ok)); err != nil {
 			return err
 		}
 		return patchElements(ctx, rw, inbox(v))

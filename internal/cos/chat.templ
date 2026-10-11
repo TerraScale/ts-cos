@@ -1,7 +1,7 @@
 package cos
 
 // The home is the app shell: Chat in the center, Inbox, Nodes and Work beside it. Phones pick one pane with the tab bar.
-templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry) {
+templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry, b workBoard, ok bool) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@docHead("COS · TerraScale")
@@ -30,7 +30,7 @@ templ chatPage(h chatHeader, k kpiView, v Dashboard, entries []ChatEntry) {
 				<aside class="app-aside" aria-label="Inbox, nodes and work">
 					<section id="pane-inbox" class="pane">@inbox(v)</section>
 					@skeletonPane("pane-nodes", "Nodes", "Nodes panel lands with TS-825")
-					@skeletonPane("pane-work", "Work", "Work board lands with TS-826")
+					@workPane(b, ok)
 				</aside>
 			</div>
 			<nav class="tabbar" aria-label="Sections">
@@ -81,8 +81,38 @@ templ skeletonPane(id, title, note string) {
 	</section>
 }
 
+// workPane is the home's Work slot: the summary once the board reads, the skeleton if it does not.
+templ workPane(b workBoard, ok bool) {
+	if ok {
+		@workSummary(b)
+	} else {
+		@skeletonPane("pane-work", "Work", "Work board unavailable")
+	}
+}
+
+// workSummary shows the stage counts beside the chat; the full table stays on /work.
+templ workSummary(b workBoard) {
+	<section id="pane-work" class="pane panel" aria-labelledby="pane-work-heading">
+		<header class="panel-head"><h2 id="pane-work-heading">Work <span class="badge badge-accent">{ integer(b.Total) }</span></h2></header>
+		if b.Total == 0 {
+			<p class="empty">No work yet.</p>
+		} else {
+			<ul class="list">
+				for _, group := range b.Filters {
+					for _, f := range group {
+						if f.Value != "" {
+							<li><a href={ "/work" + workQuery(f.Value) }>{ f.Label }</a> <span class="badge">{ integer(f.Count) }</span></li>
+						}
+					}
+				}
+			</ul>
+		}
+		<a class="btn" href="/work">Open work board</a>
+	</section>
+}
+
 templ kpiTiles(k kpiView) {
-	<section id="kpis" class="kpis" aria-label="Today">
+	<section id="kpis" class="kpis" aria-label="Today" data-probe={ k.K.Probe }>
 		<div class="kpi">
 			<span class="kpi-label">Threads running</span>
 			<strong class="kpi-value">{ integer(k.Running) }</strong>

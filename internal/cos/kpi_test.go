@@ -85,3 +85,15 @@ func TestKPIBoardFoldsMergedPR(t *testing.T) {
 	// Each consumer retries every 2 s while the stream settles, so this waits longer than the spec's 2 s.
 	chatTestWait(t, "merge counted", func() bool { return board.Snapshot().Merges == 1 })
 }
+
+func TestKPIsFoldProbe(t *testing.T) {
+	var k KPIs
+	k.fold(Event{ID: "cos:kpi-probe:mariogk:1", Kind: KindKPIProbe})
+	if k.Probe != "cos:kpi-probe:mariogk:1" {
+		t.Fatalf("probe = %q, want the first probe ID", k.Probe)
+	}
+	k.fold(Event{ID: "cos:kpi-probe:mariogk:2", Kind: KindKPIProbe})
+	if k.Probe != "cos:kpi-probe:mariogk:2" {
+		t.Fatalf("probe = %q, want the later probe ID", k.Probe)
+	}
+}

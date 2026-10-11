@@ -19,6 +19,7 @@ type KPIs struct {
 	E2ESeen   bool
 	Usage     UsageTotal
 	UsageSeen bool
+	Probe     string // ID of the last kpi.probe; only the liveness check reads it
 }
 
 type E2ERun struct {
@@ -37,6 +38,8 @@ func (k *KPIs) fold(e Event) {
 			return
 		}
 		k.E2E, k.E2ESeen = E2ERun{Pass: d.Pass, Fail: d.Fail, Skip: d.Skip, At: e.Time}, true
+	case KindKPIProbe:
+		k.Probe = e.ID
 	}
 }
 
@@ -99,7 +102,7 @@ func (b *KPIBoard) Run(ctx context.Context, bus *Bus) {
 		now := time.Now().UTC()
 		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 		day, stop := context.WithDeadline(ctx, time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC))
-		b.follow(day, js, jetstream.OrderedConsumerConfig{FilterSubjects: []string{"cos.events.forgejo.pr.merged"}, DeliverPolicy: jetstream.DeliverByStartTimePolicy, OptStartTime: &start}, b.resetToday)
+		b.follow(day, js, jetstream.OrderedConsumerConfig{FilterSubjects: []string{"cos.events.forgejo.pr.merged", "cos.events.cos.kpi.probe"}, DeliverPolicy: jetstream.DeliverByStartTimePolicy, OptStartTime: &start}, b.resetToday)
 		stop()
 	}
 	<-e2eDone

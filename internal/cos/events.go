@@ -98,6 +98,8 @@ const (
 
 	// Published by the leader's node watcher. Data: {"type": "disk|mem|missing", ...}.
 	KindNodeAlert EventKind = "node.alert"
+	// Published by the home.kpis.live e2e check; folded only into #kpis[data-probe].
+	KindKPIProbe EventKind = "kpi.probe"
 )
 
 var eventKinds = map[EventKind]EventSource{
@@ -111,7 +113,7 @@ var eventKinds = map[EventKind]EventSource{
 	KindDeployStarted: SourceDeploy, KindNodeUpdated: SourceDeploy, KindGateFailed: SourceDeploy,
 	KindDeployRolledBack: SourceDeploy, KindDeployCompleted: SourceDeploy,
 	KindBudgetWarn: SourceBudget, KindBudgetExceeded: SourceBudget,
-	KindE2EReport: SourceCOS,
+	KindE2EReport: SourceCOS, KindKPIProbe: SourceCOS,
 	KindNodeAlert: SourceNode,
 }
 
