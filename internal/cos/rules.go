@@ -437,3 +437,17 @@ func (f Forgejo) prFacts(ctx context.Context, repo string, number int) (*PRFacts
 	return &PRFacts{PR: forgejoState(repo, raw.forgejoPR, statuses, reviews, f.skipReviewer()),
 		Lines: raw.Additions + raw.Deletions, Merged: raw.Merged, State: raw.State, Body: raw.Body}, nil
 }
+
+// reviewLabel names a PR's review gate in rules output (moved from web.go when the dashboard dropped it).
+func reviewLabel(p PR) string {
+	if p.ChangesRequested {
+		return "changes requested"
+	}
+	if p.BotApproved {
+		return "approved"
+	}
+	if p.SkipReviewer {
+		return "review bypassed"
+	}
+	return "waiting"
+}
