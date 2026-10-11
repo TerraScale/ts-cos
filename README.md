@@ -68,6 +68,8 @@ and `COS_NODES_15M` (90 days). Each node averages its own samples into 1-minute 
 The leader turns a disk over 85 %, memory over 90 % and a host with no sample for 60 s into `node.alert` events. The rules engine files each as an Inbox FYI, deduplicated: disk per mount per day, memory per day, missing once per outage.
 Synthetic e2e hosts raise info-level alerts that never reach web push.
 
+`/nodes` shows a live card per node with current values and last-hour sparklines.
+
 ### Sign-in and public URL
 
 `https://cos.terrascale.tech` and `http://<host>:8790` on the tailnet serve the

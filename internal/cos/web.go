@@ -25,6 +25,7 @@ type Web struct {
 	push        atomic.Pointer[Push]
 	Chat        *Chat
 	KPI         *KPIBoard
+	Bus         *Bus
 }
 
 func NewWeb(s *Store, auth *Auth) *Web {
@@ -63,6 +64,7 @@ func (w *Web) routes() *http.ServeMux {
 	mux.HandleFunc("GET /work/{ticket}", w.workTicket)
 	w.autopilotRoutes(mux)
 	w.pushRoutes(mux)
+	w.nodesRoutes(mux)
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := View(r.Context(), w.Store)
 		if err != nil {

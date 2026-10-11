@@ -1,0 +1,108 @@
+package cos
+
+// nodesPage is the overview: one live card per node, repatched by nodesEvents.
+templ nodesPage(cards []NodeCard) {
+	<!DOCTYPE html>
+	<html lang="en">
+		@docHead("Nodes · COS")
+		<body class="shell" data-init="@get('/nodes/events', {retry: 'always', retryMaxCount: Infinity, retryMaxWait: 10000})">
+			@nodesTopbar()
+			<main class="page">
+				<section class="panel" aria-labelledby="nodes-heading">
+					<header class="panel-head"><h1 id="nodes-heading">Nodes</h1></header>
+					@nodesGrid(cards)
+				</section>
+			</main>
+		</body>
+	</html>
+}
+
+templ nodesTopbar() {
+	<header class="topbar">
+		<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
+		<nav class="topbar-nav" aria-label="Main">
+			<a class="navlink" href="/">Chat</a>
+			<a class="navlink" href="/inbox">Inbox</a>
+			<a class="navlink" href="/nodes" aria-current="page">Nodes</a>
+			<a class="navlink" href="/settings">Settings</a>
+		</nav>
+	</header>
+}
+
+// nodesGrid is the patch target: every card redraws when /nodes/events sends it.
+templ nodesGrid(cards []NodeCard) {
+	<div id="nodes-grid" class="stack">
+		if len(cards) == 0 {
+			<p class="empty">No nodes have reported yet.</p>
+		}
+		for _, c := range cards {
+			@nodeCard(c)
+		}
+	</div>
+}
+
+templ nodeCard(c NodeCard) {
+	<section class="card" id={ c.Host }>
+		<header class="card-head">
+			<span class="dot" data-state={ c.State }></span>
+			<h2>{ c.Host }</h2>
+			<span class="muted">{ nodeMeta(c) }</span>
+		</header>
+		<div class="stack">
+			<div class="kpis">
+				<article class="kpi" data-tone={ c.cpuTone() }>
+					<h3 class="kpi-label">CPU</h3>
+					<p class="kpi-value">{ c.text(formatFixed(c.Sample.CPU, 0)) }<span class="kpi-unit">{ c.unit("%") }</span></p>
+					@sparkline(c.CPU, 1, 100)
+				</article>
+				<article class="kpi" data-tone={ c.memTone() }>
+					<h3 class="kpi-label">Memory</h3>
+					<p class="kpi-value">{ c.text(formatFixed(c.Sample.Mem.UsedPercent(), 0)) }<span class="kpi-unit">{ c.unit("%") }</span></p>
+					@sparkline(c.Mem, 2, 100)
+				</article>
+				<article class="kpi">
+					<h3 class="kpi-label">Load</h3>
+					<p class="kpi-value">{ c.text(formatFixed(c.Sample.Load[0], 2)) }<span class="kpi-unit">{ c.unit("1m") }</span></p>
+				</article>
+				<article class="kpi">
+					<h3 class="kpi-label">Network</h3>
+					<p class="kpi-value">{ c.text(formatRate(netBps(c.Sample))) }</p>
+					@sparkline(c.Net, 3, 0)
+				</article>
+				<article class="kpi" data-tone={ c.t3Tone() } title={ c.Sample.T3.Error }>
+					<h3 class="kpi-label">{ c.t3Label() }</h3>
+					<p class="kpi-value">{ c.text(integer(c.Sample.T3.Running)) }<span class="kpi-unit">{ c.unit("running") }</span></p>
+				</article>
+			</div>
+			<div class="stack">
+				for _, d := range c.Sample.Disks {
+					@meterRow(d.Mount, d.UsedPercent())
+				}
+				if c.Sample.Mem.SwapTotal > 0 {
+					@meterRow("swap", c.Sample.Mem.SwapPercent())
+				}
+			</div>
+			if c.hasTemps() {
+				<p class="muted">{ c.hottest() }</p>
+			}
+		</div>
+	</section>
+}
+
+// sparkline is a KPI's trend, scaled to ymax (0 means the series max); without samples it draws nothing.
+templ sparkline(values []float64, series int, ymax float64) {
+	if len(values) > 0 {
+		<svg class="spark" data-series={ integer(series) } viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+			<path class="spark-area" d={ sparkArea(values, ymax) }></path>
+			<path class="spark-line" d={ sparkLine(values, ymax) }></path>
+		</svg>
+	}
+}
+
+templ meterRow(label string, used float64) {
+	<label class="meter-row">
+		<span class="meter-label">{ label }</span>
+		<meter class="meter" min="0" max="100" low="70" high="85" optimum="0" value={ formatFixed(used, 1) }></meter>
+		<span class="meter-value">{ formatPercent(used) }</span>
+	</label>
+}

@@ -698,9 +698,15 @@ func (b *Bus) Call(ctx context.Context, host, command string, args []string, out
 	return nil
 }
 
+// expectedHosts are the COS nodes that exist even while offline.
+var expectedHosts = []string{"beta", "delta", "mariogk-dev"}
+
 // Hosts includes expected COS nodes even while offline, plus nodes discovered by micro PING.
 func (b *Bus) Hosts(ctx context.Context) ([]string, error) {
-	hosts := map[string]bool{"delta": true, "beta": true, "mariogk-dev": true}
+	hosts := map[string]bool{}
+	for _, h := range expectedHosts {
+		hosts[h] = true
+	}
 	discovery, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
 	inbox := nats.NewInbox()

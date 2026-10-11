@@ -155,6 +155,7 @@ templ settingsPage(a AutopilotState, b budgetPanelData, push PushState) {
 				<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">C</span>COS</a>
 				<nav class="topbar-nav" aria-label="Main">
 					<a class="navlink" href="/">Chat</a>
+					<a class="navlink" href="/nodes">Nodes</a>
 					<a class="navlink" href="/settings" aria-current="page">Settings</a>
 				</nav>
 			</header>
@@ -201,6 +202,7 @@ templ chatHead(h chatHeader) {
 			<a class="navlink" href="/">Chat</a>
 			<a class="navlink hide-sm" href="/work">Work</a>
 			<a id="inbox-slot" class="navlink" href="/inbox">Inbox <span class="badge badge-accent">{ integer(h.Inbox) }</span></a>
+			<a class="navlink" href="/nodes">Nodes</a>
 			<a class="navlink hide-sm" href="/tokens">Tokens</a>
 			<a class="navlink" href="/settings">Settings</a>
 		</nav>
