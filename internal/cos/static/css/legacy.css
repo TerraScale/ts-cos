@@ -171,7 +171,7 @@ section.panel {
 .prose ul, .prose ol { padding-left: 1.25em; }
 
 /* 5. Controls: buttons, fields, segmented, badge, tag, alert, toast, spinner, disclosure, code */
-button, .btn {
+button:not([class*="ts-"]), .btn {
   display: inline-flex; align-items: center; justify-content: center;
   gap: 6px;
   min-height: var(--control);
@@ -188,9 +188,9 @@ button, .btn {
   white-space: nowrap;
   text-decoration: none;
 }
-button:not(:disabled):hover, .btn:not(:disabled):hover { background: var(--hover); }
-button:not(:disabled):active, .btn:not(:disabled):active { transform: translateY(1px); }
-button:disabled, .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+button:not(:disabled):not([class*="ts-"]):hover, .btn:not(:disabled):hover { background: var(--hover); }
+button:not(:disabled):not([class*="ts-"]):active, .btn:not(:disabled):active { transform: translateY(1px); }
+button:disabled:not([class*="ts-"]), .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary {
   background: var(--ts-accent-fill); border-color: var(--ts-accent-fill); color: var(--ts-on-accent);
 }
@@ -201,7 +201,7 @@ button:disabled, .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: var(--t-sm); font-weight: 500; color: var(--text); }
 .field-hint { font-size: var(--t-xs); color: var(--text-2); }
-input, textarea, select {
+input:not([class*="ts-"]), textarea:not([class*="ts-"]), select:not([class*="ts-"]) {
   width: 100%;
   font: inherit;
   font-size: 16px;
@@ -213,10 +213,10 @@ input, textarea, select {
   min-height: var(--tap);
   transition: border-color var(--ease);
 }
-input:hover, textarea:hover, select:hover { border-color: var(--text-2); }
-input:focus-visible, textarea:focus-visible, select:focus-visible { border-color: var(--accent); }
-input::placeholder, textarea::placeholder { color: var(--text-2); }
-textarea { min-height: 72px; resize: vertical; line-height: var(--lh); }
+input:not([class*="ts-"]):hover, textarea:not([class*="ts-"]):hover, select:not([class*="ts-"]):hover { border-color: var(--text-2); }
+input:not([class*="ts-"]):focus-visible, textarea:not([class*="ts-"]):focus-visible, select:not([class*="ts-"]):focus-visible { border-color: var(--accent); }
+input:not([class*="ts-"])::placeholder, textarea:not([class*="ts-"])::placeholder { color: var(--text-2); }
+textarea:not([class*="ts-"]) { min-height: 72px; resize: vertical; line-height: var(--lh); }
 .segmented {
   display: flex; width: 100%;
   gap: 2px;
@@ -967,7 +967,7 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
 
 /* 20. Responsive overrides */
 @media (min-width: 640px) {
-  input, textarea, select { font-size: var(--t-md); min-height: 40px; }
+  input:not([class*="ts-"]), textarea:not([class*="ts-"]), select:not([class*="ts-"]) { font-size: var(--t-md); min-height: 40px; }
   .segmented { display: inline-flex; width: auto; }
   .segmented button { flex: none; }
   .settings-controls { flex-direction: row; align-items: center; }
@@ -982,7 +982,7 @@ body.app .toasts { bottom: calc(var(--tabbar) + var(--s-3) + env(safe-area-inset
   .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (pointer: coarse) {
-  button, .btn, .navlink, details.disclosure > summary, .segmented button {
+  button:not([class*="ts-"]), .btn, .navlink, details.disclosure > summary, .segmented button {
     min-height: var(--tap);
   }
 }
