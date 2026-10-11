@@ -118,6 +118,44 @@ func TestSelfRequestAndGuard(t *testing.T) {
 	}
 }
 
+func TestSelfRequestValidation(t *testing.T) {
+	const check = `"check":{"summary":"h","path":"/","contains":["F"]}`
+	req := func(request, summary string) string {
+		return `{"request":"` + request + `","summary":"` + summary + `",` + check + `}`
+	}
+	for i, raw := range []string{
+		req("x", "s") + " {}",
+		req("x", `s\r`),
+		req(`x\u0007`, "s"),
+		req("x", strings.Repeat("é", 121)),
+	} {
+		if _, err := selfRequest(raw); err == nil {
+			t.Errorf("case %d accepted: %s", i, raw)
+		}
+	}
+	for i, raw := range []string{
+		req(`line one\nline two`, "s"),
+		req("x", strings.Repeat("é", 120)),
+	} {
+		if _, err := selfRequest(raw); err != nil {
+			t.Errorf("case %d rejected: %v", i, err)
+		}
+	}
+}
+
+func TestSelfUndoOncePerChange(t *testing.T) {
+	orig := selfRecord{ID: "00000000000000a1", Summary: "Header reads Fleet", Ticket: "SELF-1", State: selfDone}
+	u, err := selfUndo([]selfRecord{orig}, "")
+	if err != nil || u.ID != orig.ID+"-undo" || u.Reverts != orig.ID {
+		t.Fatal(u, err)
+	}
+	// The revert finished but the original lost its RevertedBy: still one undo.
+	done := selfRecord{ID: u.ID, Reverts: orig.ID, Ticket: "SELF-1", State: selfDone}
+	if _, err := selfUndo([]selfRecord{orig, done}, ""); err == nil {
+		t.Fatal("a reverted change can be undone twice")
+	}
+}
+
 // selfFake is a Forgejo for one ts-cos self-change PR (number 7) and its revert (8).
 type selfFake struct {
 	mu        sync.Mutex
@@ -406,6 +444,48 @@ func TestSelfChangeLoopAndUndo(t *testing.T) {
 	log := selfLog(func() []selfRecord { l, _ := rig.d.store.list(ctx); return l }(), true, time.Now())
 	if text := log["text"].(string); !strings.Contains(text, "TS-901") || !strings.Contains(text, "(reverted)") {
 		t.Fatalf("changelog text: %q", text)
+	}
+}
+
+func TestSelfUndoRetry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rig := newSelfTestRig(t, ctx)
+	failed := selfRecord{ID: "x-undo", Reverts: "x", Ticket: "TS-901", State: selfFailed}
+	if err := rig.d.store.create(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	// A failed undo is replaced by a fresh queued one with the same ID.
+	fresh := selfRecord{ID: "x-undo", Reverts: "x", Ticket: "TS-901", State: selfQueued}
+	if err := selfQueueUndo(ctx, rig.d.store, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if got := rig.state(t, ctx, "x-undo"); got.State != selfQueued {
+		t.Fatalf("retry not queued: %+v", got)
+	}
+	// A queued (running) undo is kept: a second attempt is refused.
+	if err := selfQueueUndo(ctx, rig.d.store, fresh); err == nil || !strings.Contains(err.Error(), "already being reverted") {
+		t.Fatalf("running undo replaced: %v", err)
+	}
+}
+
+func TestSelfChangeMergedPRIsNotFailed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	rig := newSelfTestRig(t, ctx)
+	r, err := selfRequest(`{"request":"the header should say Fleet","summary":"Header reads Fleet","check":{"summary":"header","path":"/","contains":["Fleet"]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.State, r.Ticket, r.Branch, r.PR = selfGating, "TS-901", "cos/ts-901", 7
+	if err := rig.d.store.create(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	// Merged by someone else (or after a lost save): the record follows the merge.
+	rig.set(func(f *selfFake) { f.merged[7], f.prOpen[7] = true, false })
+	rig.d.step(ctx)
+	if got := rig.state(t, ctx, r.ID); got.State != selfMerged || got.SHA != "merge70000000" {
+		t.Fatalf("merged PR not followed: %+v", got)
 	}
 }
 

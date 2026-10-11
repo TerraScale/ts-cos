@@ -1,6 +1,7 @@
 package cos
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -27,6 +30,7 @@ const (
 	selfRolloutDeadline = 45 * time.Minute
 	selfVerifyDeadline  = 5 * time.Minute
 	selfE2ERetry        = 10 * time.Minute
+	selfMaxOpen         = 3 // self-changes that may be unfinished at once
 )
 
 // States in order; done, failed and blocked are final.
@@ -226,10 +230,13 @@ func selfRequest(raw string) (selfRecord, error) {
 	if err := dec.Decode(&in); err != nil {
 		return selfRecord{}, fmt.Errorf("self change JSON: %w", err)
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		return selfRecord{}, errors.New("self change JSON: trailing data")
+	}
 	switch {
-	case strings.TrimSpace(in.Request) == "" || len(in.Request) > 4000:
-		return selfRecord{}, errors.New("request must be the user's words (1-4000 characters)")
-	case strings.TrimSpace(in.Summary) == "" || len(in.Summary) > 120 || strings.Contains(in.Summary, "\n"):
+	case strings.TrimSpace(in.Request) == "" || utf8.RuneCountInString(in.Request) > 4000 || hasControl(in.Request, "\n\t"):
+		return selfRecord{}, errors.New("request must be the user's words (1-4000 characters, no control characters)")
+	case strings.TrimSpace(in.Summary) == "" || utf8.RuneCountInString(in.Summary) > 120 || hasControl(in.Summary, ""):
 		return selfRecord{}, errors.New("summary must be one user-facing line of 1-120 characters")
 	}
 	if err := in.Check.validate(); err != nil {
@@ -239,12 +246,27 @@ func selfRequest(raw string) (selfRecord, error) {
 	return selfRecord{ID: selfID(now), Request: in.Request, Summary: in.Summary, Check: in.Check, State: selfQueued, CreatedAt: now}, nil
 }
 
+// hasControl reports whether s has a control character other than those in allow.
+func hasControl(s, allow string) bool {
+	return strings.IndexFunc(s, func(c rune) bool { return unicode.IsControl(c) && !strings.ContainsRune(allow, c) }) >= 0
+}
+
+// selfReverted reports whether a finished revert of id exists, even if the original lost its RevertedBy.
+func selfReverted(records []selfRecord, id string) bool {
+	for _, r := range records {
+		if r.Reverts == id && r.State == selfDone {
+			return true
+		}
+	}
+	return false
+}
+
 // selfUndo queues a revert of target (default: the newest live change not yet reverted).
 func selfUndo(records []selfRecord, target string) (selfRecord, error) {
 	var orig *selfRecord
 	for i := len(records) - 1; i >= 0; i-- {
 		r := records[i]
-		if r.Reverts == "" && r.State == selfDone && r.RevertedBy == "" && (target == "" || target == r.Ticket || target == r.ID) {
+		if r.Reverts == "" && r.State == selfDone && r.RevertedBy == "" && !selfReverted(records, r.ID) && (target == "" || target == r.Ticket || target == r.ID) {
 			orig = &records[i]
 			break
 		}
@@ -258,7 +280,8 @@ func selfUndo(records []selfRecord, target string) (selfRecord, error) {
 		}
 	}
 	now := time.Now().UTC()
-	return selfRecord{ID: selfID(now), Request: "undo " + orig.Ticket, Summary: orig.Summary, Check: orig.Check,
+	// The fixed ID makes a second undo of the same change fail as "key exists" in the store.
+	return selfRecord{ID: orig.ID + "-undo", Request: "undo " + orig.Ticket, Summary: orig.Summary, Check: orig.Check,
 		Reverts: orig.ID, Ticket: orig.Ticket, Branch: selfBranch(orig.Ticket) + "-revert", State: selfQueued, CreatedAt: now}, nil
 }
 
@@ -428,6 +451,10 @@ func (d *selfDriver) advance(ctx context.Context, r selfRecord, rolling string) 
 		if err != nil {
 			return r, err
 		}
+		if p.Merged {
+			r.SHA, r.MergedAt = p.MergeSHA, now
+			return r.to(selfMerged, p.MergeSHA), nil
+		}
 		if p.State != "open" {
 			return r.to(selfFailed, "PR closed without merge"), nil
 		}
@@ -585,6 +612,14 @@ func (d *selfDriver) launchWorker(ctx context.Context, r selfRecord, brief strin
 	if err != nil {
 		return "", "", err
 	}
+	// A lost save leaves the worker running without the record; adopt it rather than start a second.
+	for _, h := range fleet {
+		for _, thread := range h.Threads {
+			if h.Error == "" && strings.HasPrefix(thread.Title, r.Ticket+" · ") {
+				return h.Host, thread.ThreadID, nil
+			}
+		}
+	}
 	input, _ := json.Marshal(map[string]any{
 		"projectTitle": "ts-cos", "title": r.Ticket + " · ts-cos: " + r.Summary, "modelSelection": selfModel, "message": brief,
 		"workspaceStrategy": map[string]any{"type": "worktree", "baseRef": r.Branch, "branch": r.Branch, "startFromOrigin": true},
@@ -602,6 +637,19 @@ func (d *selfDriver) launchWorker(ctx context.Context, r selfRecord, brief strin
 		}
 	}
 	return "", "", last
+}
+
+// selfQueueUndo stores an undo record. One undo per change: a failed or blocked one is replaced, a running or finished one is kept.
+func selfQueueUndo(ctx context.Context, store selfStore, r selfRecord) error {
+	err := store.create(ctx, r)
+	if !errors.Is(err, jetstream.ErrKeyExists) {
+		return err
+	}
+	old, rev, gerr := store.get(ctx, r.ID)
+	if gerr != nil || !(old.State == selfFailed || old.State == selfBlocked) {
+		return fmt.Errorf("%s is already being reverted", r.Ticket)
+	}
+	return store.save(ctx, r, rev)
 }
 
 // selfCLI implements `cos self change|undo|log`; the COS agent is its main caller.
@@ -625,6 +673,24 @@ func selfCLI(ctx context.Context, cfg Config, args []string, w io.Writer) error 
 		if err != nil {
 			return err
 		}
+		records, err := store.list(ctx)
+		if err != nil {
+			return err
+		}
+		inProgress := 0
+		for _, o := range records {
+			if !o.final() {
+				inProgress++
+			}
+		}
+		if inProgress >= selfMaxOpen {
+			return fmt.Errorf("%d self-changes are already in progress; wait for one to finish", selfMaxOpen)
+		}
+		for _, o := range records {
+			if !o.final() && strings.TrimSpace(o.Request) == strings.TrimSpace(r.Request) {
+				return fmt.Errorf("the same request is already in progress as %s", cmp.Or(o.Ticket, o.ID))
+			}
+		}
 		if err := store.create(ctx, r); err != nil {
 			return err
 		}
@@ -638,7 +704,7 @@ func selfCLI(ctx context.Context, cfg Config, args []string, w io.Writer) error 
 		if err != nil {
 			return err
 		}
-		if err := store.create(ctx, r); err != nil {
+		if err := selfQueueUndo(ctx, store, r); err != nil {
 			return err
 		}
 		return output(w, map[string]any{"id": r.ID, "reverts": r.Ticket, "state": r.State})
