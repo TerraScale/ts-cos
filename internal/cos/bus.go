@@ -278,11 +278,26 @@ func connectBus(ctx context.Context, credential busCredential) (*nats.Conn, erro
 		timeout = min(timeout, time.Until(deadline))
 	}
 	address := "nats://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(credential.Port))
-	conn, err := nats.Connect(address, nats.UserInfo(busClientUser, credential.Password), nats.Name("cos"), nats.Timeout(timeout),
-		nats.MaxReconnects(-1), nats.ReconnectWait(500*time.Millisecond),
-		nats.PingInterval(15*time.Second), nats.MaxPingsOutstanding(2),
-		nats.ReconnectBufSize(-1), nats.IgnoreDiscoveredServers(),
-		nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
+	var conn *nats.Conn
+	var err error
+	// A route reload in discover briefly rejects valid credentials, so retry those logins.
+	for started := time.Now(); ; {
+		conn, err = nats.Connect(address, nats.UserInfo(busClientUser, credential.Password), nats.Name("cos"), nats.Timeout(timeout),
+			nats.MaxReconnects(-1), nats.ReconnectWait(500*time.Millisecond),
+			nats.PingInterval(15*time.Second), nats.MaxPingsOutstanding(2),
+			nats.ReconnectBufSize(-1), nats.IgnoreDiscoveredServers(),
+			nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
+		if !errors.Is(err, nats.ErrAuthorization) || time.Since(started) >= 2*time.Second {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(50 * time.Millisecond):
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, errors.New("COS local NATS connection failed; check node availability and authentication")
 	}
