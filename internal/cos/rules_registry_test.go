@@ -103,7 +103,7 @@ func TestBeatRuleWakeCallsSend(t *testing.T) {
 	}
 }
 
-func TestRegisteredDecisionForPausedTicketIsDropped(t *testing.T) {
+func TestRegisteredDecisionForPausedTicketIsRecorded(t *testing.T) {
 	withRegisteredRules(t)
 	rec := &rulesRecorder{sha: "aaa"}
 	r := newRulesEngine(t, rec)
@@ -120,6 +120,94 @@ func TestRegisteredDecisionForPausedTicketIsDropped(t *testing.T) {
 	}
 	if ran {
 		t.Fatal("registered Do ran for a paused ticket")
+	}
+	if entry := publishedAction(t, rec, "budget/act"); entry.Kind != ClassRecord {
+		t.Errorf("entry kind = %q, want %q", entry.Kind, ClassRecord)
+	}
+}
+
+func TestRegisteredDecisionForPausedThreadIsRecorded(t *testing.T) {
+	withRegisteredRules(t)
+	rec := &rulesRecorder{}
+	r := newRulesEngine(t, rec)
+	r.memory.(*fakeKV).data[pausedKey] = []byte(`["TS-1"]`)
+	RegisterRule(Rule{Name: "nudge", Beat: func(context.Context, Live) []Decision {
+		return []Decision{{Class: ClassAct, Rule: "wake", Reason: "threshold", Host: "beta", Thread: "t1", Wake: "check the budget"}}
+	}})
+	if err := r.Beat(context.Background(), rulesLive()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("calls = %+v, want no wake for a paused thread", rec.calls)
+	}
+	if entry := publishedAction(t, rec, "nudge/wake"); entry.Kind != ClassRecord {
+		t.Errorf("entry kind = %q, want %q", entry.Kind, ClassRecord)
+	}
+}
+
+func TestPausedBeatRuleDoesNotAct(t *testing.T) {
+	withRegisteredRules(t)
+	rec := &rulesRecorder{}
+	r := newRulesEngine(t, rec)
+	r.memory.(*fakeKV).data[pausedKey] = []byte(`["TS-1"]`)
+	ran := false
+	RegisterRule(Rule{Name: "budget", Beat: func(context.Context, Live) []Decision {
+		return []Decision{{Class: ClassAct, Ticket: "TS-1", Rule: "act", Reason: "try it", Do: func(context.Context, RuleEnv) error {
+			ran = true
+			return nil
+		}}}
+	}})
+	if err := r.Beat(context.Background(), rulesLive()); err != nil {
+		t.Fatal(err)
+	}
+	if ran {
+		t.Fatal("registered Do ran for a paused ticket")
+	}
+	if entry := publishedAction(t, rec, "budget/act"); entry.Kind != ClassRecord {
+		t.Errorf("entry kind = %q, want %q", entry.Kind, ClassRecord)
+	}
+}
+
+func TestPanickingRuleDoesNotStopTheEngine(t *testing.T) {
+	withRegisteredRules(t)
+	rec := &rulesRecorder{sha: "aaa"}
+	r := newRulesEngine(t, rec)
+	ran := false
+	RegisterRule(Rule{Name: "boom", Event: func(Event, Live) []Decision {
+		return []Decision{{Class: ClassAct, Rule: "act", Reason: "try it", Do: func(context.Context, RuleEnv) error {
+			panic("bad action")
+		}}}
+	}})
+	RegisterRule(Rule{Name: "after", Event: func(Event, Live) []Decision {
+		return []Decision{{Class: ClassAct, Rule: "act", Reason: "try it", Do: func(context.Context, RuleEnv) error {
+			ran = true
+			return nil
+		}}}
+	}})
+	if err := r.Handle(context.Background(), rulesCIEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if entry := publishedAction(t, rec, "boom/act"); entry.Kind != "error" {
+		t.Errorf("panic entry = %+v, want kind error", entry)
+	}
+	if !ran {
+		t.Fatal("rule after a panicking Do did not run")
+	}
+
+	ran = false
+	RegisterRule(Rule{Name: "beat-boom", Beat: func(context.Context, Live) []Decision { panic("bad beat") }})
+	RegisterRule(Rule{Name: "beat-after", Beat: func(context.Context, Live) []Decision {
+		ran = true
+		return nil
+	}})
+	if err := r.Beat(context.Background(), rulesLive()); err != nil {
+		t.Fatal(err)
+	}
+	if entry := publishedAction(t, rec, "beat-boom"); entry.Kind != "error" {
+		t.Errorf("beat panic entry = %+v, want kind error", entry)
+	}
+	if !ran {
+		t.Fatal("beat rule after a panicking Beat did not run")
 	}
 }
 

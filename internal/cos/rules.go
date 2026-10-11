@@ -473,7 +473,7 @@ func (r *RulesEngine) Handle(ctx context.Context, e Event) error {
 	decisions := Classify(e, live, pr, memory, paused)
 	for _, rule := range registeredRules {
 		if rule.Event != nil {
-			decisions = append(decisions, skipPaused(r.runRule(ctx, e.ID, rule.Name, func() []Decision { return rule.Event(e, live) }), paused)...)
+			decisions = append(decisions, pauseGate(r.runRule(ctx, e.ID, rule.Name, func() []Decision { return rule.Event(e, live) }), live, paused)...)
 		}
 	}
 	for _, d := range decisions {

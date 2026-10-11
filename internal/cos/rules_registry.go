@@ -51,7 +51,7 @@ func (r *RulesEngine) Beat(ctx context.Context, live Live) error {
 		if rule.Beat == nil {
 			continue
 		}
-		for _, d := range skipPaused(r.runRule(ctx, "beat", rule.Name, func() []Decision { return rule.Beat(ctx, live) }), paused) {
+		for _, d := range pauseGate(r.runRule(ctx, "beat", rule.Name, func() []Decision { return rule.Beat(ctx, live) }), live, paused) {
 			if err := r.execute(ctx, "beat", d, nil, "", WakeMemory{}); err != nil {
 				r.Publish(ctx, AutopilotEntry{Kind: "error", Event: "beat", Action: d.Rule, Reason: err.Error()})
 			}
@@ -60,9 +60,21 @@ func (r *RulesEngine) Beat(ctx context.Context, live Live) error {
 	return nil
 }
 
-// skipPaused drops registered decisions for a paused ticket: a pause takes no actions, built-in or registered.
-func skipPaused(ds []Decision, paused map[string]bool) []Decision {
-	return slices.DeleteFunc(ds, func(d Decision) bool { return paused[d.Ticket] })
+// pauseGate turns registered decisions for a paused ticket into RECORDs: a pause takes no
+// actions, built-in or registered. A decision without a ticket inherits its target thread's.
+func pauseGate(ds []Decision, live Live, paused map[string]bool) []Decision {
+	for i, d := range ds {
+		ticket := strings.ToUpper(d.Ticket)
+		if ticket == "" && d.Thread != "" {
+			if t := findThread(live, d.Host, d.Thread); t != nil {
+				ticket = strings.ToUpper(ticketPattern.FindString(t.Title + " " + t.Branch))
+			}
+		}
+		if ticket != "" && paused[ticket] {
+			ds[i] = Decision{Class: ClassRecord, Rule: d.Rule, Reason: d.Reason + "; " + ticket + " is paused", Host: d.Host, Thread: d.Thread, Ticket: ticket}
+		}
+	}
+	return ds
 }
 
 // safeDo runs a registered rule's custom action; a panic becomes an error, so one broken rule cannot crash the leader.
