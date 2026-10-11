@@ -56,7 +56,7 @@ func docHead(title string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "\"><script type=\"module\" src=\"https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js\"></script></head>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "\"><link rel=\"icon\" href=\"/static/icon.svg\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/static/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/static/apple-touch-icon.png\"><meta name=\"theme-color\" content=\"#f7f8fa\" media=\"(prefers-color-scheme: light)\"><meta name=\"theme-color\" content=\"#0d0e11\" media=\"(prefers-color-scheme: dark)\"><script type=\"module\" src=\"https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js\"></script></head>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

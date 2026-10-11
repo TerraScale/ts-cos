@@ -33,6 +33,22 @@ func TestCSSServedPublicWithCacheHeaders(t *testing.T) {
 	if rec := get("/static/other.js"); rec.Code != http.StatusNotFound {
 		t.Fatalf("other static file = %d", rec.Code)
 	}
+	if rec := get("/static/cos.css"); rec.Code != http.StatusNotFound {
+		t.Fatalf("unhashed css = %d", rec.Code)
+	}
+	if rec := get("/static/..%2fstatic.go"); rec.Code != http.StatusNotFound {
+		t.Fatalf("traversal = %d", rec.Code)
+	}
+	if rec := get("/static/missing.png"); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing png = %d", rec.Code)
+	}
+	for file, typ := range map[string]string{"icon.svg": "image/svg+xml", "icon-192.png": "image/png"} {
+		rec := get("/static/" + file)
+		if rec.Code != 200 || rec.Header().Get("Content-Type") != typ || rec.Header().Get("Cache-Control") != "public, max-age=86400" ||
+			rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Fatalf("GET %s = %d %v", file, rec.Code, rec.Header())
+		}
+	}
 }
 
 func TestNoExternalStylesheets(t *testing.T) {

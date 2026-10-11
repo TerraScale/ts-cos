@@ -144,7 +144,7 @@ func (a *Auth) Protect(next, hooks http.Handler) http.Handler {
 		renderAuth(rw, r, http.StatusOK, loginPage(""))
 	})
 	mux.HandleFunc("POST /login", a.login)
-	mux.HandleFunc("GET /static/{file}", serveCSS)
+	mux.HandleFunc("GET /static/{file}", serveStatic)
 	mux.HandleFunc("POST /logout", a.logout)
 	mux.Handle("POST /hooks/{source}", hooks)
 	mux.Handle("GET /password", a.require(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
