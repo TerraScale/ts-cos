@@ -3,7 +3,9 @@ package cos
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,9 +50,9 @@ func checkKPIsLive(ctx context.Context, e *E2EEnv, host, base string, u *e2eUser
 	if res.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("GET %s/chat/events: HTTP %d", base, res.StatusCode)
 	}
-	sc := bufio.NewScanner(res.Body)
+	sc := newSSEScanner(res.Body)
 	if !scanFor(sc, `id="kpis"`) {
-		return "", fmt.Errorf("no initial #kpis repaint on %s/chat/events", base)
+		return "", fmt.Errorf("no initial #kpis repaint on %s/chat/events%s", base, scanErr(sc))
 	}
 	bus, err := ConnectBus(ctx, e.cfg)
 	if err != nil {
@@ -74,11 +76,18 @@ func checkKPIsLive(ctx context.Context, e *E2EEnv, host, base string, u *e2eUser
 	elapsed := time.Since(now)
 	switch {
 	case !seen:
-		return "", fmt.Errorf("probe from %s not seen on %s within 2 s", runner, base)
+		return "", fmt.Errorf("probe from %s not seen on %s within 2 s%s", runner, base, scanErr(sc))
 	case elapsed > 2*time.Second:
 		return "", fmt.Errorf("probe from %s seen on %s after %d ms, want within 2 s", runner, base, elapsed.Milliseconds())
 	}
 	return fmt.Sprintf("probe from %s on %s after %d ms", runner, host, elapsed.Milliseconds()), nil
+}
+
+// newSSEScanner reads an event stream line by line; one patch is one line and the chat history repaint exceeds the 64 KB default.
+func newSSEScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	return sc
 }
 
 // scanFor reports whether a line from sc contains marker before the input ends.
@@ -89,4 +98,12 @@ func scanFor(sc *bufio.Scanner, marker string) bool {
 		}
 	}
 	return false
+}
+
+// scanErr explains a failed scan with the scanner error, unless the probe deadline cancelled the stream.
+func scanErr(sc *bufio.Scanner) string {
+	if err := sc.Err(); err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Sprintf(" (scan: %v)", err)
+	}
+	return ""
 }

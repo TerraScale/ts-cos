@@ -20,3 +20,11 @@ func TestScanForStopsAtMarker(t *testing.T) {
 		t.Fatal("matched a probe that never arrived")
 	}
 }
+
+func TestScanForReadsPastLongPatch(t *testing.T) {
+	stream := "event: datastar-patch-elements\ndata: elements " + strings.Repeat("x", 200<<10) + "\n" +
+		"event: datastar-patch-elements\ndata: elements <section data-probe=\"cos:kpi-probe:a:1\">\n"
+	if !scanFor(newSSEScanner(strings.NewReader(stream)), `data-probe="cos:kpi-probe:a:1"`) {
+		t.Fatal("probe line after a 200 KB patch not found")
+	}
+}
