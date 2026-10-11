@@ -378,6 +378,8 @@ func e2eChecks() []E2ECheck {
 		E2ECheck{ID: "rules.reconciler-dropped-event", Stream: "TS-813", Run: nodesCheck(reconcilerDroppedEvent)},
 		E2ECheck{ID: "rules.red-ci-wake", Stream: "TS-813", Run: pending("TS-813: needs a sandbox PR with red CI and a throwaway thread; covered by TestClassify/TestRulesEngineHandle and the 2026-10-11 sandbox live check (PR #19)")},
 		E2ECheck{ID: "rules.ready-merge-once", Stream: "TS-813", Run: pending("TS-813: a real merge cannot run inside e2e; covered by TestClassify merge-ready and gate.sh merges")},
+		E2ECheck{ID: "models.settings", Stream: "TS-820", Run: checkModelsSettings},
+		E2ECheck{ID: "models.launch-guard", Stream: "TS-820", Run: checkModelsLaunchGuard},
 		E2ECheck{ID: "threads.no-haiku", Stream: "TS-812", Run: checkNoHaikuThreads},
 		E2ECheck{ID: "failure.t3-schema-change", Stream: "TS-812", Run: checkT3Schema},
 		E2ECheck{ID: "failure.forgejo-5xx", Stream: "TS-812", Run: checkForgejo5xx},
