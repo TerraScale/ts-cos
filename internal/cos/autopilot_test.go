@@ -27,8 +27,8 @@ func TestAutopilotLeaderOnlyAndReplicated(t *testing.T) {
 				peers = append(peers, ports[j+3])
 			}
 		}
-		cfg, _ := busTestConfig(t, host, ports[i], ports[i+3], peers)
-		node, err := StartBus(ctx, cfg, func(context.Context, string, []string) (any, error) { return nil, nil })
+		cfg, busNode := busTestConfig(t, host, ports[i], ports[i+3], peers)
+		node, err := startBus(ctx, cfg, busNode, func(context.Context, string, []string) (any, error) { return nil, nil })
 		if err != nil {
 			t.Fatal(err)
 		}
