@@ -782,6 +782,7 @@ body.app {
 .chart-y, .chart-x {
   font-size: 11px; line-height: 1; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap;
 }
+.chart-x:not(.bars) > span { white-space: normal; } /* long date labels wrap to two lines on narrow charts */
 .chart-grid line {
   stroke: var(--border); stroke-width: 1;
   vector-effect: non-scaling-stroke;
