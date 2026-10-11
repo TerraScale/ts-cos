@@ -470,6 +470,11 @@ func TestT3CompactWaitsForItsRun(t *testing.T) {
 	if len(*dispatched) != 1 || (*dispatched)[0]["text"] != "/compact Keep the plan." || (*dispatched)[0]["dispatchMode"].(map[string]any)["type"] != "start_immediately" {
 		t.Errorf("dispatched = %v", *dispatched)
 	}
+	// The replay counts a socket closed only after its read sees the client's close, which lags the return.
+	deadline := time.Now().Add(2 * time.Second)
+	for replay.openSockets() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if n := replay.openSockets(); n != 0 {
 		t.Errorf("%d T3 sockets left open", n)
 	}
